@@ -1,3 +1,4 @@
+import { sourceSnapshots } from "./sources.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -256,9 +257,16 @@ export class Operations {
           signals: p.signals,
           recent,
           limits: { maxDailyTasks: p.maxDailyTasks, maxActive: p.maxActive },
+          evidence: sourceSnapshots(this.directory)[b.id] ?? null,
           sources: {
-            metrics: b.metrics.length ? "人工录入" : "未接入",
-            feedback: "人工录入",
+            metrics: sourceSnapshots(this.directory)[b.id]?.database.data
+              ? "已接入只读数据库汇总，见 evidence.database；具体指标按口径核验"
+              : b.metrics.length
+                ? "人工录入"
+                : "未接入",
+            feedback: sourceSnapshots(this.directory)[b.id]?.database.data
+              ? "数据源包含可用反馈汇总时见 evidence.database；没有反馈表不代表零反馈"
+              : "人工录入",
             production: "未接入",
             publishing: "未接入",
           },
@@ -281,6 +289,7 @@ export class Operations {
             objective: b.objective,
             description: b.description,
             metrics: b.metrics,
+            evidenceRevision: sourceSnapshots(this.directory)[b.id]?.revision ?? null,
             project: this.get(b.id, now),
           }))
           .map(({ project, ...b }) => ({
@@ -400,6 +409,7 @@ export class Operations {
         });
       return;
     }
+    c.nextReviewAt = new Date(now.getTime() + 30 * 60000).toISOString();
     c.decisions.push({ task: task.id, summary: report!.summary, at: now.toISOString(), decision: d });
     for (const brief of d.briefs) c.briefs[brief.business] = brief.objective;
     for (const directive of d.directives) {
@@ -460,15 +470,8 @@ export class Operations {
       });
       this.save(p, "ceo-answer", now);
       if (!escalated && t?.status === "blocked") {
-        c.retries[t.id] = (c.retries[t.id] ?? 0) + 1;
-        receipt.events ??= [];
-        receipt.events.push({
-          id: `ceo:retry:${task.id}:${t.id}`,
-          type: "company.task.retry",
-          subject: t.id,
-          summary: "CEO 处理阻塞后继续",
-          detail: "{}",
-        });
+        c.pendingRetries ??= [];
+        if (!c.pendingRetries.some((v) => v.task === t.id)) c.pendingRetries.push({ task: t.id, decision: task.id });
       }
     }
     for (const e of d.escalations) {
@@ -501,36 +504,101 @@ export class Operations {
       c.lastReportDay = day(now);
     }
   }
-  private scheduleCEO(c: Leadership, businesses: Portfolio, tasks: Task[], receipt: Receipt, now: Date) {
+  private recover(c: Leadership, businesses: Portfolio, tasks: Task[], receipt: Receipt, now: Date) {
+    c.repairs ??= {};
+    const active = new Set(
+      businesses
+        .filter((b) => b.autonomy && b.status === "active")
+        .flatMap((b) => this.get(b.id, now).activity.map((a) => a.task)),
+    );
+    for (const t of tasks) {
+      if (
+        t.status !== "blocked" ||
+        !(
+          t.id === c.lastTask ||
+          (active.has(t.id) && (t.reason.startsWith("部门报告格式不合格") || t.reason.startsWith("运行失败")))
+        )
+      )
+        continue;
+      const r = (c.repairs[t.id] ??= {
+        attempts: 0,
+        assignment: 0,
+        nextAt: now.toISOString(),
+        exhausted: false,
+        reason: t.reason,
+      });
+      r.reason = t.reason;
+      if (r.exhausted || r.assignment === t.assignment) continue;
+      if (r.attempts >= 2) {
+        r.exhausted = true;
+        receipt.notice ??= [];
+        receipt.notice.push({
+          key: `repair-exhausted-${t.id}`,
+          title: "运行异常",
+          text: `${t.title} 连续修复两次仍未通过：${t.reason}。其他工作继续；补充资料或下个经营日再恢复管理。`,
+        });
+        if (t.id === c.lastTask) {
+          c.lastTask = null;
+          c.fingerprint = this.ceoInputs(c, businesses, tasks, now);
+          c.nextReviewAt = after(now, 1);
+        }
+        continue;
+      }
+      if (Date.parse(r.nextAt) > now.getTime()) continue;
+      r.attempts++;
+      r.assignment = t.assignment;
+      r.nextAt = new Date(now.getTime() + 5 * 60000).toISOString();
+      // Refresh management context before repairing an old task, including owner replies received meanwhile.
+      const file = join(this.directory, "workspace/knowledge/ceo.json");
+      if (t.id === c.lastTask) this.writeCEOContext(c, businesses, tasks, now, file);
+      receipt.events ??= [];
+      receipt.events.push({
+        id: `company:repair:${t.id}:${t.assignment}`,
+        type: "company.task.retry",
+        subject: t.id,
+        summary: "自动修正报告",
+        detail: "{}",
+      });
+    }
+  }
+  private writeCEOContext(c: Leadership, businesses: Portfolio, tasks: Task[], now: Date, file: string) {
     const active = businesses.filter((b) => b.autonomy && b.status === "active");
-    if (!active.length) return;
-    const latest = tasks.find((t) => t.id === c.lastTask);
-    if (c.lastTask && latest?.status !== "completed") return;
-    if (c.runs.filter((r) => day(new Date(r.at)) === day(now)).length >= 8) return;
-    const fingerprint = this.ceoInputs(c, businesses, tasks, now);
-    if (fingerprint === c.fingerprint) return;
-    const id = "CEO-" + hash(`${fingerprint}:${c.lastTask ?? "initial"}`);
-    const file = join(this.directory, "workspace/knowledge/ceo.json"),
-      temp = file + ".tmp";
     writeFileSync(
-      temp,
+      file + ".tmp",
       JSON.stringify(
         {
           projects: active.map((b) => ({ ...b, ...this.get(b.id, now) })),
           issues: c.issues.filter((i) => i.state !== "answered"),
           knowledge: c.knowledge,
+          sources: sourceSnapshots(this.directory),
           questions: c.questions,
           briefs: c.briefs,
           decisions: c.decisions.slice(-10),
           retryCounts: c.retries,
-          limits: { dailyCeoTasks: 8, blockedRetries: 2 },
+          repairs: c.repairs,
+          limits: { dailyCeoTasks: 24, blockedRetries: 2 },
         },
         null,
         2,
       ),
       { mode: 0o600 },
     );
-    renameSync(temp, file);
+    renameSync(file + ".tmp", file);
+  }
+  private scheduleCEO(c: Leadership, businesses: Portfolio, tasks: Task[], receipt: Receipt, now: Date) {
+    const active = businesses.filter((b) => b.autonomy && b.status === "active");
+    if (!active.length) return;
+    const latest = tasks.find((t) => t.id === c.lastTask);
+    if (c.lastTask && latest?.status !== "completed") return;
+    if (c.runs.filter((r) => day(new Date(r.at)) === day(now)).length >= 24) return;
+    const fingerprint = this.ceoInputs(c, businesses, tasks, now);
+    const agenda =
+      c.issues.some((i) => i.state === "open") ||
+      active.some((b) => this.get(b.id, now).plans.some((p) => p.status === "proposed" || p.status === "review"));
+    if (fingerprint === c.fingerprint && !(agenda && c.nextReviewAt && Date.parse(c.nextReviewAt) <= now.getTime()))
+      return;
+    const id = "CEO-" + hash(`${fingerprint}:${c.lastTask ?? "initial"}`);
+    this.writeCEOContext(c, businesses, tasks, now, join(this.directory, "workspace/knowledge/ceo.json"));
     const request = taskRequest({
       title: "CEO · 经营管理",
       kind: "ceo",
@@ -548,6 +616,7 @@ export class Operations {
       summary: request.title,
       detail: JSON.stringify(request),
     });
+    c.nextReviewAt = new Date(now.getTime() + 30 * 60000).toISOString();
     c.lastTask = id;
     c.fingerprint = fingerprint;
     c.runs.push({ task: id, at: now.toISOString() });
@@ -558,6 +627,7 @@ export class Operations {
     tasks: Task[],
     now = new Date(),
     answers: Context["answers"] = [],
+    depth = 0,
   ): Receipt {
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -572,6 +642,34 @@ export class Operations {
         beforeProcessed = chief.processed;
       if (chief.enabled) {
         this.manage(chief, businesses, tasks, answers, receipt, now);
+        if (depth <= 1) {
+          this.recover(chief, businesses, tasks, receipt, now);
+          for (const pending of chief.pendingRetries ?? []) {
+            const t = tasks.find((t) => t.id === pending.task);
+            if (t?.status !== "blocked" || (chief.retries[t.id] ?? 0) >= 2) continue;
+            if (receipt.events?.some((e) => e.type === "company.task.retry" && e.subject === t.id)) continue;
+            if (
+              !businesses.some(
+                (b) => b.autonomy && b.status === "active" && this.get(b.id, now).activity.some((a) => a.task === t.id),
+              )
+            )
+              continue;
+            chief.retries[t.id] = (chief.retries[t.id] ?? 0) + 1;
+            receipt.events ??= [];
+            receipt.events.push({
+              id: `ceo:retry:${pending.decision}:${t.id}`,
+              type: "company.task.retry",
+              subject: t.id,
+              summary: "CEO 处理阻塞后继续",
+              detail: "{}",
+            });
+          }
+          chief.pendingRetries = (chief.pendingRetries ?? []).filter(
+            (p) =>
+              !receipt.events?.some((e) => e.type === "company.task.retry" && e.subject === p.task) &&
+              tasks.some((t) => t.id === p.task && t.status === "blocked"),
+          );
+        }
         this.saveExecutive(chief);
       }
       for (const b of businesses.filter((b) => b.autonomy)) {
@@ -642,6 +740,7 @@ export class Operations {
             (a) => !tasks.find((t) => t.id === a.task) || tasks.find((t) => t.id === a.task)?.status === "active",
           );
         const capacity = () =>
+          depth <= 1 &&
           b.status === "active" &&
           (!chief.enabled || !!chief.briefs[b.id]) &&
           (receipt.events?.length ?? 0) < 50 &&
@@ -691,7 +790,14 @@ export class Operations {
           if (
             chief.enabled &&
             chief.issues.some(
-              (i) => i.business === b.id && i.role === s.role && (i.state === "open" || i.state === "owner"),
+              (i) =>
+                i.business === b.id &&
+                i.role === s.role &&
+                (i.state === "open" || i.state === "owner") &&
+                !(
+                  chief.knowledge.some((k) => k.business === b.id && k.source === "owner" && k.at > i.at) ||
+                  (sourceSnapshots(this.directory)[b.id]?.changedAt ?? "") > i.at
+                ),
             )
           )
             continue;
@@ -710,6 +816,7 @@ export class Operations {
               knowledge: chief.knowledge.filter((k) => k.business === b.id),
               facts: [b.name, b.description, b.audience, b.objective, b.channels, b.url],
               metrics: b.metrics,
+              evidenceRevision: sourceSnapshots(this.directory)[b.id]?.revision ?? null,
               signals: p.signals.filter((v) => v.role === "all" || v.role === s.role || s.role === p.owner),
               exceptions:
                 s.role === p.owner
@@ -762,7 +869,7 @@ export class Operations {
       if (chief.enabled) {
         if (chief.processed !== beforeProcessed && beforeCEO === chief.fingerprint)
           chief.fingerprint = this.ceoInputs(chief, businesses, tasks, now);
-        this.scheduleCEO(chief, businesses, tasks, receipt, now);
+        if (depth <= 1) this.scheduleCEO(chief, businesses, tasks, receipt, now);
         this.saveExecutive(chief);
       }
       this.db.prepare("INSERT INTO batches VALUES (?,?)").run(batch, JSON.stringify(receipt));

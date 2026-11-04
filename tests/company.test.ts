@@ -1,12 +1,12 @@
 // Failure modes: departments forge each other's results, stale results advance a newer task, a crash loses the next
 // dispatch, QA is bypassed, an arbitrary answer approves delivery, or the dispatch budget starts extra paid work.
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Company, type Context, type CompanyConfig } from "../plugins/company/company.ts";
-import { makeRules } from "../plugins/company/setup.ts";
+import { makeRules, ensureBusinessRules } from "../plugins/company/setup.ts";
 import { parseRules } from "../protocol/rules.ts";
 import { parseResult } from "../protocol/validate.ts";
 
@@ -141,3 +141,33 @@ test("free-text approval cannot leave a closed card attached to a permanently wa
     office.process({ events: [], answers: [{ card: 10, choice: null, about: receipt.ask![0].about }] });
     assert.equal(office.task("T1")?.status, "rejected");
   }));
+
+// Upgrading runtime recovery must preserve owner customization and avoid blocking staff behind read-only management.
+test("company upgrades preserve custom prompts and timeouts and isolate the CEO management group", () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-upgrade-"));
+  try {
+    mkdirSync(join(dir, "hub"));
+    const rules = makeRules(dir, "local", "codex") as any;
+    for (const r of rules.rules.filter((r: any) => r.name.startsWith("公司部门-"))) {
+      r.prompt = "自定义岗位要求";
+      r.group = "company-work";
+    }
+    rules.agents["company-growth"].timeout = 17;
+    writeFileSync(join(dir, "hub/rules.json"), JSON.stringify(rules));
+    ensureBusinessRules(dir);
+    const file = readFileSync(join(dir, "hub/rules.json"), "utf8");
+    const updated = JSON.parse(file);
+    assert.ok(
+      updated.rules
+        .filter((r: any) => r.name.startsWith("公司部门-"))
+        .every((r: any) => r.prompt.startsWith("自定义岗位要求") && r.prompt.includes("持续经营协议 v3")),
+    );
+    assert.equal(updated.agents["company-growth"].timeout, 17);
+    assert.equal(updated.rules.find((r: any) => r.to === "company-ceo").group, "company-management");
+    assert.equal(updated.rules.find((r: any) => r.to === "company-growth").group, "company-work");
+    ensureBusinessRules(dir);
+    assert.equal(readFileSync(join(dir, "hub/rules.json"), "utf8"), file);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

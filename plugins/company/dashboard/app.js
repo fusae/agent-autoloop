@@ -264,7 +264,9 @@ function statsHTML(d) {
   const active = d.tasks.filter((t) => t.status === "active").length,
     approvals = d.cards.filter((c) => c.kind === "ask").length,
     blocked = d.tasks.filter((t) => ["blocked", "rejected"].includes(t.status)).length;
-  const done = d.tasks.filter((t) => t.status === "completed").length,
+  const done = d.tasks.filter(
+      (t) => t.status === "completed" && !t.kind.startsWith("check-") && t.kind !== "ceo",
+    ).length,
     today = d.spending?.today;
   return [
     {
@@ -272,7 +274,7 @@ function statsHTML(d) {
       icon: "↗",
       value: active,
       unit: "项任务",
-      foot: `共 ${d.tasks.length} 项任务 · 已完成 ${done} 项`,
+      foot: `已交付 ${done} 项 · 已检查 ${d.tasks.filter((t) => t.kind.startsWith("check-") && t.status === "completed").length} 项`,
     },
     {
       label: "待审批",
@@ -755,7 +757,7 @@ function businessesHTML(d) {
       })
       .join("") ||
     '<section class="panel empty"><h2>暂无业务</h2><button class="primary" data-business-create="true">新建业务</button></section>'
-  }</div><details class="operating-note"><summary>运行说明</summary><p>每 15 分钟检查一次，按职责、资料变化和到期跟进派工；无变化时跳过每日模型检查。内部交付经独立验收后自动归档。</p><p>电脑与引擎须持续运行。发布、投放和业务数据接口未接入；效果手工记录。</p></details>`;
+  }</div><details class="operating-note"><summary>运行说明</summary><p>每 5 分钟检查一次，按职责、资料变化和到期跟进派工；无变化时跳过每日模型检查。内部交付经独立验收后自动归档。</p><p>电脑与引擎须持续运行。数据连接见 CEO 页；发布和投放未接入。</p></details>`;
 }
 function openBusinessForm(id) {
   const form = $("#business-form");
@@ -1123,7 +1125,18 @@ function ceoHTML(d) {
   const business = (id) => d.businesses?.find((b) => b.id === id)?.name ?? id;
   const state = { open: "CEO 处理中", owner: "待你回复", answered: "已解决" };
   const channel = d.channels?.find((v) => v.id === "company-feishu");
-  return `<section class="panel"><div class="panel-heading"><h2>管理状态</h2><span class="badge">${channel?.online ? "飞书已连接" : "飞书未连接"}</span></div><div class="approval-list"><p>员工 → CEO → 你</p>${c.lastTask ? `<button class="text-button" data-task="${esc(c.lastTask)}">最近管理任务</button>` : ""}</div></section>
+  const latest = d.tasks.find((t) => t.id === c.lastTask),
+    repair = c.repairs?.[c.lastTask];
+  const management =
+    latest?.status === "blocked"
+      ? repair?.exhausted
+        ? "修复失败"
+        : "自动修复中"
+      : latest?.status === "active"
+        ? "处理中"
+        : "等待业务变化";
+  return `<section class="panel"><div class="panel-heading"><h2>管理状态</h2><span class="badge">${channel?.online ? "飞书已连接" : "飞书未连接"}</span></div><div class="approval-list"><p>${management}${repair ? ` · 修复 ${repair.attempts} / 2 次` : ""}</p><p class="note">${c.nextReviewAt ? `下次管理复查 ${time(c.nextReviewAt)}；新结果和回复会提前唤醒` : "等待首次检查"}</p>${c.lastTask ? `<button class="text-button" data-task="${esc(c.lastTask)}">最近管理任务</button>` : ""}</div></section>
+  <section class="panel"><div class="panel-heading"><h2>数据连接</h2></div><div class="approval-list">${(d.sources ?? []).map((s) => `<article class="report"><h3>${esc(business(s.business))}</h3><p>${{ ready: "已更新", partial: "部分读取失败", unavailable: "读取失败" }[s.status]} · ${time(s.checkedAt)}</p><p class="note">下次读取 ${time(s.nextAt)} · 只读汇总</p></article>`).join("") || '<p class="muted">未配置</p>'}</div></section>
   <section class="panel"><div class="panel-heading"><h2>业务目标</h2></div><div class="approval-list">${
     Object.entries(c.briefs)
       .map(([id, goal]) => `<article class="report"><h3>${esc(business(id))}</h3><p>${esc(goal)}</p></article>`)

@@ -3,6 +3,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage } from "node:http";
 import { join, resolve, sep } from "node:path";
 import { Company, departments, taskId, taskRequest, workflows, type Task } from "../plugins/company/company.ts";
+import { sourceSnapshots } from "../plugins/company/sources.ts";
 import { Operations } from "../plugins/company/operations.ts";
 import { Businesses } from "../plugins/company/business.ts";
 
@@ -113,6 +114,13 @@ export async function startDashboard(directory: string, port = 3361) {
             businesses: businesses.list(),
             operations: operations.snapshot(businesses.list(), company.tasks()),
             leadership: operations.executive(),
+            sources: Object.values(sourceSnapshots(directory)).map((s) => ({
+              business: s.business,
+              status: s.status,
+              checkedAt: s.attemptedAt,
+              nextAt: s.nextAt,
+              errors: [s.release.error, s.database.error, s.repositories.error].filter(Boolean),
+            })),
             channels: state?.channels ?? [],
             cards: (state?.cards ?? []).map((c: any) => ({
               id: c.id,

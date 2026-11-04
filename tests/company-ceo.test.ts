@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { Company, type Context } from "../plugins/company/company.ts";
 import { Businesses } from "../plugins/company/business.ts";
+import { failedWork } from "../plugins/company/recovery.ts";
+import { executiveDecision } from "../plugins/company/executive.ts";
 import { Operations } from "../plugins/company/operations.ts";
 const now = new Date("2026-11-05T02:00:00Z");
 const action = {
@@ -214,4 +216,112 @@ test("a partial CEO answer does not erase an escalation for the same issue", () 
     assert.equal(result.ask?.length, 1);
     assert.equal(o.executive().issues[0].state, "owner");
     assert.equal(o.executive().knowledge.length, 1);
+  }));
+
+// Recovery is persistent and bounded; unrelated work must not be held by one malformed CEO report.
+test("malformed CEO output is repaired automatically with the original error and a bounded retry budget", () =>
+  fixture((b, o, c, send) => {
+    const first = o.plan("begin", b.list(), c.tasks(), now).events![0];
+    send("company-inbox", first.type, first.subject, JSON.parse(first.detail));
+    const fail = (assignment: number) =>
+      send("company-ceo", "company.result", first.subject, {
+        assignment,
+        verdict: "pass",
+        summary: "无效格式",
+        artifacts: [],
+        evidence: ["资料"],
+        executive: decision({ briefs: [{ business: "app", objective: "x".repeat(301) }] }),
+      });
+    fail(1);
+    let r = o.plan("recover-1", b.list(), c.tasks(), now);
+    const retry = r.events?.find((e) => e.type === "company.task.retry");
+    assert.ok(retry);
+    assert.equal(
+      o.plan("no-duplicate", b.list(), c.tasks(), now).events?.filter((e) => e.type === "company.task.retry").length ??
+        0,
+      0,
+    );
+    const dispatched = send("company-inbox", retry.type, retry.subject, {});
+    assert.match(JSON.parse(dispatched.events[0].detail).repair, /长度|objective/);
+    fail(2);
+    assert.equal(o.plan("cooldown", b.list(), c.tasks(), now).events?.length ?? 0, 0);
+    r = o.plan("recover-2", b.list(), c.tasks(), new Date(now.getTime() + 6 * 60000));
+    const second = r.events!.find((e) => e.type === "company.task.retry")!;
+    assert.ok(second);
+    send("company-inbox", second.type, second.subject, {});
+    fail(3);
+    r = o.plan("exhausted", b.list(), c.tasks(), new Date(now.getTime() + 12 * 60000));
+    assert.equal(r.events?.filter((e) => e.type === "company.task.retry").length ?? 0, 0);
+    assert.equal(r.notice?.length, 1);
+    assert.equal(o.plan("quiet", b.list(), c.tasks(), new Date(now.getTime() + 13 * 60000)).notice, undefined);
+  }));
+
+test("worker failure cannot leave a supervised task active forever or accept stale failures", () =>
+  fixture((b, o, c, send) => {
+    const e = o.plan("a", b.list(), c.tasks(), now).events![0];
+    send("company-inbox", e.type, e.subject, JSON.parse(e.detail));
+    send("company-inbox", "company.task.failed", e.subject, { assignment: 0, reason: "运行失败：旧任务" });
+    assert.equal(c.task(e.subject)?.status, "active");
+    send("company-growth", "company.task.failed", e.subject, { assignment: 1, reason: "运行失败：伪造" });
+    assert.equal(c.task(e.subject)?.status, "active");
+    send("company-inbox", "company.task.failed", e.subject, { assignment: 1, reason: "运行失败：超时" });
+    assert.equal(c.task(e.subject)?.status, "blocked");
+    assert.ok(o.plan("reconcile", b.list(), c.tasks(), now).events?.some((e) => e.type === "company.task.retry"));
+  }));
+
+test("deep result chains save CEO decisions but defer new work to the next independent tick", () =>
+  fixture((b, o, c, send) => {
+    const e = o.plan("initial", b.list(), c.tasks(), now).events![0];
+    send("company-inbox", e.type, e.subject, JSON.parse(e.detail));
+    send("company-ceo", "company.result", e.subject, {
+      assignment: 1,
+      verdict: "pass",
+      summary: "派工",
+      artifacts: [],
+      evidence: ["档案"],
+      executive: decision({
+        briefs: [{ business: "app", objective: "完善说明" }],
+        directives: [{ business: "app", action }],
+      }),
+    });
+    const update = o.plan("deep", b.list(), c.tasks(), now, [], 4);
+    assert.equal(update.events, undefined);
+    assert.equal(o.snapshot(b.list(), c.tasks(), now)[0].plans[0].status, "planned");
+    const next = o.plan("tick", b.list(), c.tasks(), now, [], 0);
+    assert.ok(next.events?.some((e) => JSON.parse(e.detail).kind === "internal-content"));
+    assert.equal(o.snapshot(b.list(), c.tasks(), now)[0].plans[0].status, "working");
+  }));
+
+// A descriptive escalation key caused a real CEO report to be rejected.
+test("descriptive escalation keys remain bounded without rejecting the observed key", () => {
+  const escalation = {
+    key: "active-projects-engineering-verification-evidence",
+    issues: ["issue"],
+    question: "资料在哪里",
+    context: "核验",
+  };
+  assert.equal(executiveDecision(decision({ escalations: [escalation] })).escalations[0].key, escalation.key);
+  assert.throws(() => executiveDecision(decision({ escalations: [{ ...escalation, key: "x".repeat(81) }] })));
+});
+
+test("reconciliation ignores live retries, stale assignments and reports still in transit", () =>
+  fixture((b, o, c, send) => {
+    const e = o.plan("start", b.list(), c.tasks(), now).events![0];
+    send("company-inbox", e.type, e.subject, JSON.parse(e.detail));
+    const at = Date.parse(String(c.history(e.subject).at(-1)!.at));
+    const run = {
+      id: 10,
+      agent: "company-ceo",
+      events: [{ subject: e.subject }],
+      state: "done",
+      createdAt: new Date(at).toISOString(),
+      finishedAt: new Date(at + 1000).toISOString(),
+    };
+    const later = new Date(at + 180000);
+    assert.equal(failedWork(c, [run], later).length, 1);
+    assert.equal(failedWork(c, [run], new Date(at + 2000)).length, 0);
+    assert.equal(failedWork(c, [{ ...run, state: "queued" }], later).length, 0);
+    assert.equal(failedWork(c, [{ ...run, state: "claimed" }], later).length, 0);
+    assert.equal(failedWork(c, [{ ...run, createdAt: new Date(at - 5000).toISOString() }], later).length, 0);
+    assert.equal(failedWork(c, [run, { ...run, id: 11, state: "queued" }], later).length, 0);
   }));

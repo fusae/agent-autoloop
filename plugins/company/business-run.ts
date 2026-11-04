@@ -1,3 +1,8 @@
+import { failedWork } from "./recovery.ts";
+import { hubClient } from "../../protocol/client.ts";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { collectSources } from "./sources.ts";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
@@ -18,11 +23,34 @@ try {
       }),
     )
     .digest("hex");
+  await collectSources(dirname(configFile));
   const tasks = office.tasks(),
     now = new Date();
-  const proactive = operations.plan(batch, businesses.list(), tasks, now, context.answers);
-  const legacy = businesses.plan(batch, tasks, now, 100 - (proactive.events?.length ?? 0));
-  const events = [...(proactive.events ?? []), ...(legacy.events ?? [])];
+  const depth = Math.max(0, ...context.events.map((e) => e.hops ?? 0));
+  const proactive = operations.plan(batch, businesses.list(), tasks, now, context.answers, depth);
+  const legacy = depth <= 1 ? businesses.plan(batch, tasks, now, 100 - (proactive.events?.length ?? 0)) : {};
+  let failures: ReturnType<typeof failedWork> = [];
+  const hubFile = join(dirname(configFile), "hub/config.json");
+  if (existsSync(hubFile)) {
+    const cfg = JSON.parse(readFileSync(hubFile, "utf8"));
+    try {
+      const client = hubClient(cfg.url, cfg.owner),
+        runs: any[] = [];
+      let before: number | undefined;
+      for (let page = 0; page < 5; page++) {
+        const state = await client.state(before),
+          chunk = state.runs ?? [];
+        if (!chunk.length) break;
+        runs.push(...chunk);
+        before = Math.min(...chunk.map((r: any) => r.id));
+        if (chunk.length < 20) break;
+      }
+      failures = depth <= 1 ? failedWork(office, runs, now) : [];
+    } catch {
+      /* Hub outages are already retried by the worker. */
+    }
+  }
+  const events = [...(proactive.events ?? []), ...(legacy.events ?? []), ...failures].slice(0, 100);
   const receipt = { ...proactive, ...(events.length ? { events } : {}) };
   process.stdout.write(`经营周期已检查。\n\n\`\`\`agent-autoloop\n${JSON.stringify(receipt)}\n\`\`\`\n`);
 } finally {

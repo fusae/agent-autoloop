@@ -29,7 +29,7 @@ export function businessRules(directory: string, worker: string) {
         group: "company-business",
         parallel: 1,
         prompt: "检查经营周期。",
-        emits: { source: "company-inbox", types: ["company.task.create", "company.task.retry"] },
+        emits: { source: "company-inbox", types: ["company.task.create", "company.task.retry", "company.task.failed"] },
       },
       {
         name: "公司经营-唤醒",
@@ -39,7 +39,7 @@ export function businessRules(directory: string, worker: string) {
         group: "company-business",
         parallel: 1,
         prompt: "检查经营周期。",
-        emits: { source: "company-inbox", types: ["company.task.create", "company.task.retry"] },
+        emits: { source: "company-inbox", types: ["company.task.create", "company.task.retry", "company.task.failed"] },
       },
     ],
   };
@@ -69,6 +69,10 @@ export function ensureBusinessRules(directory: string) {
       rule.when.cron = "*/5 * * * *";
       changed = true;
     }
+    if (!rule.emits.types.includes("company.task.failed")) {
+      rule.emits.types.push("company.task.failed");
+      changed = true;
+    }
     if (!rule.emits.types.includes("company.task.retry")) {
       rule.emits.types.push("company.task.retry");
       changed = true;
@@ -86,6 +90,39 @@ export function ensureBusinessRules(directory: string) {
       rule.prompt += "\n" + managementPrompt;
       changed = true;
     }
+  }
+  for (const rule of rules.rules) {
+    if (rule.name.startsWith("公司调度-") && !rule.emits.types.includes("company.business.wake")) {
+      rule.emits.types.push("company.business.wake");
+      changed = true;
+    }
+    if (rule.name === "公司调度-inbox" && !rule.when.types.includes("company.task.failed")) {
+      rule.when.types.push("company.task.failed");
+      changed = true;
+    }
+    if (rule.name.startsWith("公司部门-")) {
+      const role = rule.to.replace("company-", "") as Role;
+      if (!rule.prompt.includes("持续经营协议 v3")) {
+        rule.prompt += "\n" + continuousPrompt;
+        changed = true;
+      }
+      if (role === "ceo" && rule.group === "company-work") {
+        rule.group = "company-management";
+        changed = true;
+      }
+      if (!rules.agents[rule.to].timeout) {
+        rules.agents[rule.to].timeout = role === "ceo" ? 10 : 20;
+        changed = true;
+      }
+    }
+  }
+  if (!rules.rules.some((r: any) => r.name === "公司经营-结果")) {
+    rules.rules.push({
+      ...businessRules(directory, modelAgent.worker).rules[1],
+      name: "公司经营-结果",
+      when: { source: "company-office", types: ["company.business.wake"] },
+    });
+    changed = true;
   }
   if (changed) {
     writeFileSync(path + ".tmp", JSON.stringify(rules, null, 2) + "\n", { mode: 0o600 });
@@ -111,7 +148,7 @@ export const ceoPrompt = `你是公司的 CEO，管理所有项目和员工。�
 export const managementPrompt = `CEO 管理协议 v2：supervised=true 时，员工只向 CEO 反馈，不直接向负责人提问。缺少进展、数据位置、产品事实或执行条件时，先查看项目资料中的 knowledge 和 CEO 目标；仍不知道就在 inspection 中增加 questions:[{"key":"稳定英文编号","question":"具体问题","context":"查过什么及缺什么"}]，state=blocked，verdict=pass。执行任务受阻时正常报告 blocked 并写明问题，CEO 会处理。你的行动提案先交 CEO 审核；未经核验不得宣称完成。CEO 的答复会写入项目资料，继续执行前必须读取。`;
 
 export function rolePrompt(role: Role) {
-  if (role === "ceo") return ceoPrompt;
+  if (role === "ceo") return ceoPrompt + "\n" + continuousPrompt;
   return (
     `你是公司的${departments[role]}部门。先读工作区 AGENTS.md 和 knowledge/company.md，再读 handbook/${role}.md。\n` +
     `任务只来自 company-office 的 company.work.${role} 事件；events[].detail 是 JSON 资料，包含 task、assignment、goal、acceptance、previous。` +
@@ -122,7 +159,9 @@ export function rolePrompt(role: Role) {
     `报告 JSON 总长度不超过 1900 字，详细内容留在文件中。pass 必须有交付物和核验依据。其他部门不能替你提交，也不得自行派活。没有实际完成不得报 pass。\n` +
     inspectionPrompt +
     "\n" +
-    managementPrompt
+    managementPrompt +
+    "\n" +
+    continuousPrompt
   );
 }
 export function makeRules(directory: string, worker: string, agent: "codex" | "claude") {
@@ -145,26 +184,28 @@ export function makeRules(directory: string, worker: string, agent: "codex" | "c
       worker,
       use: agent,
       access: role === "qa" || role === "ceo" ? "read" : "edit",
+      timeout: role === "ceo" ? 10 : 20,
     };
   const controller = ["inbox", ...roles].map((source) => ({
     name: `公司调度-${source}`,
     when: {
       source: `company-${source}`,
-      types: source === "inbox" ? ["company.task.create", "company.task.retry"] : ["company.result"],
+      types:
+        source === "inbox" ? ["company.task.create", "company.task.retry", "company.task.failed"] : ["company.result"],
     },
     to: "company-office",
     cwd: directory,
     group: "company-office",
     parallel: 1,
     prompt: "按本机公司配置推进任务。",
-    emits: { source: "company-office", types: ["company.work.*"] },
+    emits: { source: "company-office", types: ["company.work.*", "company.business.wake"] },
   }));
   const staff = roles.map((role) => ({
     name: `公司部门-${role}`,
     when: { source: "company-office", types: [`company.work.${role}`] },
     to: `company-${role}`,
     cwd: join(directory, "workspace"),
-    group: "company-work",
+    group: role === "ceo" ? "company-management" : "company-work",
     parallel: 1,
     prompt: rolePrompt(role),
     emits: { source: `company-${role}`, types: ["company.result"] },
@@ -175,7 +216,16 @@ export function makeRules(directory: string, worker: string, agent: "codex" | "c
     sources,
     agents,
     channels: {},
-    rules: [...controller, ...staff, ...business.rules],
+    rules: [
+      ...controller,
+      ...staff,
+      ...business.rules,
+      {
+        ...business.rules[1],
+        name: "公司经营-结果",
+        when: { source: "company-office", types: ["company.business.wake"] },
+      },
+    ],
   };
 }
 export function initialize(directory: string, worker = "local", agent: "codex" | "claude" = "codex") {
@@ -206,3 +256,8 @@ export function initialize(directory: string, worker = "local", agent: "codex" |
     write(`workspace/handbook/${role}.md`, `# ${departments[role]}\n\n${rolePrompt(role)}\n`);
   return makeRules(directory, worker, agent);
 }
+
+export const continuousPrompt = `持续经营协议 v3：检查资料只是发现工作，不等于业务交付。先读 knowledge/sources/<项目>.json（如有）和项目 evidence：包含已核验的版本、只读数据库汇总及仓库资料。数据失败有 error 与 checkedAt，不能把旧数据当最新；汇总中的测试记录不能当增长。可使用这些本地资料完成分析、内容、回复草稿和验收。不得因缺少全量数据就停止所有工作，也不要向负责人索要已经明确的入口。
+CEO：每个项目已有足够资料但没有在执行的计划时，至少提出一个与目标有关且可验证的内部交付，例如数据基线分析、单一场景的推广内容与效果记录表、基于真实反馈的改进说明。优先少量完成，不一次给六个岗位制造检查。已有提案先审；一个工作受阻时继续其他不依赖该资料的工作。答案不能只是“等待”：能解决的给出资料和具体下一步；确实仍需负责人时用 escalation，不得将未解决的问题标作 answered。
+员工：已有事实足以开展局部工作时提出具体 action，写清产物、验收和复查时间；缺少实测环境时可以准备可执行测试清单，但不得声称已经实测。后续工作必须读取最新项目知识；完成交付后由系统安排效果复查，没有真实执行数据返回 unknown，不能虚构成效。
+报告失败的重试会在派工资料 repair 字段给出原因；只修正本轮输出，不重复已完成的交付。CEO 字段限制：项目/计划/问题 id 40字、上报 key 80字、目标300字、答复700字、答复依据200字、上报问题800字、背景400字；整个 detail 不超过3500字。每轮只处理最重要的少量事项，剩余由后续轮次继续。`;

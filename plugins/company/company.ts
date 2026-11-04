@@ -26,7 +26,7 @@ for (const role of Object.keys(departments) as Role[]) workflows[`check-${role}`
 for (const kind of ["software", "content", "support", "finance"]) workflows[`internal-${kind}`] = [...workflows[kind]];
 export type CompanyConfig = { name: string; database: string; maxAssignments: number; ceoMode?: boolean };
 export type Context = {
-  events: { id: number; source: string; type: string; subject: string; detail: string }[];
+  events: { id: number; source: string; type: string; subject: string; detail: string; hops?: number }[];
   answers: { card: number; choice: number | null; about: string; text?: string | null }[];
 };
 export type Report = {
@@ -163,6 +163,7 @@ export class Company {
       inspection: task.kind.startsWith("check-"),
       internal: task.kind.startsWith("internal-"),
       supervised: !!task.supervised,
+      repair: task.assignment > 1 ? task.reason.slice(0, 400) : null,
       previous: task.reports.at(-1) ?? null,
     });
     receipt.events ??= [];
@@ -198,6 +199,13 @@ export class Company {
       return;
     }
     if (!task) throw new CompanyInputError("任务不存在");
+    if (event.source === "company-inbox" && event.type === "company.task.failed") {
+      if (task.status !== "active" || data.assignment !== task.assignment) return;
+      task.status = "blocked";
+      task.reason = words(data.reason, 400, "运行失败原因");
+      this.save(task, "worker-failed");
+      return;
+    }
     if (event.source === "company-inbox" && event.type === "company.task.retry") {
       if (task.status !== "blocked" && task.status !== "rejected")
         throw new CompanyInputError("只能重试已阻塞或被否决的任务");

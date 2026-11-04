@@ -240,6 +240,9 @@ console.log('\`\`\`agent-autoloop\\n'+JSON.stringify({events:[{id:brief.task+':'
       await wake("ceo-consume");
       const card = await until(async () => (await owner.state()).cards.find((c: any) => c.kind === "ask"));
       await owner.answer(card.id, { text: "数据在本机报表，先核对新增用户" });
+      await until(() => ops!.executive().knowledge.some((k) => k.source === "owner"));
+      // The next independent clock tick starts work with a fresh hop budget.
+      await wake("clock-after-answer");
       await until(() => office!.tasks().filter((t) => t.kind === "ceo" && t.status === "completed").length === 2);
       assert.equal(ops.executive().knowledge[0].source, "owner");
       await wake("ceo-decisions");

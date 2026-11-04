@@ -14,6 +14,8 @@ npm run company -- start "$HOME/.agent-company"
 
 CEO 管理：运行 `npm run company -- ceo "$HOME/.agent-company"`；飞书：运行 `npm run company -- feishu "$HOME/.agent-company" ou_本人编号`，然后重启公司服务。CEO 下达目标、审核员工提案、解决问题，无法判断时才通过飞书问你。按消息中的 `C编号 你的回答` 回复，答复写入对应项目知识；网页「CEO」可查看目标和决策。定期检查每 5 分钟一次，飞书回复每 30 秒读取；无需另开事件监听。详见[公司流程](docs/company.md#ceo-管理与飞书决策)。
 
+支持按小时同步可信配置中的版本、只读数据汇总和仓库资料；失败任务有限重试，员工交付后自动验收、安排效果跟进。运行机制、数据源配置和后台服务要求见[持续运行](docs/company.md#持续运行与故障恢复)。
+
 ---
 
 # Agent Autoloop

@@ -50,14 +50,21 @@ export type Leadership = {
   runs: { task: string; at: string }[];
   answeredCards: number[];
   retries: Record<string, number>;
+  nextReviewAt?: string;
+  pendingRetries?: { task: string; decision: string }[];
+  repairs?: Record<
+    string,
+    { attempts: number; assignment: number; nextAt: string; exhausted: boolean; reason: string }
+  >;
 };
 export function executiveDecision(v: unknown): ExecutiveDecision {
   const object = (v: unknown): Record<string, any> => {
     if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("CEO 决策需要对象");
     return v as Record<string, any>;
   };
-  const text = (v: unknown, n: number) => {
-    if (typeof v !== "string" || !v.trim() || v.length > n) throw new Error("CEO 决策字段长度不正确");
+  const text = (v: unknown, n: number, field = "字段") => {
+    if (typeof v !== "string" || !v.trim() || v.length > n)
+      throw new Error(`CEO ${field} 需要 1–${n} 字，实际 ${typeof v === "string" ? v.length : "非文字"}`);
     return v.trim();
   };
   const id = (v: unknown) => {
@@ -71,7 +78,10 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
     return d[key].map(object);
   };
   return {
-    briefs: list("briefs", 5).map((a) => ({ business: id(a.business), objective: text(a.objective, 300) })),
+    briefs: list("briefs", 5).map((a) => ({
+      business: id(a.business),
+      objective: text(a.objective, 300, "briefs.objective"),
+    })),
     directives: list("directives", 3).map((a) => ({
       business: id(a.business),
       action: inspection({ state: "action", actions: [a.action], reviews: [] }).actions[0],
@@ -89,7 +99,11 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
       if (!Array.isArray(a.issues) || !a.issues.length || a.issues.length > 8)
         throw new Error("上报需要关联 1–8 个问题");
       return {
-        key: id(a.key),
+        key: (() => {
+          const key = text(a.key, 80, "escalations.key");
+          if (!/^[A-Za-z0-9_-]+$/.test(key)) throw Error("上报编号只能用字母、数字、下划线和横线");
+          return key;
+        })(),
         issues: a.issues.map(id),
         question: text(a.question, 800),
         context: text(a.context, 400),
