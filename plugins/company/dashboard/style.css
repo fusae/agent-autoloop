@@ -1741,3 +1741,123 @@ pre {
 .employee-card > p {
   margin: 10px 0;
 }
+
+/* Reply cards share the workspace typography and keep one primary action. */
+.approval-panel {
+  border-top: 1px solid var(--line);
+}
+.full-approvals .approval-list {
+  grid-template-columns: minmax(0, 1fr);
+}
+.approval-card.reply-card {
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--white);
+}
+.reply-meta {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 12px;
+}
+.reply-card h3 {
+  margin: 14px 0 10px;
+  font-size: 18px;
+  color: var(--ink);
+}
+.reply-card p.reply-question {
+  margin: 0 0 16px;
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.85;
+}
+.reply-context {
+  margin: 0 0 22px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.reply-context summary {
+  cursor: pointer;
+  width: fit-content;
+}
+.reply-context p {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 10px 0 0;
+}
+.reply-editor {
+  margin-top: 20px;
+}
+.reply-editor label {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.reply-editor textarea {
+  display: block;
+  width: 100%;
+  min-height: 150px;
+  padding: 14px 16px;
+  border: 1px solid #ccd5cc;
+  border-radius: 8px;
+  background: #fafbf8;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.7;
+  resize: vertical;
+  transition:
+    border-color 150ms,
+    box-shadow 150ms;
+}
+.reply-editor textarea::placeholder {
+  color: #859188;
+  opacity: 1;
+}
+.reply-editor textarea:focus-visible {
+  border-color: var(--green);
+  outline: none;
+  box-shadow: 0 0 0 3px #284f4314;
+  background: white;
+}
+.reply-card p.reply-help {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.reply-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  margin-top: 20px;
+  padding-top: 16px;
+}
+.reply-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.reply-footer button {
+  min-height: 40px;
+  padding: 10px 18px;
+  font-size: 13px;
+  border-radius: 7px;
+}
+.reply-footer > .primary {
+  flex-shrink: 0;
+}
+@media (max-width: 600px) {
+  .approval-card.reply-card {
+    padding: 16px;
+  }
+  .reply-footer {
+    flex-wrap: wrap;
+  }
+  .reply-editor textarea {
+    font-size: 16px;
+  }
+}

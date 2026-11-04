@@ -360,8 +360,36 @@ function tasksHTML(d) {
 }
 function approvalsHTML(d) {
   const cards = d.cards.filter((c) => c.kind === "ask");
-  return `<section class="panel approval-panel ${view === "approvals" ? "full-approvals" : ""}"><div class="panel-heading"><h2>待审批</h2><span class="count-badge">${cards.length}</span></div><div class="approval-list">${cards.length ? cards.map((c) => `<article class="approval-card"><span class="meta">审批编号 ${String(c.id).padStart(3, "0")}</span><h3>${esc(c.title)}</h3><p>${esc(c.text)}</p><label>回复<textarea id="reply-${c.id}" maxlength="4000" rows="3"></textarea></label><button class="secondary" data-reply="${c.id}" ${!d.connected ? "disabled" : ""}>提交回复</button><div class="approval-actions">${c.options.map((option, i) => `<button class="small-button ${i ? "ghost" : ""}" data-answer="${c.id}" data-choice="${i}" ${!d.connected ? "disabled" : ""}>${esc(option)}</button>`).join("")}</div></article>`).join("") : '<div class="empty"><span class="empty-symbol">✓</span><strong>暂无待审批事项</strong></div>'}</div><p class="note approval-list">接受交付仅代表验收通过，不会自动发布或付款。</p></section>`;
+  const isQuestion = (c) => c.title.startsWith("CEO") && c.options.includes("资料已补充");
+  const onlyQuestions = cards.length ? cards.every(isQuestion) : view === "ceo";
+  const content = cards
+    .map((c) => {
+      const question = isQuestion(c);
+      const [request, ...context] = String(c.text ?? "").split(/\n\s*\n/);
+      const baseline = question && /安装包|版本/.test(request) && /数据|统计/.test(request);
+      const placeholder = baseline
+        ? (d.businesses ?? [])
+            .filter((b) => b.status === "active")
+            .slice(0, 5)
+            .map((b) => `${b.name}\n进展：\n安装包 / 版本：\n数据和反馈位置：`)
+            .join("\n\n") || "进展：\n安装包 / 版本：\n数据和反馈位置："
+        : "填写你的答复或意见…";
+      const disabled = !d.connected ? "disabled" : "";
+      return `<article class="approval-card reply-card">
+      <div class="reply-meta"><span>${question ? "CEO" : "审批"}</span><span>C${c.id}</span></div>
+      <h3>${question ? (baseline ? "业务资料" : "资料补充") : esc(c.title)}</h3>
+      <p class="reply-question">${esc(request)}</p>
+      ${context.length ? `<details class="reply-context"><summary>补充说明</summary><p>${esc(context.join("\n\n"))}</p></details>` : ""}
+      <div class="reply-editor"><label for="reply-${c.id}">你的回复</label>
+      <textarea id="reply-${c.id}" aria-describedby="reply-help-${c.id}" maxlength="4000" rows="${baseline ? 10 : 4}" placeholder="${esc(placeholder)}" ${disabled}></textarea>
+      <p id="reply-help-${c.id}" class="reply-help">${question ? "写已知情况即可，缺少的填“暂无”；链接或文件位置也可以。" : "可直接选择下方选项，或填写具体意见。"}</p></div>
+      <div class="reply-footer"><div class="reply-options">${c.options.map((option, i) => (question && option === "资料已补充" ? "" : `<button class="secondary" data-answer="${c.id}" data-choice="${i}" ${disabled}>${esc(option)}</button>`)).join("")}</div><button class="primary" data-reply="${c.id}" ${disabled}>发送回复</button></div>
+    </article>`;
+    })
+    .join("");
+  return `<section class="panel approval-panel ${view === "approvals" ? "full-approvals" : ""}"><div class="panel-heading"><h2>${onlyQuestions ? "待回复" : "待处理"}</h2><span class="count-badge">${cards.length}</span></div><div class="approval-list">${content || '<div class="empty"><span class="empty-symbol">✓</span><strong>暂无待处理事项</strong></div>'}</div></section>`;
 }
+
 function spendingHTML(d) {
   return `<div class="cost-grid">${[
     ["today", "今日用量"],
