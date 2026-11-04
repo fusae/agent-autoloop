@@ -96,3 +96,5 @@ agent-autoloop uninstall
 - [安全边界](SECURITY.md)：密钥、执行权限和交付审查。
 
 开发检查用 `npm test`、`npm run typecheck`、`npm run format:check`，完整故障与性能检查用 `npm run test:nightly`。备份同时保留 `hub.db` 和 `master.key`；后者权限应为 0600。
+
+公司 fork 的 CEO 模式：`npm run company -- ceo "$HOME/.agent-company"`；配置已授权机器人的本人私聊：`npm run company -- feishu "$HOME/.agent-company" ou_本人编号`，之后重启服务。需要 CLI 的机器人发消息、读取本人会话权限；不需要新增事件监听。[公司说明](docs/company.md#ceo-管理与飞书决策)。

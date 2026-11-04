@@ -12,6 +12,7 @@ const names = {
   completed: "已完成",
 };
 const roleNames = {
+  ceo: "CEO",
   product: "产品",
   engineering: "研发",
   qa: "验收",
@@ -20,6 +21,7 @@ const roleNames = {
   finance: "财务",
 };
 const roleInfo = {
+  ceo: ["♔", "目标、派工、决策、汇报"],
   product: ["◈", "把想法变成明确的需求"],
   engineering: ["⌘", "构建产品，交付可运行代码"],
   qa: ["✓", "独立检查每一项交付"],
@@ -28,12 +30,19 @@ const roleInfo = {
   finance: ["◴", "核对账目，梳理预算"],
 };
 const routes = {
+  ceo: ["ceo"],
   software: ["product", "engineering", "qa"],
   content: ["growth", "qa"],
   support: ["support", "qa"],
   finance: ["finance", "qa"],
 };
-const kindNames = { software: "产品研发", content: "内容运营", support: "客户服务", finance: "财务分析" };
+const kindNames = {
+  ceo: "经营管理",
+  software: "产品研发",
+  content: "内容运营",
+  support: "客户服务",
+  finance: "财务分析",
+};
 for (const role of Object.keys(roleNames)) {
   routes[`check-${role}`] = [role];
   kindNames[`check-${role}`] = `${roleNames[role]}检查`;
@@ -43,6 +52,7 @@ for (const kind of ["software", "content", "support", "finance"]) {
   kindNames[`internal-${kind}`] = kindNames[kind];
 }
 const labels = {
+  ceo: "CEO",
   businesses: "业务管理",
   overview: "公司概览",
   tasks: "任务列表",
@@ -298,7 +308,7 @@ function statsHTML(d) {
     .join("");
 }
 function departmentHTML(d) {
-  return `<section class="panel ${view === "departments" ? "full-dept" : ""}"><div class="panel-heading"><h2>部门</h2>${view === "overview" ? '<a class="text-link" href="#departments">全部部门 ↗</a>' : '<span class="muted">6 个部门</span>'}</div><div class="dept-grid">${Object.entries(
+  return `<section class="panel ${view === "departments" ? "full-dept" : ""}"><div class="panel-heading"><h2>部门</h2>${view === "overview" ? '<a class="text-link" href="#departments">全部部门 ↗</a>' : '<span class="muted">CEO · 6 个部门</span>'}</div><div class="dept-grid">${Object.entries(
     roleNames,
   )
     .map(([role, name]) => {
@@ -307,7 +317,7 @@ function departmentHTML(d) {
       const tasks = d.tasks.filter((t) => t.status === "active" && routes[t.kind]?.[t.stage] === role);
       const status =
         !d.connected || !agent?.online ? "未连接" : running ? "执行中" : tasks.length ? "待接单" : "空闲中";
-      return `<button class="dept-card" data-department="${role}"><div class="dept-top"><span class="dept-icon">${roleInfo[role][0]}</span><span class="dept-status ${running ? "busy" : ""}">${status}</span></div><h3 class="dept-name">${name}部</h3><div class="dept-desc">${roleInfo[role][1]}</div><div class="dept-bottom"><span>${esc(agent?.use === "claude" ? "Claude Code" : agent?.use === "codex" ? "Codex" : (agent?.use ?? "待接入"))}</span><b>${tasks.length ? `${tasks.length} 项在途任务` : "等待新任务"}</b></div></button>`;
+      return `<button class="dept-card" data-department="${role}"><div class="dept-top"><span class="dept-icon">${roleInfo[role][0]}</span><span class="dept-status ${running ? "busy" : ""}">${status}</span></div><h3 class="dept-name">${name}${role === "ceo" ? "" : "部"}</h3><div class="dept-desc">${roleInfo[role][1]}</div><div class="dept-bottom"><span>${esc(agent?.use === "claude" ? "Claude Code" : agent?.use === "codex" ? "Codex" : (agent?.use ?? "待接入"))}</span><b>${tasks.length ? `${tasks.length} 项在途任务` : "等待新任务"}</b></div></button>`;
     })
     .join("")}</div></section>`;
 }
@@ -350,7 +360,7 @@ function tasksHTML(d) {
 }
 function approvalsHTML(d) {
   const cards = d.cards.filter((c) => c.kind === "ask");
-  return `<section class="panel approval-panel ${view === "approvals" ? "full-approvals" : ""}"><div class="panel-heading"><h2>待审批</h2><span class="count-badge">${cards.length}</span></div><div class="approval-list">${cards.length ? cards.map((c) => `<article class="approval-card"><span class="meta">审批编号 ${String(c.id).padStart(3, "0")}</span><h3>${esc(c.title)}</h3><p>${esc(c.text)}</p><div class="approval-actions">${c.options.map((option, i) => `<button class="small-button ${i ? "ghost" : ""}" data-answer="${c.id}" data-choice="${i}" ${!d.connected ? "disabled" : ""}>${esc(option)}</button>`).join("")}</div></article>`).join("") : '<div class="empty"><span class="empty-symbol">✓</span><strong>暂无待审批事项</strong></div>'}</div><p class="note approval-list">接受交付仅代表验收通过，不会自动发布或付款。</p></section>`;
+  return `<section class="panel approval-panel ${view === "approvals" ? "full-approvals" : ""}"><div class="panel-heading"><h2>待审批</h2><span class="count-badge">${cards.length}</span></div><div class="approval-list">${cards.length ? cards.map((c) => `<article class="approval-card"><span class="meta">审批编号 ${String(c.id).padStart(3, "0")}</span><h3>${esc(c.title)}</h3><p>${esc(c.text)}</p><label>回复<textarea id="reply-${c.id}" maxlength="4000" rows="3"></textarea></label><button class="secondary" data-reply="${c.id}" ${!d.connected ? "disabled" : ""}>提交回复</button><div class="approval-actions">${c.options.map((option, i) => `<button class="small-button ${i ? "ghost" : ""}" data-answer="${c.id}" data-choice="${i}" ${!d.connected ? "disabled" : ""}>${esc(option)}</button>`).join("")}</div></article>`).join("") : '<div class="empty"><span class="empty-symbol">✓</span><strong>暂无待审批事项</strong></div>'}</div><p class="note approval-list">接受交付仅代表验收通过，不会自动发布或付款。</p></section>`;
 }
 function spendingHTML(d) {
   return `<div class="cost-grid">${[
@@ -404,23 +414,25 @@ function render() {
   $("#nav-tasks").textContent = d.tasks.length;
   $("#nav-approvals").textContent = d.cards.filter((c) => c.kind === "ask").length;
   $("#stats").innerHTML = statsHTML(d);
-  $("#stats").hidden = ["departments", "businesses", "employees", "plans"].includes(view);
+  $("#stats").hidden = ["ceo", "departments", "businesses", "employees", "plans"].includes(view);
   $("#view-content").innerHTML =
-    view === "businesses"
-      ? businessesHTML(d)
-      : view === "overview"
-        ? `<div class="dashboard-grid"><div>${departmentHTML(d)}${tasksHTML(d)}</div><div class="right-column">${approvalsHTML(d)}</div></div>`
-        : view === "tasks"
-          ? tasksHTML(d)
-          : view === "approvals"
-            ? approvalsHTML(d)
-            : view === "departments"
-              ? departmentHTML(d)
-              : view === "employees"
-                ? employeesHTML(d)
-                : view === "plans"
-                  ? plansHTML(d)
-                  : spendingHTML(d);
+    view === "ceo"
+      ? ceoHTML(d)
+      : view === "businesses"
+        ? businessesHTML(d)
+        : view === "overview"
+          ? `<div class="dashboard-grid"><div>${departmentHTML(d)}${tasksHTML(d)}</div><div class="right-column">${approvalsHTML(d)}</div></div>`
+          : view === "tasks"
+            ? tasksHTML(d)
+            : view === "approvals"
+              ? approvalsHTML(d)
+              : view === "departments"
+                ? departmentHTML(d)
+                : view === "employees"
+                  ? employeesHTML(d)
+                  : view === "plans"
+                    ? plansHTML(d)
+                    : spendingHTML(d);
   $("#new-task").disabled = view !== "businesses" && !d.connected;
   $("#new-task").innerHTML = view === "businesses" ? "＋ 新建业务" : "<span>＋</span> 新建任务";
   $("#last-updated").textContent = (isDemo ? "示例数据 · " : "最后同步 ") + time(d.at) + " · 北京时间";
@@ -431,7 +443,13 @@ async function refresh() {
   try {
     live = await api("/api/overview");
     lastRefresh = Date.now();
-    if (!isDemo && !pending && !$("dialog[open]") && document.activeElement?.id !== "search") {
+    if (
+      !isDemo &&
+      !pending &&
+      !$("dialog[open]") &&
+      document.activeElement?.id !== "search" &&
+      !Array.from(document.querySelectorAll("textarea[id^=reply-]")).some((el) => el.value)
+    ) {
       if (renderedState !== signature(live)) render();
       else $("#last-updated").textContent = "最后同步 " + time(live.at) + " · 北京时间";
     }
@@ -526,6 +544,21 @@ document.addEventListener("click", (event) => {
   }
   if (button.dataset.template) {
     openForm(button.dataset.template);
+    return;
+  }
+  if (button.dataset.reply) {
+    action(button, async () => {
+      const id = Number(button.dataset.reply),
+        text = $("#reply-" + id).value.trim();
+      if (!text) throw new Error("请填写回复");
+      if (isDemo) demo.cards = demo.cards.filter((c) => c.id !== id);
+      else {
+        await api(`/api/cards/${id}/answer`, { text });
+        await refresh();
+      }
+      toast("回复已提交");
+      render();
+    });
     return;
   }
   if (button.dataset.answer) {
@@ -876,6 +909,7 @@ $("#metric-form").addEventListener("submit", async (event) => {
 let projectFilter = "all";
 const operationById = (id) => (data()?.operations ?? []).find((p) => p.business === id);
 const planNames = {
+  proposed: "待 CEO 审核",
   planned: "待执行",
   working: "执行中",
   blocked: "受阻",
@@ -1054,3 +1088,51 @@ for (const kind of ["employee", "signal", "settings"])
       pending--;
     }
   });
+
+function ceoHTML(d) {
+  const c = d.leadership;
+  if (!c?.enabled) return '<div class="empty"><strong>CEO 管理未启用</strong></div>';
+  const business = (id) => d.businesses?.find((b) => b.id === id)?.name ?? id;
+  const state = { open: "CEO 处理中", owner: "待你回复", answered: "已解决" };
+  const channel = d.channels?.find((v) => v.id === "company-feishu");
+  return `<section class="panel"><div class="panel-heading"><h2>管理状态</h2><span class="badge">${channel?.online ? "飞书已连接" : "飞书未连接"}</span></div><div class="approval-list"><p>员工 → CEO → 你</p>${c.lastTask ? `<button class="text-button" data-task="${esc(c.lastTask)}">最近管理任务</button>` : ""}</div></section>
+  <section class="panel"><div class="panel-heading"><h2>业务目标</h2></div><div class="approval-list">${
+    Object.entries(c.briefs)
+      .map(([id, goal]) => `<article class="report"><h3>${esc(business(id))}</h3><p>${esc(goal)}</p></article>`)
+      .join("") || '<p class="muted">等待 CEO 分配目标</p>'
+  }</div></section>
+  ${approvalsHTML(d)}
+  <section class="panel"><div class="panel-heading"><h2>员工问题</h2><span class="count-badge">${c.issues.filter((i) => i.state !== "answered").length}</span></div><div class="approval-list">${
+    c.issues
+      .slice()
+      .reverse()
+      .slice(0, 20)
+      .map(
+        (i) =>
+          `<article class="report"><span class="meta">${esc(business(i.business))} · ${esc(roleNames[i.role])} · ${state[i.state]}</span><h3>${esc(i.question)}</h3><p>${esc(i.answer || i.context)}</p></article>`,
+      )
+      .join("") || '<p class="muted">暂无问题</p>'
+  }</div></section>
+  <section class="panel"><div class="panel-heading"><h2>决策记录</h2></div><div class="approval-list">${
+    c.decisions
+      .slice()
+      .reverse()
+      .slice(0, 10)
+      .map(
+        (v) =>
+          `<article class="report"><span class="meta">${time(v.at)}</span><p>${esc(v.summary)}</p><button class="text-button" data-task="${esc(v.task)}">决策详情</button></article>`,
+      )
+      .join("") || '<p class="muted">暂无记录</p>'
+  }</div></section>
+  <section class="panel"><div class="panel-heading"><h2>业务知识</h2></div><div class="approval-list">${
+    c.knowledge
+      .slice()
+      .reverse()
+      .slice(0, 20)
+      .map(
+        (k) =>
+          `<article class="report"><span class="meta">${esc(business(k.business))} · ${k.source === "owner" ? "你的答复" : "CEO 答复"}</span><p>${esc(k.answer)}</p><small>${esc(k.evidence)}</small></article>`,
+      )
+      .join("") || '<p class="muted">暂无问答记录</p>'
+  }</div></section>`;
+}

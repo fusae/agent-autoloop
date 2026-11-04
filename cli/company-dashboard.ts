@@ -112,6 +112,8 @@ export async function startDashboard(directory: string, port = 3361) {
             tasks,
             businesses: businesses.list(),
             operations: operations.snapshot(businesses.list(), company.tasks()),
+            leadership: operations.executive(),
+            channels: state?.channels ?? [],
             cards: (state?.cards ?? []).map((c: any) => ({
               id: c.id,
               kind: c.kind,
@@ -228,6 +230,11 @@ export async function startDashboard(directory: string, port = 3361) {
           const state = await hub("/v1/state");
           const card = state.cards.find((c: any) => c.id === Number(answer[1]));
           if (!card || card.kind !== "ask") throw new HTTPError(409, "这项审批已处理，请刷新页面");
+          if (typeof data.text === "string") {
+            const text = data.text.trim();
+            if (!text || text.length > 4000) throw new HTTPError(400, "回复需要 1–4000 字");
+            return send(200, await hub(`/v1/cards/${answer[1]}/answer`, { text }));
+          }
           if (!Number.isInteger(data.choice) || data.choice < 0 || data.choice >= card.options.length)
             throw new HTTPError(400, "请选择有效的审批选项");
           return send(200, await hub(`/v1/cards/${answer[1]}/answer`, { choice: data.choice }));

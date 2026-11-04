@@ -20,10 +20,10 @@ try {
     .digest("hex");
   const tasks = office.tasks(),
     now = new Date();
-  const proactive = operations.plan(batch, businesses.list(), tasks, now);
+  const proactive = operations.plan(batch, businesses.list(), tasks, now, context.answers);
   const legacy = businesses.plan(batch, tasks, now, 100 - (proactive.events?.length ?? 0));
   const events = [...(proactive.events ?? []), ...(legacy.events ?? [])];
-  const receipt = events.length ? { events } : {};
+  const receipt = { ...proactive, ...(events.length ? { events } : {}) };
   process.stdout.write(`经营周期已检查。\n\n\`\`\`agent-autoloop\n${JSON.stringify(receipt)}\n\`\`\`\n`);
 } finally {
   operations.close();

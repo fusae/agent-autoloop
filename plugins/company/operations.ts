@@ -3,6 +3,8 @@ import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { departments, taskId, taskRequest, workflows, type Role, type Task, type Receipt } from "./company.ts";
+import type { Leadership, ExecutiveDecision, Issue } from "./executive.ts";
+import type { Context } from "./company.ts";
 import type { Business, Metric } from "./business.ts";
 import type { ActionProposal, Inspection } from "./inspection.ts";
 
@@ -27,7 +29,7 @@ export type Plan = ActionProposal & {
   owner: Role;
   sourceTask: string;
   task: string | null;
-  status: "planned" | "working" | "blocked" | "observing" | "review" | "closed";
+  status: "proposed" | "planned" | "working" | "blocked" | "observing" | "review" | "closed";
   createdAt: string;
   dueAt: string;
   followUpAt: string | null;
@@ -46,7 +48,7 @@ type Project = {
   signals: Signal[];
   activity: { task: string; role: Role; kind: "check" | "work"; at: string }[];
 };
-const duties: Record<Role, [string, string[]]> = {
+const duties: Record<Exclude<Role, "ceo">, [string, string[]]> = {
   product: [
     "项目负责人：维护目标、优先级和跨部门计划",
     ["目标与指标差距", "计划进度、阻塞和逾期", "完成工作的业务效果"],
@@ -60,7 +62,7 @@ const duties: Record<Role, [string, string[]]> = {
 const hash = (s: string) => createHash("sha256").update(s).digest("hex").slice(0, 32);
 const day = (d: Date) => new Date(d.getTime() + 8 * 3600_000).toISOString().slice(0, 10);
 const after = (d: Date, days: number) => new Date(d.getTime() + days * 86400_000).toISOString();
-const roles = Object.keys(departments) as Role[];
+const roles = Object.keys(departments).filter((r) => r !== "ceo") as Exclude<Role, "ceo">[];
 const words = (v: unknown, max: number) => {
   if (typeof v !== "string" || !v.trim() || v.length > max) throw new Error(`内容需要 1–${max} 字`);
   return v.trim();
@@ -75,9 +77,41 @@ export class Operations {
     this.db = new DatabaseSync(file);
     chmodSync(file, 0o600);
     this.db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+      CREATE TABLE IF NOT EXISTS leadership(id TEXT PRIMARY KEY,body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS batches(id TEXT PRIMARY KEY,body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS journal(seq INTEGER PRIMARY KEY,project TEXT NOT NULL,kind TEXT NOT NULL,at TEXT NOT NULL,body TEXT NOT NULL);`);
+  }
+  executive(): Leadership {
+    const row = this.db.prepare("SELECT body FROM leadership WHERE id='company'").get();
+    return row
+      ? JSON.parse(row.body as string)
+      : {
+          enabled: false,
+          lastTask: null,
+          processed: null,
+          fingerprint: null,
+          lastReportDay: null,
+          briefs: {},
+          issues: [],
+          questions: [],
+          knowledge: [],
+          decisions: [],
+          runs: [],
+          answeredCards: [],
+          retries: {},
+        };
+  }
+  private saveExecutive(c: Leadership) {
+    this.db
+      .prepare("INSERT INTO leadership VALUES ('company',?) ON CONFLICT(id) DO UPDATE SET body=excluded.body")
+      .run(JSON.stringify(c));
+  }
+  leadership(enabled: boolean, now = new Date()) {
+    const c = this.executive();
+    c.enabled = enabled;
+    this.saveExecutive(c);
+    return c;
   }
   close() {
     this.db.close();
@@ -119,7 +153,7 @@ export class Operations {
       .run(p.business, kind, now.toISOString(), body);
   }
   configure(id: string, role: string, data: Record<string, unknown>, now = new Date()) {
-    if (!roles.includes(role as Role)) throw new Error("员工不存在");
+    if (!roles.includes(role as Exclude<Role, "ceo">)) throw new Error("员工不存在");
     const p = this.get(id, now),
       s = p.staff.find((s) => s.role === role)!;
     if (data.duty !== undefined) s.duty = words(data.duty, 500);
@@ -157,7 +191,7 @@ export class Operations {
   signal(id: string, data: Record<string, unknown>, now = new Date()) {
     const p = this.get(id, now),
       role = data.role ?? "all";
-    if (role !== "all" && !roles.includes(role as Role)) throw new Error("员工不存在");
+    if (role !== "all" && !roles.includes(role as Exclude<Role, "ceo">)) throw new Error("员工不存在");
     const signal: Signal = {
       id: randomUUID(),
       title: words(data.title, 100),
@@ -175,6 +209,7 @@ export class Operations {
       const p = this.get(b.id, new Date(b.createdAt));
       return {
         ...p,
+        owner: this.executive().enabled ? "ceo" : p.owner,
         name: b.name,
         enabled: !!b.autonomy,
         status: b.status,
@@ -213,7 +248,9 @@ export class Operations {
       JSON.stringify(
         {
           business: b,
-          owner: p.owner,
+          owner: this.executive().enabled ? "ceo" : p.owner,
+          ceoGoal: this.executive().briefs[b.id] ?? null,
+          knowledge: this.executive().knowledge.filter((k) => k.business === b.id),
           staff: p.staff,
           plans: p.plans,
           signals: p.signals,
@@ -233,7 +270,295 @@ export class Operations {
     );
     renameSync(temp, file);
   }
-  plan(batch: string, businesses: Portfolio, tasks: Task[], now = new Date()): Receipt {
+  private ceoInputs(c: Leadership, businesses: Portfolio, tasks: Task[], now: Date) {
+    return hash(
+      JSON.stringify({
+        day: day(new Date(now.getTime() - 9 * 3600_000)),
+        businesses: businesses
+          .filter((b) => b.autonomy && b.status === "active")
+          .map((b) => ({
+            id: b.id,
+            objective: b.objective,
+            description: b.description,
+            metrics: b.metrics,
+            project: this.get(b.id, now),
+          }))
+          .map(({ project, ...b }) => ({
+            ...b,
+            plans: project.plans.map((a) => [a.id, a.status, a.priority, a.result]),
+            signals: project.signals,
+            work: project.activity.map((a) => {
+              const t = tasks.find((t) => t.id === a.task);
+              return [a.task, t?.status, t?.assignment, t?.reason];
+            }),
+          })),
+        issues: c.issues.filter((i) => i.state === "open"),
+        knowledge: c.knowledge,
+        briefs: c.briefs,
+      }),
+    );
+  }
+  private manage(
+    c: Leadership,
+    businesses: Portfolio,
+    tasks: Task[],
+    answers: Context["answers"],
+    receipt: Receipt,
+    now: Date,
+  ) {
+    const active = businesses.filter((b) => b.autonomy && b.status === "active");
+    const addIssue = (issue: Issue) => {
+      if (!c.issues.some((i) => i.id === issue.id)) c.issues.push(issue);
+    };
+    for (const b of active) {
+      if (!c.briefs[b.id] && !c.knowledge.some((k) => k.business === b.id && k.source === "owner"))
+        addIssue({
+          id: hash(`onboarding:${b.id}`),
+          business: b.id,
+          role: "ceo",
+          task: null,
+          question: `${b.name} 目前进展到哪一步，真实数据在哪里，当前最优先的目标是什么？`,
+          context: "先核对档案，已知的不要重复问；缺少的由 CEO 汇总向负责人了解。",
+          state: "open",
+          answer: null,
+          at: now.toISOString(),
+        });
+      const p = this.get(b.id, now);
+      for (const activity of p.activity) {
+        const t = tasks.find((t) => t.id === activity.task),
+          report = t?.reports.at(-1);
+        if (!t) continue;
+        if (t.status !== "blocked" && !(t.status === "completed" && report?.inspection?.state === "blocked")) continue;
+        const qs = report?.inspection?.questions?.length
+          ? report.inspection.questions
+          : [{ key: "blocked", question: t.reason, context: report?.evidence.join("；") ?? "任务未完成" }];
+        for (const q of qs)
+          addIssue({
+            id: hash(`${b.id}:${t.id}:${t.assignment}:${q.key}`),
+            business: b.id,
+            role: activity.role,
+            task: t.id,
+            question: q.question,
+            context: q.context,
+            state: "open",
+            answer: null,
+            at: now.toISOString(),
+          });
+      }
+    }
+    for (const answer of answers) {
+      if (c.answeredCards.includes(answer.card)) continue;
+      const q = c.questions.find((q) => `ceo:${q.id}` === answer.about && q.state === "open");
+      if (!q) continue;
+      c.answeredCards.push(answer.card);
+      if (answer.choice === 1 && !answer.text) {
+        q.state = "deferred";
+        q.answer = "暂缓";
+        continue;
+      }
+      q.state = "answered";
+      q.answer = (answer.text?.trim() || "负责人确认已处理，请核对更新后的资料").slice(0, 4000);
+      for (const issue of c.issues.filter((i) => q.issues.includes(i.id))) {
+        issue.state = "open";
+        c.knowledge.push({
+          id: hash(`${answer.card}:${issue.id}`),
+          business: issue.business,
+          issue: issue.id,
+          answer: q.answer,
+          source: "owner",
+          evidence: `负责人回复 C${answer.card}`,
+          at: now.toISOString(),
+        });
+      }
+    }
+    const task = tasks.find((t) => t.id === c.lastTask);
+    if (!task || task.status !== "completed" || c.processed === `${task.id}:${task.assignment}`) return;
+    const report = task.reports.at(-1),
+      d = report?.executive;
+    if (!d) return;
+    c.processed = `${task.id}:${task.assignment}`;
+    const known = (id: string) => active.some((b) => b.id === id);
+    const valid =
+      d.briefs.every((a) => known(a.business)) &&
+      d.directives.every((a) => known(a.business)) &&
+      d.approvals.every((a) => known(a.business) && this.get(a.business, now).plans.some((p) => p.id === a.plan)) &&
+      d.answers.every((a) => c.issues.some((i) => i.id === a.issue)) &&
+      d.escalations.every((a) => a.issues.every((id) => c.issues.some((i) => i.id === id)));
+    if (!valid) {
+      c.fingerprint = null;
+      if (active[0])
+        addIssue({
+          id: hash(`invalid:${task.id}`),
+          business: active[0].id,
+          role: "ceo",
+          task: null,
+          question: "CEO 决策引用了不存在或暂停的项目、计划或问题，请重新核对编号。",
+          context: report!.summary,
+          state: "open",
+          answer: null,
+          at: now.toISOString(),
+        });
+      return;
+    }
+    c.decisions.push({ task: task.id, summary: report!.summary, at: now.toISOString(), decision: d });
+    for (const brief of d.briefs) c.briefs[brief.business] = brief.objective;
+    for (const directive of d.directives) {
+      const p = this.get(directive.business, now),
+        a = directive.action,
+        id = hash(`${p.business}:ceo:${a.key}`);
+      if (p.plans.some((v) => v.id === id) || p.plans.filter((v) => v.status !== "closed").length >= 30) continue;
+      p.plans.push({
+        ...a,
+        id,
+        proposedBy: "ceo",
+        owner: workflows[a.kind][0],
+        sourceTask: task.id,
+        task: null,
+        status: "planned",
+        createdAt: now.toISOString(),
+        dueAt: after(now, a.dueDays),
+        followUpAt: null,
+        deliveredAt: null,
+        outcome: null,
+        result: "CEO 已派工",
+      });
+      this.save(p, "ceo-directive", now);
+    }
+    for (const a of d.approvals) {
+      const p = this.get(a.business, now),
+        plan = p.plans.find((p) => p.id === a.plan)!;
+      if (plan.status !== "proposed") continue;
+      plan.status = a.approve ? "planned" : "closed";
+      plan.result = a.reason;
+      this.save(p, "ceo-approval", now);
+    }
+    for (const a of d.answers) {
+      const i = c.issues.find((i) => i.id === a.issue)!;
+      if (i.state !== "open") continue;
+      const t = tasks.find((t) => t.id === i.task);
+      const escalated = d.escalations.some((e) => e.issues.includes(i.id));
+      if (!escalated && t?.status === "blocked" && (c.retries[t.id] ?? 0) >= 2) continue;
+      i.state = escalated ? "open" : "answered";
+      i.answer = a.answer;
+      c.knowledge.push({
+        id: hash(`${task.id}:${i.id}`),
+        business: i.business,
+        issue: i.id,
+        answer: a.answer,
+        source: "ceo",
+        evidence: a.evidence,
+        at: now.toISOString(),
+      });
+      const p = this.get(i.business, now);
+      p.signals.push({
+        id: hash(`answer:${task.id}:${i.id}`),
+        title: "CEO 答复",
+        detail: a.answer,
+        source: a.evidence,
+        role: roles.includes(i.role as any) ? (i.role as Role) : "all",
+        at: now.toISOString(),
+      });
+      this.save(p, "ceo-answer", now);
+      if (!escalated && t?.status === "blocked") {
+        c.retries[t.id] = (c.retries[t.id] ?? 0) + 1;
+        receipt.events ??= [];
+        receipt.events.push({
+          id: `ceo:retry:${task.id}:${t.id}`,
+          type: "company.task.retry",
+          subject: t.id,
+          summary: "CEO 处理阻塞后继续",
+          detail: "{}",
+        });
+      }
+    }
+    for (const e of d.escalations) {
+      const ids = e.issues.filter((id) => c.issues.some((i) => i.id === id && i.state === "open"));
+      if (!ids.length || c.questions.some((q) => q.key === e.key && q.state === "open")) continue;
+      const q = {
+        id: hash(`${task.id}:${e.key}`),
+        key: e.key,
+        issues: ids,
+        question: e.question,
+        context: e.context,
+        state: "open" as const,
+        answer: null,
+        at: now.toISOString(),
+      };
+      c.questions.push(q);
+      for (const i of c.issues.filter((i) => ids.includes(i.id))) i.state = "owner";
+      receipt.ask ??= [];
+      receipt.ask.push({
+        key: `ceo-${q.id}`,
+        title: "CEO · 待你决策",
+        text: `${q.question}\n\n${q.context}`,
+        options: ["资料已补充", "暂缓"],
+        about: `ceo:${q.id}`,
+      });
+    }
+    if (c.lastReportDay !== day(now) && !receipt.ask?.length) {
+      receipt.notice ??= [];
+      receipt.notice.push({ key: `ceo-report-${day(now)}`, title: "CEO · 工作汇报", text: report!.summary });
+      c.lastReportDay = day(now);
+    }
+  }
+  private scheduleCEO(c: Leadership, businesses: Portfolio, tasks: Task[], receipt: Receipt, now: Date) {
+    const active = businesses.filter((b) => b.autonomy && b.status === "active");
+    if (!active.length) return;
+    const latest = tasks.find((t) => t.id === c.lastTask);
+    if (c.lastTask && latest?.status !== "completed") return;
+    if (c.runs.filter((r) => day(new Date(r.at)) === day(now)).length >= 8) return;
+    const fingerprint = this.ceoInputs(c, businesses, tasks, now);
+    if (fingerprint === c.fingerprint) return;
+    const id = "CEO-" + hash(`${fingerprint}:${c.lastTask ?? "initial"}`);
+    const file = join(this.directory, "workspace/knowledge/ceo.json"),
+      temp = file + ".tmp";
+    writeFileSync(
+      temp,
+      JSON.stringify(
+        {
+          projects: active.map((b) => ({ ...b, ...this.get(b.id, now) })),
+          issues: c.issues.filter((i) => i.state !== "answered"),
+          knowledge: c.knowledge,
+          questions: c.questions,
+          briefs: c.briefs,
+          decisions: c.decisions.slice(-10),
+          retryCounts: c.retries,
+          limits: { dailyCeoTasks: 8, blockedRetries: 2 },
+        },
+        null,
+        2,
+      ),
+      { mode: 0o600 },
+    );
+    renameSync(temp, file);
+    const request = taskRequest({
+      title: "CEO · 经营管理",
+      kind: "ceo",
+      goal: "读取 knowledge/ceo.json 及项目资料。先查已知事实，给员工明确目标；审核提案，解答员工问题，处理受阻工作。只有确实无法判断的事项才汇总提问负责人，并引用问题编号。用结构化决策反馈，不直接操作配置或外部系统。",
+      acceptance: [
+        "先处理员工问题与已有计划，不重复派工或重复提问",
+        "未知数据不得编造；汇报区分交付、实际执行和业务效果",
+      ],
+    });
+    receipt.events ??= [];
+    receipt.events.push({
+      id: `company:ceo:${id}`,
+      type: "company.task.create",
+      subject: id,
+      summary: request.title,
+      detail: JSON.stringify(request),
+    });
+    c.lastTask = id;
+    c.fingerprint = fingerprint;
+    c.runs.push({ task: id, at: now.toISOString() });
+  }
+  plan(
+    batch: string,
+    businesses: Portfolio,
+    tasks: Task[],
+    now = new Date(),
+    answers: Context["answers"] = [],
+  ): Receipt {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const cached = this.db.prepare("SELECT body FROM batches WHERE id=?").get(batch);
@@ -241,20 +566,27 @@ export class Operations {
         this.db.exec("COMMIT");
         return JSON.parse(cached.body as string);
       }
-      const receipt: Receipt = {};
+      const receipt: Receipt = {},
+        chief = this.executive();
+      const beforeCEO = this.ceoInputs(chief, businesses, tasks, now),
+        beforeProcessed = chief.processed;
+      if (chief.enabled) {
+        this.manage(chief, businesses, tasks, answers, receipt, now);
+        this.saveExecutive(chief);
+      }
       for (const b of businesses.filter((b) => b.autonomy)) {
         const p = this.get(b.id, now),
           before = JSON.stringify(p);
         for (const s of p.staff) {
           const t = tasks.find((t) => t.id === s.lastTask);
-          if (!t || t.status !== "completed" || s.processed === t.id) continue;
+          if (!t || t.status !== "completed" || s.processed === `${t.id}:${t.assignment}`) continue;
           const report = t.reports.at(-1),
             decision = report?.inspection;
           if (!decision) continue;
-          s.processed = t.id;
+          s.processed = `${t.id}:${t.assignment}`;
           s.lastChecked = now.toISOString();
           s.finding = report!.summary;
-          if (decision.state === "blocked") s.fingerprint = null;
+          if (decision.state === "blocked" && !chief.enabled) s.fingerprint = null;
           for (const a of decision.actions) {
             const id = hash(`${b.id}:${s.role}:${a.key}`);
             // Stable employee keys deduplicate proposals across checks; a closed plan remains in history.
@@ -266,7 +598,7 @@ export class Operations {
               owner: workflows[a.kind][0],
               sourceTask: t.id,
               task: null,
-              status: "planned",
+              status: chief.enabled ? "proposed" : "planned",
               createdAt: now.toISOString(),
               dueAt: after(now, a.dueDays),
               followUpAt: null,
@@ -279,7 +611,7 @@ export class Operations {
             const a = p.plans.find(
               (a) =>
                 (a.id === r.key || (a.key === r.key && a.proposedBy === s.role)) &&
-                (a.proposedBy === s.role || s.role === p.owner) &&
+                (a.proposedBy === s.role || (a.proposedBy === "ceo" && a.owner === s.role) || s.role === p.owner) &&
                 a.status === "review",
             );
             if (!a) continue;
@@ -311,6 +643,7 @@ export class Operations {
           );
         const capacity = () =>
           b.status === "active" &&
+          (!chief.enabled || !!chief.briefs[b.id]) &&
           (receipt.events?.length ?? 0) < 50 &&
           busy().length < p.maxActive &&
           p.activity.filter((a) => day(new Date(a.at)) === day(now)).length < p.maxDailyTasks;
@@ -355,13 +688,26 @@ export class Operations {
           if (!capacity() || !s.enabled) continue;
           const previous = tasks.find((t) => t.id === s.lastTask);
           if (s.lastTask && previous?.status !== "completed") continue;
+          if (
+            chief.enabled &&
+            chief.issues.some(
+              (i) => i.business === b.id && i.role === s.role && (i.state === "open" || i.state === "owner"),
+            )
+          )
+            continue;
           if (p.plans.some((a) => a.owner === s.role && ["planned", "working", "blocked"].includes(a.status))) continue;
           if (busy().some((a) => a.role === s.role)) continue;
           const reviews = p.plans
-            .filter((a) => a.status === "review" && (a.proposedBy === s.role || s.role === p.owner))
+            .filter(
+              (a) =>
+                a.status === "review" &&
+                (a.proposedBy === s.role || (a.proposedBy === "ceo" && a.owner === s.role) || s.role === p.owner),
+            )
             .map((a) => `${a.id}:${a.followUpAt}`);
           const fingerprint = hash(
             JSON.stringify({
+              ceoGoal: chief.briefs[b.id],
+              knowledge: chief.knowledge.filter((k) => k.business === b.id),
               facts: [b.name, b.description, b.audience, b.objective, b.channels, b.url],
               metrics: b.metrics,
               signals: p.signals.filter((v) => v.role === "all" || v.role === s.role || s.role === p.owner),
@@ -412,6 +758,12 @@ export class Operations {
         }
         if (JSON.stringify(p) !== before) this.save(p, "check", now);
         this.profile(p, b, tasks);
+      }
+      if (chief.enabled) {
+        if (chief.processed !== beforeProcessed && beforeCEO === chief.fingerprint)
+          chief.fingerprint = this.ceoInputs(chief, businesses, tasks, now);
+        this.scheduleCEO(chief, businesses, tasks, receipt, now);
+        this.saveExecutive(chief);
       }
       this.db.prepare("INSERT INTO batches VALUES (?,?)").run(batch, JSON.stringify(receipt));
       this.db.exec("COMMIT");

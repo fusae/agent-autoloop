@@ -158,3 +158,7 @@ MCP 客户端的启动程序填 `node`，参数为本机引擎绝对路径 `bin/
 ## 版本与卸载
 
 `agent-autoloop --version` 显示版本和提交。`agent-autoloop uninstall` 确认后删除自身程序、链接和服务，规则、密钥和记录保留；`--yes` 只跳过确认。
+
+### 公司 CEO 模式（本 fork）
+
+在公司目录执行 `agent-company ceo <目录>`，再用 `agent-company feishu <目录> <本人 open_id>` 配置已授权的机器人私聊，重启服务生效。员工问题先交 CEO，CEO 不能解决的才上报；本人按 `C编号 答复` 回复，知识持久保存。不要为此启动第二个飞书事件监听。[公司流程](../../docs/company.md#ceo-管理与飞书决策)。

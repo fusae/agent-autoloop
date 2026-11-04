@@ -6,6 +6,8 @@ See the [company setup guide](examples/recipes/company/README.md) and [architect
 
 Start the local Chinese dashboard and task engine with `npm run company -- start "$HOME/.agent-company"`, then open **http://127.0.0.1:3361**. The dashboard shows tasks, departments, approvals, artifacts and reported spending. Business portfolios add project-specific employee responsibilities, evidence-driven checks, prioritized plans, manual metrics and scheduled outcome follow-ups. Internal deliverables still pass independent QA, then archive without routine owner approval. Unchanged daily checks skip model calls; blockers request owner input. Native hub cron drives checks with per-project dispatch limits and replay-safe task IDs. Legacy recurring mode remains available for existing businesses. Publication, ad spending and product analytics are not connected. Its explicitly labeled demo mode never submits real work. `start` initializes a new directory automatically; Ctrl+C stops the processes and keeps your data.
 
+Enable CEO management with `npm run company -- ceo "$HOME/.agent-company"`, configure the owner DM with `npm run company -- feishu "$HOME/.agent-company" ou_OWNER`, then restart. The CEO sets objectives, approves staff proposals, resolves blockers and escalates only unresolved questions to the owner. Reply `C42 your answer`; replies persist as project knowledge. Checks run every five minutes; the company Feishu channel polls owner replies every 30 seconds without a second WebSocket listener. See [company architecture](docs/company.md).
+
 ---
 
 # Agent Autoloop

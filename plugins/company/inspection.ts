@@ -12,6 +12,7 @@ export type ActionProposal = {
 export type Inspection = {
   state: "idle" | "action" | "blocked";
   actions: ActionProposal[];
+  questions?: { key: string; question: string; context: string }[];
   reviews: {
     key: string;
     outcome: "improved" | "unchanged" | "worse" | "unknown";
@@ -66,5 +67,11 @@ export function inspection(value: unknown): Inspection {
     return { key: key(r.key), outcome: r.outcome, evidence: str(r.evidence, 200), nextDays: integer(r.nextDays, 30) };
   });
   if (new Set(actions.map((a: ActionProposal) => a.key)).size !== actions.length) throw new Error("计划编号不能重复");
-  return { state: d.state, actions, reviews };
+  if (d.questions !== undefined && (!Array.isArray(d.questions) || d.questions.length > 3))
+    throw new Error("每次最多提出 3 个问题");
+  const questions = (d.questions ?? []).map((v: unknown) => {
+    const q = obj(v);
+    return { key: key(q.key), question: str(q.question, 300), context: str(q.context, 300) };
+  });
+  return { state: d.state, actions, reviews, ...(questions.length ? { questions } : {}) };
 }

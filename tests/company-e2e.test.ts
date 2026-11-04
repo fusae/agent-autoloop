@@ -165,3 +165,100 @@ console.log('模拟部门完成。\\n\\n\`\`\`agent-autoloop\\n'+JSON.stringify(
     }
   },
 );
+
+// A CEO question must wake the business coordinator on reply, then reach staff without another owner command.
+test(
+  "CEO receives owner knowledge through the hub and gives employees project objectives",
+  { timeout: 120_000 },
+  async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "company-ceo-e2e-")),
+      directory = join(scratch, "office"),
+      port = await freePort();
+    const env = Object.fromEntries(Object.entries(process.env).filter(([n]) => !n.startsWith("AGENT_AUTOLOOP_")));
+    const run = (...args: string[]) => {
+      const r = spawnSync(process.execPath, [cli, ...args], { env, encoding: "utf8", timeout: 10_000 });
+      assert.equal(r.status, 0, r.stderr);
+    };
+    let up: ReturnType<typeof spawn> | undefined,
+      office: Company | undefined,
+      ops: Operations | undefined,
+      b: Businesses | undefined,
+      logs = "";
+    try {
+      run("init", directory, "codex", String(port));
+      run("ceo", directory);
+      const fixture = join(scratch, "ceo.ts");
+      writeFileSync(
+        fixture,
+        `import {readFileSync} from 'node:fs';
+const ctx=JSON.parse(readFileSync(process.env.AGENT_AUTOLOOP_CONTEXT,'utf8')),brief=JSON.parse(ctx.events[0].detail);
+let extra={inspection:{state:'idle',actions:[],reviews:[]}};
+if(brief.role==='ceo') {
+ const facts=JSON.parse(readFileSync('knowledge/ceo.json','utf8'));
+ const informed=facts.knowledge.some(k=>k.source==='owner');
+ extra={executive:{briefs:informed?[{business:'app',objective:'依据负责人提供的报表核对新增用户'}]:[],directives:[],approvals:[],answers:informed?facts.issues.filter(i=>i.state==='open').map(i=>({issue:i.id,answer:'数据在本机报表，先核对新增用户',evidence:'负责人答复'})):[],escalations:informed?[]:[{key:'onboarding',issues:facts.issues.map(i=>i.id),question:'数据在哪里？',context:'业务档案缺少数据入口'}]}};
+}
+const report={assignment:brief.assignment,verdict:'pass',summary:'模拟管理结果',artifacts:[],evidence:['测试资料'],...extra};
+console.log('\`\`\`agent-autoloop\\n'+JSON.stringify({events:[{id:brief.task+':'+brief.assignment+':result',type:'company.result',subject:brief.task,detail:JSON.stringify(report)}]})+'\\n\`\`\`');`,
+      );
+      const file = join(directory, "hub/rules.json"),
+        rules = JSON.parse(readFileSync(file, "utf8"));
+      for (const [id, a] of Object.entries(rules.agents) as [string, any][])
+        if (!["company-office", "company-business"].includes(id)) {
+          a.use = "command";
+          a.command = [process.execPath, fixture];
+        }
+      writeFileSync(file, JSON.stringify(rules));
+      office = new Company(JSON.parse(readFileSync(join(directory, "company.json"), "utf8")));
+      ops = new Operations(directory);
+      b = new Businesses(directory);
+      b.save({
+        id: "app",
+        name: "APP",
+        description: "测试提醒",
+        audience: "测试",
+        objective: "提升使用",
+        stage: "operating",
+      });
+      b.autonomy("app", true);
+      b.status("app", "active");
+      up = spawn(process.execPath, [cli, "up", directory], { env, stdio: ["ignore", "pipe", "pipe"] });
+      up.stdout!.on("data", (c) => (logs += c));
+      up.stderr!.on("data", (c) => (logs += c));
+      await until(() =>
+        fetch(`http://127.0.0.1:${port}/healthz`)
+          .then((r) => r.ok)
+          .catch(() => false),
+      );
+      const cfg = JSON.parse(readFileSync(join(directory, "hub/config.json"), "utf8"));
+      const { hubClient } = await import("../protocol/client.ts");
+      const owner = hubClient(cfg.url, cfg.owner),
+        source = hubClient(cfg.url, cfg.source.key);
+      const wake = (id: string) => source.event({ id, type: "company.business.wake", subject: "app", detail: "{}" });
+      await wake("ceo-start");
+      await until(() => office!.tasks().some((t) => t.kind === "ceo" && t.status === "completed"));
+      await wake("ceo-consume");
+      const card = await until(async () => (await owner.state()).cards.find((c: any) => c.kind === "ask"));
+      await owner.answer(card.id, { text: "数据在本机报表，先核对新增用户" });
+      await until(() => office!.tasks().filter((t) => t.kind === "ceo" && t.status === "completed").length === 2);
+      assert.equal(ops.executive().knowledge[0].source, "owner");
+      await wake("ceo-decisions");
+      await until(() => office!.tasks().some((t) => t.kind.startsWith("check-") && t.status === "completed"));
+      assert.match(ops.executive().briefs.app, /新增用户/);
+      assert.ok(ops.executive().issues.every((i) => i.state === "answered"));
+      const profile = JSON.parse(readFileSync(join(directory, "workspace/knowledge/operations/app.json"), "utf8"));
+      assert.ok(profile.knowledge.some((k: any) => k.source === "owner"));
+    } catch (error) {
+      throw new Error(`${(error as Error).message}\n${logs}`, { cause: error });
+    } finally {
+      if (up && up.exitCode === null) {
+        up.kill("SIGTERM");
+        await new Promise((r) => up!.once("exit", r));
+      }
+      office?.close();
+      ops?.close();
+      b?.close();
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  },
+);

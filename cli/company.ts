@@ -20,7 +20,8 @@ export async function companyCLI(args: string[]) {
     console.log(
       "用法：agent-company init <新目录> [codex|claude] [端口]\n" +
         "      agent-company start|web <目录> [网页端口]\n" +
-        "      agent-company up|status <目录>\n" +
+        "      agent-company up|status|ceo <目录>\n" +
+        "      agent-company feishu <目录> <本人 open_id>\n" +
         "      agent-company submit <目录> <任务编号> <需求.json>\n" +
         "      agent-company retry <目录> <任务编号> [请求编号]\n" +
         "      agent-company show|history <目录> <任务编号>\n" +
@@ -53,6 +54,46 @@ export async function companyCLI(args: string[]) {
     };
     writeFileSync(join(directory, "hub/config.json"), JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
     console.log(`公司已创建：${directory}\n启动：npm run company -- up ${JSON.stringify(directory)}`);
+    return;
+  }
+  if (command === "ceo") {
+    ensureBusinessRules(directory);
+    const file = join(directory, "company.json"),
+      config = read(file);
+    config.ceoMode = true;
+    writeFileSync(file, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
+    const { Operations } = await import("../plugins/company/operations.ts");
+    const operations = new Operations(directory);
+    try {
+      operations.leadership(true);
+    } finally {
+      operations.close();
+    }
+    console.log("CEO 管理已启用；重启公司服务后生效。");
+    return;
+  }
+  if (command === "feishu") {
+    const user = rest[0];
+    if (!/^ou_[A-Za-z0-9]+$/.test(user ?? "")) throw new Error("需要本人飞书 open_id");
+    const file = join(directory, "hub/config.json"),
+      config = read(file),
+      rulesFile = join(directory, "hub/rules.json"),
+      rules = read(rulesFile);
+    config.channels ??= {};
+    rules.channels ??= {};
+    const old = config.channels["company-feishu"];
+    const key =
+      old?.key ??
+      execFileSync(process.execPath, [hubCLI, "key", "new", "channel", "company-feishu"], {
+        env: environment(directory),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    config.channels["company-feishu"] = { use: "company", key, user, stateFile: join(directory, "feishu-state.json") };
+    rules.channels["company-feishu"] = { name: "CEO 飞书", answerers: [user] };
+    writeFileSync(file, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
+    writeFileSync(rulesFile, JSON.stringify(rules, null, 2) + "\n", { mode: 0o600 });
+    console.log("CEO 飞书通道已配置；重启公司服务后生效。");
     return;
   }
   if (command === "web" || command === "start") {

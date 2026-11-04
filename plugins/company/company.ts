@@ -2,9 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { executiveDecision, type ExecutiveDecision } from "./executive.ts";
 import { inspection, type Inspection } from "./inspection.ts";
 
 export const departments = {
+  ceo: "CEO",
   product: "产品",
   engineering: "研发",
   qa: "验收",
@@ -14,6 +16,7 @@ export const departments = {
 } as const;
 export type Role = keyof typeof departments;
 export const workflows: Record<string, Role[]> = {
+  ceo: ["ceo"],
   software: ["product", "engineering", "qa"],
   content: ["growth", "qa"],
   support: ["support", "qa"],
@@ -21,10 +24,10 @@ export const workflows: Record<string, Role[]> = {
 };
 for (const role of Object.keys(departments) as Role[]) workflows[`check-${role}`] = [role];
 for (const kind of ["software", "content", "support", "finance"]) workflows[`internal-${kind}`] = [...workflows[kind]];
-export type CompanyConfig = { name: string; database: string; maxAssignments: number };
+export type CompanyConfig = { name: string; database: string; maxAssignments: number; ceoMode?: boolean };
 export type Context = {
   events: { id: number; source: string; type: string; subject: string; detail: string }[];
-  answers: { card: number; choice: number | null; about: string }[];
+  answers: { card: number; choice: number | null; about: string; text?: string | null }[];
 };
 export type Report = {
   assignment: number;
@@ -33,6 +36,7 @@ export type Report = {
   artifacts: string[];
   evidence: string[];
   inspection?: Inspection;
+  executive?: ExecutiveDecision;
 };
 export type Task = {
   id: string;
@@ -46,6 +50,7 @@ export type Task = {
   reports: (Report & { role: Role })[];
   approval: string | null;
   reason: string;
+  supervised?: boolean;
 };
 export type Receipt = {
   events?: { id: string; type: string; subject: string; summary: string; detail: string }[];
@@ -141,7 +146,7 @@ export class Company {
     if (task.assignment >= this.config.maxAssignments) {
       task.status = "blocked";
       task.reason = `已达到 ${this.config.maxAssignments} 次部门派工上限；请检查任务或调整本机公司配置。`;
-      this.notice(receipt, task.id, task.reason);
+      if (!task.supervised) this.notice(receipt, task.id, task.reason);
       return;
     }
     task.assignment++;
@@ -157,6 +162,7 @@ export class Company {
       role,
       inspection: task.kind.startsWith("check-"),
       internal: task.kind.startsWith("internal-"),
+      supervised: !!task.supervised,
       previous: task.reports.at(-1) ?? null,
     });
     receipt.events ??= [];
@@ -180,6 +186,9 @@ export class Company {
         status: "active",
         stage: 0,
         assignment: 0,
+        supervised:
+          !!this.config.ceoMode &&
+          (String(data.kind).startsWith("check-") || String(data.kind).startsWith("internal-")),
         reports: [],
         approval: null,
         reason: "",
@@ -211,7 +220,9 @@ export class Company {
         verdict: data.verdict as Report["verdict"],
         summary: words(data.summary, 400, "结果摘要"),
         artifacts:
-          data.verdict === "pass" && !task.kind.startsWith("check-") ? list(data.artifacts, "交付物", 150) : [],
+          data.verdict === "pass" && !task.kind.startsWith("check-") && task.kind !== "ceo"
+            ? list(data.artifacts, "交付物", 150)
+            : [],
         evidence: list(data.evidence, "核验依据", 150),
       };
       if (task.kind.startsWith("check-") && data.verdict === "pass") {
@@ -221,26 +232,39 @@ export class Company {
           throw new CompanyInputError((error as Error).message);
         }
       }
-      if (JSON.stringify(report).length > 1900)
+      if (task.kind === "ceo" && data.verdict === "pass") {
+        try {
+          report.executive = executiveDecision(data.executive);
+        } catch (error) {
+          throw new CompanyInputError((error as Error).message);
+        }
+      }
+      if (JSON.stringify(report).length > (task.kind === "ceo" ? 3500 : 1900))
         throw new CompanyInputError("报告 JSON 超过 1900 字，请将详情留在交付文件");
     } catch (error) {
       if (!(error instanceof CompanyInputError)) throw error;
       task.status = "blocked";
       task.reason = `部门报告格式不合格：${error.message}`;
       this.save(task, "invalid-report");
-      this.notice(receipt, id, `${task.reason}。请修正工作规范后显式 retry。`);
+      if (!task.supervised) this.notice(receipt, id, `${task.reason}。请修正工作规范后显式 retry。`);
       return;
     }
     task.reports.push({ ...report, role });
     task.reason = report.summary;
     if (report.verdict !== "pass") {
       task.status = "blocked";
-      this.notice(receipt, id, `${departments[role]}未通过：${report.summary}。处理后可显式 retry；不会自动循环返工。`);
+      if (!task.supervised)
+        this.notice(
+          receipt,
+          id,
+          `${departments[role]}未通过：${report.summary}。处理后可显式 retry；不会自动循环返工。`,
+        );
     } else if (task.stage < workflows[task.kind].length - 1) {
       task.stage++;
       this.dispatch(task, receipt);
     } else if (
-      (task.kind.startsWith("check-") && report.inspection?.state !== "blocked") ||
+      task.kind === "ceo" ||
+      (task.kind.startsWith("check-") && (task.supervised || report.inspection?.state !== "blocked")) ||
       task.kind.startsWith("internal-")
     ) {
       task.status = "completed";
