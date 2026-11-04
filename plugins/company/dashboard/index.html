@@ -10,25 +10,19 @@
   </head>
   <body>
     <aside class="sidebar">
-      <a class="brand" href="#overview"
-        ><span class="brand-mark">同</span><span>同舟 <b>COMPANY OS</b></span></a
-      >
-      <div class="workspace-label">你的 AI 公司 <span>LOCAL</span></div>
+      <a class="brand" href="#overview"><span class="brand-mark">同</span><span>同舟</span></a>
+      <div class="workspace-label">公司管理 <span>本机</span></div>
       <nav aria-label="主导航">
-        <a href="#businesses" data-view="businesses"><span>◎</span>经营业务</a>
-        <a href="#overview" data-view="overview"><span>◫</span>公司总览</a>
-        <a href="#tasks" data-view="tasks"><span>▤</span>任务看板<span class="nav-count" id="nav-tasks">0</span></a>
+        <a href="#businesses" data-view="businesses"><span>◎</span>业务管理</a>
+        <a href="#overview" data-view="overview"><span>◫</span>公司概览</a>
+        <a href="#tasks" data-view="tasks"><span>▤</span>任务列表<span class="nav-count" id="nav-tasks">0</span></a>
         <a href="#approvals" data-view="approvals"
-          ><span>◇</span>待我审批<span class="nav-count" id="nav-approvals">0</span></a
+          ><span>◇</span>审批<span class="nav-count" id="nav-approvals">0</span></a
         >
-        <a href="#departments" data-view="departments"><span>⊞</span>部门协作</a>
-        <a href="#spending" data-view="spending"><span>◴</span>运行费用</a>
+        <a href="#departments" data-view="departments"><span>⊞</span>部门</a>
+        <a href="#spending" data-view="spending"><span>◴</span>费用</a>
       </nav>
       <div class="sidebar-bottom">
-        <div class="sidebar-note">
-          <span class="orbit">✳</span><strong>把目标交给团队，<br />把时间留给自己。</strong>
-          <p>六个部门，一处掌握。</p>
-        </div>
         <button class="demo-toggle" id="demo-toggle">查看示例公司 <span>↗</span></button>
         <div class="owner">
           <span class="avatar">你</span>
@@ -52,17 +46,14 @@
         <div id="offline-banner" class="banner warning" hidden></div>
         <section class="page-heading">
           <div>
-            <p class="eyebrow" id="eyebrow">COMPANY OVERVIEW</p>
-            <h1 id="page-title">公司的每一步，都在这里。</h1>
-            <p id="page-subtitle">看进展、处理决策，让团队继续向前。</p>
+            <h1 id="page-title">业务管理</h1>
           </div>
-          <button id="new-task" class="primary"><span>＋</span> 下达新任务</button>
+          <button id="new-task" class="primary"><span>＋</span> 新建任务</button>
         </section>
         <section class="stats" id="stats" aria-label="公司概览"></section>
         <div id="view-content"></div>
         <footer>
-          <span>同舟 · Agent Company <i>基于 Agent Autoloop</i></span
-          ><span id="last-updated">等待首次同步</span>
+          <span id="last-updated">等待首次同步</span>
         </footer>
       </main>
     </div>
@@ -70,8 +61,7 @@
       <form id="business-form">
         <div class="dialog-heading">
           <div>
-            <p class="eyebrow">BUSINESS BRIEF</p>
-            <h2>把业务交给团队持续经营。</h2>
+            <h2>业务档案</h2>
           </div>
           <button type="button" class="close" data-close="business-form-dialog" aria-label="关闭">×</button>
         </div>
@@ -91,7 +81,7 @@
             required
             maxlength="300"
             rows="2"
-            placeholder="例如：让更多新用户完成第一次提醒；先建立真实数据基线"
+            placeholder="例如：首次提醒用户数、次日活跃用户数"
           ></textarea>
         </label>
         <label
@@ -115,7 +105,7 @@
     <dialog id="metric-dialog" class="form-dialog">
       <form id="metric-form">
         <div class="dialog-heading">
-          <h2>记录实际经营结果</h2>
+          <h2>经营数据</h2>
           <button type="button" class="close" data-close="metric-dialog" aria-label="关闭">×</button>
         </div>
         <input name="id" type="hidden" />
@@ -143,15 +133,14 @@
       <form id="task-form">
         <div class="dialog-heading">
           <div>
-            <p class="eyebrow">NEW MISSION</p>
-            <h2>给团队一个明确的目标。</h2>
+            <h2>新建任务</h2>
           </div>
           <button type="button" class="close" data-close="task-form-dialog" aria-label="关闭">×</button>
         </div>
         <p class="muted">提交后，系统会按任务类型安排部门；真实任务会使用模型额度。</p>
         <label>任务标题<input name="title" placeholder="例如：做一个本地周报生成器" required maxlength="120" /></label>
         <label
-          >交给哪条业务线？<select name="kind">
+          >任务类型<select name="kind">
             <option value="software">产品研发 · 产品 → 研发 → 验收</option>
             <option value="content">内容运营 · 运营 → 验收</option>
             <option value="support">客户服务 · 客服 → 验收</option>
@@ -159,7 +148,7 @@
           </select></label
         >
         <label
-          >你想实现什么？<textarea
+          >任务目标<textarea
             name="goal"
             placeholder="说明背景、目标、范围，以及不能做的事情。"
             required
@@ -168,17 +157,12 @@
           ></textarea>
         </label>
         <label
-          >怎样才算完成？<textarea
-            name="acceptance"
-            placeholder="每行一条验收标准，最多 5 条。"
-            required
-            rows="3"
-          ></textarea>
+          >验收标准<textarea name="acceptance" placeholder="每行一条验收标准，最多 5 条。" required rows="3"></textarea>
         </label>
         <p id="form-error" class="form-error" role="alert"></p>
         <div class="form-actions">
           <button type="button" class="secondary" data-close="task-form-dialog">取消</button
-          ><button type="submit" class="primary">提交给团队 →</button>
+          ><button type="submit" class="primary">提交</button>
         </div>
       </form>
     </dialog>

@@ -35,16 +35,12 @@ const routes = {
 };
 const kindNames = { software: "产品研发", content: "内容运营", support: "客户服务", finance: "财务分析" };
 const labels = {
-  businesses: [
-    "BUSINESS OPERATIONS",
-    "让业务持续向前。",
-    "围绕产品经营：定目标、做推广、接住反馈，再用结果决定下一步。",
-  ],
-  overview: ["COMPANY OVERVIEW", "公司的每一步，都在这里。", "看进展、处理决策，让团队继续向前。"],
-  tasks: ["MISSION BOARD", "从一个目标，到一次交付。", "所有任务的负责人、进展与结果，放在一张看板上。"],
-  approvals: ["YOUR DECISIONS", "关键的一步，等你拍板。", "核对交付结果，再决定接受还是退回修改。"],
-  departments: ["YOUR TEAM", "六个部门，朝同一个目标。", "每个部门各司其职，交接有依据，结果可追溯。"],
-  spending: ["USAGE & COST", "让每一次投入，都有记录。", "查看已上报用量与费用，掌握公司的运行情况。"],
+  businesses: "业务管理",
+  overview: "公司概览",
+  tasks: "任务列表",
+  approvals: "审批",
+  departments: "部门",
+  spending: "费用",
 };
 let live = null,
   demo = null,
@@ -259,11 +255,11 @@ function statsHTML(d) {
       foot: `共 ${d.tasks.length} 项任务 · 已完成 ${done} 项`,
     },
     {
-      label: "等你拍板",
+      label: "待审批",
       icon: "◇",
       value: approvals,
       unit: "项决策",
-      foot: approvals ? "你的决定，会让团队继续前进" : "暂无待处理审批",
+      foot: approvals ? "等待处理" : "暂无待处理审批",
       alert: approvals > 0,
     },
     {
@@ -271,7 +267,7 @@ function statsHTML(d) {
       icon: "⊙",
       value: blocked,
       unit: "项阻塞",
-      foot: blocked ? "补充资料或调整后，可重新派工" : "所有任务都在正常推进",
+      foot: blocked ? "补充资料或调整后，可重新派工" : "无阻塞任务",
     },
     {
       label: "今日已报费用",
@@ -292,7 +288,7 @@ function statsHTML(d) {
     .join("");
 }
 function departmentHTML(d) {
-  return `<section class="panel ${view === "departments" ? "full-dept" : ""}"><div class="panel-heading"><h2>部门协作 <small>各司其职，协同推进</small></h2>${view === "overview" ? '<a class="text-link" href="#departments">全部部门 ↗</a>' : '<span class="muted">六个专业角色</span>'}</div><div class="dept-grid">${Object.entries(
+  return `<section class="panel ${view === "departments" ? "full-dept" : ""}"><div class="panel-heading"><h2>部门</h2>${view === "overview" ? '<a class="text-link" href="#departments">全部部门 ↗</a>' : '<span class="muted">6 个部门</span>'}</div><div class="dept-grid">${Object.entries(
     roleNames,
   )
     .map(([role, name]) => {
@@ -319,7 +315,7 @@ function taskRows(d) {
       .sort((a, b) => Number(a.status === "completed") - Number(b.status === "completed"))
       .slice(0, 6);
   if (!tasks.length)
-    return `<tr><td colspan="4"><div class="empty"><span class="empty-symbol">▧</span><strong>${d.tasks.length ? "没有匹配的任务" : "你的第一项任务，从这里开始。"}</strong>${d.tasks.length ? "调整筛选条件，再看看。" : "描述一个目标，团队就有了前进的方向。"}</div></td></tr>`;
+    return `<tr><td colspan="4"><div class="empty"><span class="empty-symbol">▧</span><strong>${d.tasks.length ? "没有匹配的任务" : "暂无任务"}</strong>${d.tasks.length ? "" : ""}</div></td></tr>`;
   return tasks
     .map((t) => {
       const flow = routes[t.kind] ?? [];
@@ -328,7 +324,7 @@ function taskRows(d) {
     .join("");
 }
 function tasksHTML(d) {
-  return `<section class="panel ${view === "overview" ? "tasks-panel" : ""}"><div class="panel-heading"><h2>任务看板 <small>${d.tasks.length} 项任务</small></h2>${view === "overview" ? '<a class="text-link" href="#tasks">查看全部 ↗</a>' : '<span class="text-link">每 5 秒自动同步</span>'}</div><div class="panel-toolbar"><div class="filters">${[
+  return `<section class="panel ${view === "overview" ? "tasks-panel" : ""}"><div class="panel-heading"><h2>任务列表 <small>${d.tasks.length} 项任务</small></h2>${view === "overview" ? '<a class="text-link" href="#tasks">查看全部 ↗</a>' : '<span class="text-link">每 5 秒自动同步</span>'}</div><div class="panel-toolbar"><div class="filters">${[
     ["all", "全部"],
     ["active", "进行中"],
     ["awaiting_approval", "待审批"],
@@ -340,26 +336,11 @@ function tasksHTML(d) {
     )
     .join(
       "",
-    )}${filter.startsWith("dept:") ? `<button class="filter active" data-filter="all">${esc(roleNames[filter.slice(5)])}部 ×</button>` : ""}</div><label class="search"><span>⌕</span><input id="search" aria-label="搜索任务" placeholder="搜索任务…" value="${esc(search)}"></label></div><div class="task-list"><table class="task-table"><thead><tr><th>任务名称</th><th>当前状态</th><th>流转阶段</th><th></th></tr></thead><tbody id="task-rows">${taskRows(d)}</tbody></table></div>${!d.tasks.length ? `<div class="onboarding"><h3>试试给团队这些目标</h3><p>从一件具体的小事开始，写清楚你期望的结果。</p><div class="suggestions"><button class="suggestion" data-template="software">做一个周报工具 ↗</button><button class="suggestion" data-template="content">整理一周内容选题 ↗</button><button class="suggestion" data-template="support">制作客户回复手册 ↗</button></div></div>` : ""}</section>`;
+    )}${filter.startsWith("dept:") ? `<button class="filter active" data-filter="all">${esc(roleNames[filter.slice(5)])}部 ×</button>` : ""}</div><label class="search"><span>⌕</span><input id="search" aria-label="搜索任务" placeholder="搜索任务…" value="${esc(search)}"></label></div><div class="task-list"><table class="task-table"><thead><tr><th>任务名称</th><th>当前状态</th><th>流转阶段</th><th></th></tr></thead><tbody id="task-rows">${taskRows(d)}</tbody></table></div>${!d.tasks.length ? `<div class="onboarding"><h3>任务模板</h3><div class="suggestions"><button class="suggestion" data-template="software">周报工具</button><button class="suggestion" data-template="content">内容选题</button><button class="suggestion" data-template="support">客户回复手册</button></div></div>` : ""}</section>`;
 }
 function approvalsHTML(d) {
   const cards = d.cards.filter((c) => c.kind === "ask");
-  return `<section class="panel approval-panel ${view === "approvals" ? "full-approvals" : ""}"><div class="panel-heading"><h2>待你拍板</h2><span class="count-badge">${cards.length}</span></div><div class="approval-list">${cards.length ? cards.map((c) => `<article class="approval-card"><span class="meta">DECISION / ${String(c.id).padStart(3, "0")}</span><h3>${esc(c.title)}</h3><p>${esc(c.text)}</p><div class="approval-actions">${c.options.map((option, i) => `<button class="small-button ${i ? "ghost" : ""}" data-answer="${c.id}" data-choice="${i}" ${!d.connected ? "disabled" : ""}>${esc(option)}</button>`).join("")}</div></article>`).join("") : '<div class="empty"><span class="empty-symbol">✓</span><strong>暂时没有需要你的决定</strong>团队完成验收后，审批会出现在这里。</div>'}</div><p class="note approval-list">接受交付仅代表验收通过，不会自动发布或付款。</p></section>`;
-}
-function workflowHTML() {
-  return `<section class="workflow-panel"><h3>一个目标，如何变成结果？</h3>${[
-    ["下达目标", "明确需求与验收标准"],
-    ["部门协作", "按业务流程接力处理"],
-    ["独立验收", "检查交付物与实际依据"],
-    ["你来拍板", "接受交付，或退回修改"],
-  ]
-    .map(
-      ([title, text], i) =>
-        `<div class="flow-step"><span class="flow-number">${String(i + 1).padStart(2, "0")}</span><div><strong>${title}</strong><small>${text}</small></div></div>`,
-    )
-    .join(
-      "",
-    )}</section><div class="bottom-note"><span>◈</span><span>审批等待期间不调用模型。<br>你的每一次决定，都会留下记录。</span></div>`;
+  return `<section class="panel approval-panel ${view === "approvals" ? "full-approvals" : ""}"><div class="panel-heading"><h2>待审批</h2><span class="count-badge">${cards.length}</span></div><div class="approval-list">${cards.length ? cards.map((c) => `<article class="approval-card"><span class="meta">审批编号 ${String(c.id).padStart(3, "0")}</span><h3>${esc(c.title)}</h3><p>${esc(c.text)}</p><div class="approval-actions">${c.options.map((option, i) => `<button class="small-button ${i ? "ghost" : ""}" data-answer="${c.id}" data-choice="${i}" ${!d.connected ? "disabled" : ""}>${esc(option)}</button>`).join("")}</div></article>`).join("") : '<div class="empty"><span class="empty-symbol">✓</span><strong>暂无待审批事项</strong></div>'}</div><p class="note approval-list">接受交付仅代表验收通过，不会自动发布或付款。</p></section>`;
 }
 function spendingHTML(d) {
   return `<div class="cost-grid">${[
@@ -403,9 +384,7 @@ function render() {
     else a.removeAttribute("aria-current");
   });
   $("#company-name").textContent = d.name;
-  $("#eyebrow").textContent = labels[view][0];
-  $("#page-title").textContent = labels[view][1];
-  $("#page-subtitle").textContent = labels[view][2];
+  $("#page-title").textContent = labels[view];
   $("#connection").textContent = isDemo ? "示例预览" : d.connected ? "任务引擎已连接" : "任务引擎离线";
   $("#connection").classList.toggle("offline", !d.connected);
   $("#demo-banner").hidden = !isDemo;
@@ -420,7 +399,7 @@ function render() {
     view === "businesses"
       ? businessesHTML(d)
       : view === "overview"
-        ? `<div class="dashboard-grid"><div>${departmentHTML(d)}${tasksHTML(d)}</div><div class="right-column">${approvalsHTML(d)}${workflowHTML()}</div></div>`
+        ? `<div class="dashboard-grid"><div>${departmentHTML(d)}${tasksHTML(d)}</div><div class="right-column">${approvalsHTML(d)}</div></div>`
         : view === "tasks"
           ? tasksHTML(d)
           : view === "approvals"
@@ -429,7 +408,7 @@ function render() {
               ? departmentHTML(d)
               : spendingHTML(d);
   $("#new-task").disabled = view !== "businesses" && !d.connected;
-  $("#new-task").innerHTML = view === "businesses" ? "＋ 新建业务" : "<span>＋</span> 下达新任务";
+  $("#new-task").innerHTML = view === "businesses" ? "＋ 新建业务" : "<span>＋</span> 新建任务";
   $("#last-updated").textContent = (isDemo ? "示例数据 · " : "最后同步 ") + time(d.at) + " · 北京时间";
 }
 async function refresh() {
@@ -489,7 +468,7 @@ async function showTask(id) {
     if (!t) throw new Error("任务不存在");
     const flow = routes[t.kind] ?? [];
     $("#detail-content").innerHTML =
-      `<div class="dialog-heading"><div><p class="eyebrow">${esc(t.id)} / ${esc(kindNames[t.kind])}</p><h2>${esc(t.title)}</h2></div><button class="close" data-close="detail-dialog" aria-label="关闭">×</button></div>${badge(t.status)}<p class="detail-goal">${esc(t.goal)}</p><div class="detail-section"><h3>验收标准</h3><ul>${t.acceptance.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></div><div class="detail-section"><h3>部门流转 · 已派工 ${t.assignment} / ${d.maxAssignments} 次</h3><p class="muted">${flow.map((r, i) => `${i < t.stage || t.status === "completed" ? "✓ " : i === t.stage ? "● " : ""}${roleNames[r]}`).join("　→　")}　→　你来拍板</p>${t.reason ? `<p class="muted">${esc(t.reason)}</p>` : ""}${["blocked", "rejected"].includes(t.status) ? `<button class="secondary" data-retry="${esc(t.id)}" ${!d.connected ? "disabled" : ""}>重新派工 →</button><p class="note">请先补充缺失资料或修改意见；返工仍计入派工额度。</p>` : ""}</div><div class="detail-section"><h3>部门交付与核验依据</h3>${t.reports.length ? t.reports.map((r) => `<article class="report"><h4>${esc(roleNames[r.role])}部 · ${r.verdict === "pass" ? "通过" : r.verdict === "blocked" ? "受阻" : "未通过"}</h4><p>${esc(r.summary)}</p><ul>${r.evidence.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>${r.artifacts.map((path) => `<button class="artifact" data-artifact="${esc(path)}" data-artifact-task="${esc(t.id)}">↗ ${esc(path)}</button>`).join("")}</article>`).join("") : '<p class="muted">部门提交结果后，交付物和检查依据会出现在这里。</p>'}</div><div class="detail-section"><h3>操作记录</h3>${result.history.length ? result.history.map((h) => `<div class="history-row"><time>${time(h.at)}</time><span>${esc(h.kind === "created" ? "任务已创建" : h.kind === "retried" ? "已重新派工" : h.kind === "completed" ? "负责人已接受" : h.kind === "rejected" ? "负责人已退回" : h.kind === "invalid-report" ? "交付报告不合格" : `${roleNames[h.kind.split(":")[1]] ?? "部门"}已提交报告`)}</span></div>`).join("") : '<p class="muted">暂无操作记录</p>'}</div>`;
+      `<div class="dialog-heading"><div><p class="eyebrow">${esc(t.id)} / ${esc(kindNames[t.kind])}</p><h2>${esc(t.title)}</h2></div><button class="close" data-close="detail-dialog" aria-label="关闭">×</button></div>${badge(t.status)}<p class="detail-goal">${esc(t.goal)}</p><div class="detail-section"><h3>验收标准</h3><ul>${t.acceptance.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></div><div class="detail-section"><h3>部门流转 · 已派工 ${t.assignment} / ${d.maxAssignments} 次</h3><p class="muted">${flow.map((r, i) => `${i < t.stage || t.status === "completed" ? "✓ " : i === t.stage ? "● " : ""}${roleNames[r]}`).join("　→　")}　→　负责人审批</p>${t.reason ? `<p class="muted">${esc(t.reason)}</p>` : ""}${["blocked", "rejected"].includes(t.status) ? `<button class="secondary" data-retry="${esc(t.id)}" ${!d.connected ? "disabled" : ""}>重新派工 →</button><p class="note">请先补充缺失资料或修改意见；返工仍计入派工额度。</p>` : ""}</div><div class="detail-section"><h3>部门交付与核验依据</h3>${t.reports.length ? t.reports.map((r) => `<article class="report"><h4>${esc(roleNames[r.role])}部 · ${r.verdict === "pass" ? "通过" : r.verdict === "blocked" ? "受阻" : "未通过"}</h4><p>${esc(r.summary)}</p><ul>${r.evidence.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>${r.artifacts.map((path) => `<button class="artifact" data-artifact="${esc(path)}" data-artifact-task="${esc(t.id)}">↗ ${esc(path)}</button>`).join("")}</article>`).join("") : '<p class="muted">暂无交付物</p>'}</div><div class="detail-section"><h3>操作记录</h3>${result.history.length ? result.history.map((h) => `<div class="history-row"><time>${time(h.at)}</time><span>${esc(h.kind === "created" ? "任务已创建" : h.kind === "retried" ? "已重新派工" : h.kind === "completed" ? "负责人已接受" : h.kind === "rejected" ? "负责人已退回" : h.kind === "invalid-report" ? "交付报告不合格" : `${roleNames[h.kind.split(":")[1]] ?? "部门"}已提交报告`)}</span></div>`).join("") : '<p class="muted">暂无操作记录</p>'}</div>`;
     $("#detail-dialog").showModal();
   } catch (error) {
     toast(error.message, true);
@@ -682,13 +661,13 @@ const businessById = (id) => (data()?.businesses ?? []).find((b) => b.id === id)
 const metricNumber = (value) => (value == null ? "未记录" : Number(value).toLocaleString("zh-CN"));
 function businessesHTML(d) {
   const businesses = d.businesses ?? [];
-  return `<div class="business-intro"><div><b>${businesses.length}</b> 条业务线 <span>· ${businesses.filter((b) => b.status === "active").length} 条持续经营</span></div><p>推广产出 → 人工发布与反馈 → 记录真实效果 → 调整下一轮</p></div>
+  return `<div class="business-intro"><div><b>${businesses.length}</b> 条业务线 <span>· ${businesses.filter((b) => b.status === "active").length} 条经营中</span></div></div>
   <div class="business-grid">${
     businesses
       .map((b) => {
         const metric = b.metrics?.[0],
           tasks = d.tasks.filter((t) => (b.cycles ?? []).some((c) => c.task === t.id));
-        return `<article class="panel business-card"><div class="business-card-top"><span class="eyebrow">${b.stage === "operating" ? "RUNNING BUSINESS" : "NEW VENTURE"}</span><span class="badge ${b.status === "active" ? "active" : b.status === "paused" ? "blocked" : ""}">${businessStatus[b.status]}</span></div><h2>${esc(b.name)}</h2><p class="business-description">${esc(b.description)}</p><div class="business-objective"><span>当前目标</span><strong>${esc(b.objective)}</strong></div><div class="business-metrics"><div><span>新增用户</span><b>${metricNumber(metric?.newUsers)}</b></div><div><span>活跃用户</span><b>${metricNumber(metric?.activeUsers)}</b></div><div><span>收入 / 元</span><b>${metricNumber(metric?.revenue)}</b></div></div><p class="note">${metric ? "记录日期 " + esc(metric.date) + " · " + esc(metric.source) : "尚未接入经营数据；任务完成数不代表业务增长。"}</p><div class="business-routine-strip">${b.routines
+        return `<article class="panel business-card"><div class="business-card-top"><span class="eyebrow">${b.stage === "operating" ? "现有业务" : "新业务"}</span><span class="badge ${b.status === "active" ? "active" : b.status === "paused" ? "blocked" : ""}">${businessStatus[b.status]}</span></div><h2>${esc(b.name)}</h2><div class="business-objective"><span>当前目标</span><strong>${esc(b.objective)}</strong></div><div class="business-metrics"><div><span>新增用户</span><b>${metricNumber(metric?.newUsers)}</b></div><div><span>活跃用户</span><b>${metricNumber(metric?.activeUsers)}</b></div><div><span>收入 / 元</span><b>${metricNumber(metric?.revenue)}</b></div></div><p class="note">${metric ? "记录日期 " + esc(metric.date) + " · " + esc(metric.source) : "暂无经营数据"}</p><div class="business-routine-strip">${b.routines
           .filter((r) => r.enabled)
           .map((r) => `<span>${r.cadence === "daily" ? "每日" : "每周"} · ${esc(r.title)}</span>`)
           .join(
@@ -696,8 +675,8 @@ function businessesHTML(d) {
           )}</div><div class="business-card-bottom"><span>${tasks.filter((t) => t.status === "active").length} 项执行中 · ${tasks.filter((t) => t.status === "awaiting_approval").length} 项待审批</span><button class="secondary" data-business="${esc(b.id)}">进入业务 →</button></div></article>`;
       })
       .join("") ||
-    '<section class="panel empty"><h2>从你正在做的产品开始。</h2><p>登记现有 APP，或新建一条待验证业务；每条业务拥有自己的目标、周期工作和效果记录。</p><button class="primary" data-business-create="true">建立第一条业务 →</button></section>'
-  }</div><section class="operating-note"><h3>团队如何持续经营？</h3><p>开启业务后，系统每 15 分钟检查到期工作；每日工作在北京时间 09:00 后派发，每周工作在上次执行 7 天后的 09:00 后派发。首次启动安排首轮。上一轮尚未完成时暂停该项后续派工，解决阻塞并完成审批后再接续。</p><p>关闭网页不会停止经营，电脑与公司引擎需要保持运行。当前交付为方案、内容与回复草稿；发布、投放和线上维护尚未接入。效果先手工记录，未来可接数据接口。</p></section>`;
+    '<section class="panel empty"><h2>暂无业务</h2><button class="primary" data-business-create="true">新建业务</button></section>'
+  }</div><details class="operating-note"><summary>运行说明</summary><p>首轮立即派发，后续按日或周于 09:00 到期，每 15 分钟检查一次。上一轮未完成时不追加任务。</p><p>电脑与引擎须持续运行。发布、投放和业务数据接口未接入；效果手工记录。</p></details>`;
 }
 function openBusinessForm(id) {
   const form = $("#business-form");
@@ -717,7 +696,7 @@ function showBusiness(id) {
   const latest = b.metrics?.[0];
   $("#business-content").innerHTML =
     `<div class="dialog-heading"><div><p class="eyebrow">${b.stage === "operating" ? "持续经营" : "新业务验证"} / ${businessStatus[b.status]}</p><h2>${esc(b.name)}</h2></div><button class="close" data-close="business-detail-dialog" aria-label="关闭">×</button></div>
-  <p class="detail-goal">${esc(b.objective)}</p><p class="muted">目标用户：${esc(b.audience)}</p><p class="muted">渠道实验：${esc(b.channels || "待补充，第一轮由运营提出可验证方案")}</p>${b.url ? `<p><a class="text-link" href="${esc(b.url)}" target="_blank" rel="noopener noreferrer">打开产品网站 ↗</a></p>` : ""}
+  <p class="detail-goal">${esc(b.objective)}</p><p class="muted">目标用户：${esc(b.audience)}</p><p class="muted">渠道实验：${esc(b.channels || "未设置")}</p>${b.url ? `<p><a class="text-link" href="${esc(b.url)}" target="_blank" rel="noopener noreferrer">打开产品网站 ↗</a></p>` : ""}
   <div class="business-actions"><button class="secondary" data-business-edit="${esc(b.id)}">编辑经营档案</button><button class="secondary" data-metric="${esc(b.id)}">记录效果与反馈</button><button class="primary" data-business-status="${esc(b.id)}" data-status="${b.status === "active" ? "paused" : "active"}" ${b.status !== "active" && !d.connected ? "disabled" : ""}>${b.status === "active" ? "暂停新周期" : b.status === "paused" ? "恢复经营" : "启动经营"}</button></div>
   <p class="note">启动会派发首轮工作并消耗模型额度。暂停仅停止新周期，已派发任务继续执行。</p>
   <section class="detail-section"><h3>周期工作</h3>${b.routines
@@ -727,7 +706,7 @@ function showBusiness(id) {
       return `<div class="routine-row"><div><strong>${esc(r.title)}</strong><p class="note">${!r.enabled ? "已关闭" : b.status !== "active" ? "业务未启动" : waiting ? `等待上一轮：${esc(names[task?.status] ?? "派发中")}` : "下次到期 " + time(r.nextAt)}</p>${task ? `<button class="text-button" data-task="${esc(task.id)}">查看上一轮交付 ↗</button>` : ""}</div><div><select aria-label="${esc(r.title)}频率" data-routine-business="${esc(b.id)}" data-routine="${r.id}"><option value="daily" ${r.cadence === "daily" ? "selected" : ""}>每天</option><option value="weekly" ${r.cadence === "weekly" ? "selected" : ""}>每周</option></select><button class="secondary" data-routine-toggle="${r.id}" data-routine-business="${esc(b.id)}">${r.enabled ? "停用" : "启用"}</button></div></div>`;
     })
     .join("")}</section>
-  <section class="detail-section"><h3>实际效果记录</h3>${(b.metrics ?? []).length ? b.metrics.map((m) => `<article class="report"><h4>${esc(m.date)} · ${esc(m.source)}</h4><p>新增用户 ${metricNumber(m.newUsers)} · 活跃用户 ${metricNumber(m.activeUsers)} · 收入 ¥ ${metricNumber(m.revenue)}</p><p>${esc(m.note || "未填写实验记录")}</p></article>`).join("") : '<p class="muted">没有实际数据。先记录基线，再评估推广是否有效；未上报不等于零。</p>'}</section>
+  <section class="detail-section"><h3>实际效果记录</h3>${(b.metrics ?? []).length ? b.metrics.map((m) => `<article class="report"><h4>${esc(m.date)} · ${esc(m.source)}</h4><p>新增用户 ${metricNumber(m.newUsers)} · 活跃用户 ${metricNumber(m.activeUsers)} · 收入 ¥ ${metricNumber(m.revenue)}</p><p>${esc(m.note || "未填写实验记录")}</p></article>`).join("") : '<p class="muted">暂无数据</p>'}</section>
   <section class="detail-section"><h3>业务任务与交付</h3>${
     (b.cycles ?? []).length
       ? b.cycles
@@ -736,7 +715,7 @@ function showBusiness(id) {
             return `<div class="history-row"><time>${time(c.at)}</time><span>${esc(t?.title ?? "等待派发")}</span>${t ? `<button class="text-button" data-task="${esc(t.id)}">${esc(names[t.status])} ↗</button>` : ""}</div>`;
           })
           .join("")
-      : '<p class="muted">启动经营后，所有周期任务与结果归入这条业务。</p>'
+      : '<p class="muted">暂无任务</p>'
   }</section>`;
   if (!$("#business-detail-dialog").open) $("#business-detail-dialog").showModal();
 }
