@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { inspection, type Inspection } from "./inspection.ts";
 
 export const departments = {
   product: "产品",
@@ -18,6 +19,8 @@ export const workflows: Record<string, Role[]> = {
   support: ["support", "qa"],
   finance: ["finance", "qa"],
 };
+for (const role of Object.keys(departments) as Role[]) workflows[`check-${role}`] = [role];
+for (const kind of ["software", "content", "support", "finance"]) workflows[`internal-${kind}`] = [...workflows[kind]];
 export type CompanyConfig = { name: string; database: string; maxAssignments: number };
 export type Context = {
   events: { id: number; source: string; type: string; subject: string; detail: string }[];
@@ -29,6 +32,7 @@ export type Report = {
   summary: string;
   artifacts: string[];
   evidence: string[];
+  inspection?: Inspection;
 };
 export type Task = {
   id: string;
@@ -65,8 +69,7 @@ function object(value: unknown): Record<string, unknown> {
 export function taskRequest(value: unknown) {
   const data = object(value);
   const kind = words(data.kind, 20, "任务类型");
-  if (!Object.hasOwn(workflows, kind))
-    throw new CompanyInputError("任务类型只能是 software、content、support、finance");
+  if (!Object.hasOwn(workflows, kind)) throw new CompanyInputError("任务类型不正确");
   const request = {
     title: words(data.title, 120, "标题"),
     goal: words(data.goal, 500, "目标"),
@@ -152,6 +155,8 @@ export class Company {
       acceptance: task.acceptance,
       assignment: task.assignment,
       role,
+      inspection: task.kind.startsWith("check-"),
+      internal: task.kind.startsWith("internal-"),
       previous: task.reports.at(-1) ?? null,
     });
     receipt.events ??= [];
@@ -205,9 +210,17 @@ export class Company {
         assignment: task.assignment,
         verdict: data.verdict as Report["verdict"],
         summary: words(data.summary, 400, "结果摘要"),
-        artifacts: data.verdict === "pass" ? list(data.artifacts, "交付物", 150) : [],
+        artifacts:
+          data.verdict === "pass" && !task.kind.startsWith("check-") ? list(data.artifacts, "交付物", 150) : [],
         evidence: list(data.evidence, "核验依据", 150),
       };
+      if (task.kind.startsWith("check-") && data.verdict === "pass") {
+        try {
+          report.inspection = inspection(data.inspection);
+        } catch (error) {
+          throw new CompanyInputError((error as Error).message);
+        }
+      }
       if (JSON.stringify(report).length > 1900)
         throw new CompanyInputError("报告 JSON 超过 1900 字，请将详情留在交付文件");
     } catch (error) {
@@ -226,15 +239,23 @@ export class Company {
     } else if (task.stage < workflows[task.kind].length - 1) {
       task.stage++;
       this.dispatch(task, receipt);
+    } else if (
+      (task.kind.startsWith("check-") && report.inspection?.state !== "blocked") ||
+      task.kind.startsWith("internal-")
+    ) {
+      task.status = "completed";
+      task.approval = null;
     } else {
       task.status = "awaiting_approval";
       task.approval = `company:${id}:${task.assignment}:${randomUUID()}`;
       receipt.ask ??= [];
       receipt.ask.push({
         key: `company-${id}-${task.assignment}`,
-        title: `验收「${task.title}」`,
-        text: `验收部门报告：${report.summary}\n依据：${report.evidence.join("；")}\n交付物：${report.artifacts.join("；")}\n批准仅表示接受本次交付，不会自动发布、付款或发送消息。`,
-        options: ["接受交付", "退回修改"],
+        title: `${task.kind.startsWith("check-") ? "待处理" : "验收"}「${task.title}」`,
+        text: task.kind.startsWith("check-")
+          ? `${report.summary}\n依据：${report.evidence.join("；")}\n处理后员工继续检查；不授权发布、付款或对外联系。`
+          : `验收部门报告：${report.summary}\n依据：${report.evidence.join("；")}\n交付物：${report.artifacts.join("；")}\n批准仅表示接受本次交付，不会自动发布、付款或发送消息。`,
+        options: task.kind.startsWith("check-") ? ["已处理", "退回检查"] : ["接受交付", "退回修改"],
         about: task.approval,
       });
     }
@@ -283,7 +304,11 @@ export class Company {
           this.notice(
             receipt,
             task.id,
-            answer.choice === 0 ? "已接受交付并归档。" : "已退回；修改意见可写入工作区，显式 retry 后继续。",
+            answer.choice === 0
+              ? task.kind.startsWith("check-")
+                ? "已记录，员工将在下次检查接续。"
+                : "已接受交付并归档。"
+              : "已退回；修改意见可写入工作区，显式 retry 后继续。",
           );
         }
         this.db.prepare("INSERT INTO processed VALUES (?)").run(key);

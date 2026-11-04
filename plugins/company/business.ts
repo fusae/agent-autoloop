@@ -23,6 +23,7 @@ export type Business = {
   url: string;
   stage: "operating" | "validation";
   status: "draft" | "active" | "paused";
+  autonomy?: boolean;
   routines: Routine[];
   createdAt: string;
 };
@@ -143,6 +144,7 @@ export class Businesses {
       stage: data.stage as Business["stage"],
       status: old?.status ?? "draft",
       createdAt: old?.createdAt ?? now.toISOString(),
+      autonomy: old?.autonomy ?? false,
       routines: old?.routines ?? [
         {
           id: "growth",
@@ -174,6 +176,14 @@ export class Businesses {
       ],
     };
     this.record(b, old ? "updated" : "created", now);
+    this.profile(b);
+    return b;
+  }
+  autonomy(id: string, enabled: boolean, now = new Date()) {
+    if (typeof enabled !== "boolean") throw new Error("员工自主工作配置不正确");
+    const b = this.get(id);
+    b.autonomy = enabled;
+    this.record(b, "autonomy", now);
     this.profile(b);
     return b;
   }
@@ -230,7 +240,7 @@ export class Businesses {
     this.profile(b);
     return metric;
   }
-  plan(batch: string, tasks: { id: string; status: string }[], now = new Date()): Receipt {
+  plan(batch: string, tasks: { id: string; status: string }[], now = new Date(), maxEvents = 100): Receipt {
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const cached = this.db.prepare("SELECT body FROM batches WHERE id=?").get(batch);
@@ -241,9 +251,9 @@ export class Businesses {
       const receipt: Receipt = {};
       for (const entry of this.list()) {
         const b = this.get(entry.id);
-        if (b.status !== "active") continue;
+        if (b.status !== "active" || b.autonomy) continue;
         for (const r of b.routines) {
-          if ((receipt.events?.length ?? 0) >= 100) break;
+          if ((receipt.events?.length ?? 0) >= maxEvents) break;
           if (!r.enabled || Date.parse(r.nextAt) > now.getTime()) continue;
           // An undelivered event, blocked task or unanswered approval holds this routine; do not stack work.
           if (r.lastTask && tasks.find((t) => t.id === r.lastTask)?.status !== "completed") continue;

@@ -19,6 +19,8 @@
         <a href="#approvals" data-view="approvals"
           ><span>◇</span>审批<span class="nav-count" id="nav-approvals">0</span></a
         >
+        <a href="#employees" data-view="employees"><span>♙</span>员工</a>
+        <a href="#plans" data-view="plans"><span>▦</span>项目计划</a>
         <a href="#departments" data-view="departments"><span>⊞</span>部门</a>
         <a href="#spending" data-view="spending"><span>◴</span>费用</a>
       </nav>
@@ -93,7 +95,7 @@
           ></textarea>
         </label>
         <label>官网或下载页面<input name="url" type="url" maxlength="500" /></label>
-        <p class="muted">保存为待启动业务；启动后按周期派工并使用模型额度。初始安排：每日推广、每日反馈、每周复盘。</p>
+        <p class="muted">保存为待启动业务；启动后按周期派工并使用模型额度。员工按职责检查资料，发现问题后派工。</p>
         <p class="form-error" role="alert" id="business-error"></p>
         <div class="form-actions">
           <button type="button" class="secondary" data-close="business-form-dialog">取消</button
@@ -127,6 +129,75 @@
         <p class="muted">同一天保存会更新当日记录。未填写的指标保持未知，不计为零。</p>
         <p class="form-error" role="alert" id="metric-error"></p>
         <div class="form-actions"><button type="submit" class="primary">保存记录 →</button></div>
+      </form>
+    </dialog>
+    <dialog id="employee-dialog" class="form-dialog">
+      <form id="employee-form">
+        <div class="dialog-heading">
+          <h2>责任档案</h2>
+          <button type="button" class="close" data-close="employee-dialog" aria-label="关闭">×</button>
+        </div>
+        <input type="hidden" name="id" /><input type="hidden" name="role" />
+        <p id="employee-project" class="muted"></p>
+        <label>职责<textarea name="duty" required maxlength="500" rows="3"></textarea></label>
+        <label>检查事项<textarea name="checks" required rows="4"></textarea></label>
+        <label
+          >检查周期<select name="cadence">
+            <option value="daily">每天</option>
+            <option value="weekly">每周</option>
+          </select></label
+        >
+        <label
+          >状态<select name="enabled">
+            <option value="true">启用</option>
+            <option value="false">停用</option>
+          </select></label
+        >
+        <details>
+          <summary>权限</summary>
+          <p class="note">自主检查、内部计划、本地交付。发布、付费、对外联系和线上变更未授权。</p>
+        </details>
+        <p class="form-error" role="alert"></p>
+        <div class="form-actions"><button type="submit" class="primary">保存</button></div>
+      </form>
+    </dialog>
+    <dialog id="signal-dialog" class="form-dialog">
+      <form id="signal-form">
+        <div class="dialog-heading">
+          <h2>业务动态</h2>
+          <button type="button" class="close" data-close="signal-dialog" aria-label="关闭">×</button>
+        </div>
+        <input type="hidden" name="id" />
+        <label>标题<input name="title" required maxlength="100" /></label>
+        <label>内容<textarea name="detail" required maxlength="1000" rows="4"></textarea></label>
+        <label>来源<input name="source" required maxlength="200" /></label>
+        <label
+          >负责岗位<select name="role">
+            <option value="all">全部</option>
+            <option value="product">产品</option>
+            <option value="engineering">研发</option>
+            <option value="qa">验收</option>
+            <option value="growth">运营</option>
+            <option value="support">客服</option>
+            <option value="finance">财务</option>
+          </select></label
+        >
+        <p class="form-error" role="alert"></p>
+        <div class="form-actions"><button type="submit" class="primary">记录</button></div>
+      </form>
+    </dialog>
+    <dialog id="settings-dialog" class="form-dialog">
+      <form id="settings-form">
+        <div class="dialog-heading">
+          <h2>派工额度</h2>
+          <button type="button" class="close" data-close="settings-dialog" aria-label="关闭">×</button>
+        </div>
+        <input type="hidden" name="id" />
+        <label>每日任务上限<input name="maxDailyTasks" type="number" min="1" max="50" required /></label>
+        <label>在途任务上限<input name="maxActive" type="number" min="1" max="6" required /></label>
+        <p class="note">包括员工检查与内部任务；不等于模型费用上限。</p>
+        <p class="form-error" role="alert"></p>
+        <div class="form-actions"><button type="submit" class="primary">保存</button></div>
       </form>
     </dialog>
     <dialog id="task-form-dialog" class="form-dialog">

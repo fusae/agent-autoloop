@@ -1623,3 +1623,121 @@ pre {
     font-size: 17px;
   }
 }
+
+.project-toolbar {
+  margin-bottom: 20px;
+}
+.project-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.project-toolbar select {
+  width: min(280px, 75%);
+  padding: 9px;
+  border: 1px solid var(--line, #dce3df);
+  border-radius: 8px;
+  background: white;
+}
+.employee-project {
+  margin-bottom: 32px;
+}
+.employee-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.employee-card {
+  min-width: 0;
+  padding: 22px;
+}
+.employee-card h3,
+.plan-card h3 {
+  margin: 0;
+  font-size: 16px;
+}
+.employee-card p,
+.plan-card p {
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.employee-card details {
+  font-size: 13px;
+  line-height: 1.8;
+}
+.employee-facts {
+  margin: 18px 0;
+  font-size: 12px;
+}
+.employee-facts div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0;
+}
+.employee-facts dt,
+.plan-result span {
+  color: #71817a;
+}
+.employee-facts dd {
+  margin: 0;
+}
+.employee-finding {
+  font-size: 13px;
+  padding: 10px;
+  background: #f3f6f3;
+  border-radius: 7px;
+}
+.plan-card {
+  padding: 22px;
+  margin-bottom: 14px;
+}
+.plan-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: #64756d;
+}
+.plan-result {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px 0;
+  border-top: 1px solid #e4e9e5;
+}
+.plan-result span,
+.plan-result strong {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 6px;
+  overflow-wrap: anywhere;
+}
+.sidebar nav {
+  overflow-y: auto;
+  min-height: 0;
+}
+@media (max-width: 1000px) {
+  .employee-grid {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 520px) {
+  .plan-result {
+    grid-template-columns: 1fr;
+  }
+  .employee-project > .panel-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}
+.employee-card > .panel-heading,
+.plan-card > .panel-heading {
+  padding: 0;
+  margin-bottom: 14px;
+}
+.employee-card > p {
+  margin: 10px 0;
+}

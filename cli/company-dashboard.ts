@@ -3,6 +3,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage } from "node:http";
 import { join, resolve, sep } from "node:path";
 import { Company, departments, taskId, taskRequest, workflows, type Task } from "../plugins/company/company.ts";
+import { Operations } from "../plugins/company/operations.ts";
 import { Businesses } from "../plugins/company/business.ts";
 
 const assets = resolve(import.meta.dirname, "../plugins/company/dashboard");
@@ -36,6 +37,7 @@ export async function startDashboard(directory: string, port = 3361) {
   const config = JSON.parse(readFileSync(join(directory, "hub/config.json"), "utf8"));
   const company = new Company(companyConfig);
   const businesses = new Businesses(directory);
+  const operations = new Operations(directory);
   const csrf = randomBytes(32).toString("hex");
   let origin = "";
   async function hub(path: string, data?: unknown, source = false) {
@@ -109,6 +111,7 @@ export async function startDashboard(directory: string, port = 3361) {
             workflows,
             tasks,
             businesses: businesses.list(),
+            operations: operations.snapshot(businesses.list(), company.tasks()),
             cards: (state?.cards ?? []).map((c: any) => ({
               id: c.id,
               kind: c.kind,
@@ -156,10 +159,24 @@ export async function startDashboard(directory: string, port = 3361) {
         if (req.headers.origin !== origin || req.headers["x-company-csrf"] !== csrf)
           throw new HTTPError(403, "页面已失效，请刷新后重试");
         const data = await body(req);
-        if (url.pathname === "/api/businesses") return send(200, businesses.save(data));
-        const businessAction = /^\/api\/businesses\/([A-Za-z0-9_-]+)\/(status|routine|metrics)$/.exec(url.pathname);
+        if (url.pathname === "/api/businesses") {
+          if (data.autonomy !== undefined && typeof data.autonomy !== "boolean")
+            throw new HTTPError(400, "员工自主工作配置不正确");
+          const result = businesses.save(data);
+          if (data.autonomy !== undefined) businesses.autonomy(result.id, data.autonomy);
+          return send(200, businesses.get(result.id));
+        }
+        const businessAction =
+          /^\/api\/businesses\/([A-Za-z0-9_-]+)\/(status|routine|metrics|autonomy|employee|signal|settings)$/.exec(
+            url.pathname,
+          );
         if (businessAction) {
           const [, id, operation] = businessAction;
+          businesses.get(id);
+          if (operation === "autonomy") return send(200, businesses.autonomy(id, data.enabled));
+          if (operation === "employee") return send(200, operations.configure(id, data.role, data));
+          if (operation === "signal") return send(200, operations.signal(id, data));
+          if (operation === "settings") return send(200, operations.settings(id, data));
           if (operation === "metrics") return send(200, businesses.metric(id, data));
           if (operation === "routine")
             return send(200, businesses.routine(id, data.routineId, data.enabled, data.cadence));
@@ -236,6 +253,7 @@ export async function startDashboard(directory: string, port = 3361) {
   } catch (error) {
     company.close();
     businesses.close();
+    operations.close();
     throw error;
   }
   return {
@@ -245,6 +263,7 @@ export async function startDashboard(directory: string, port = 3361) {
         server.close((error) => {
           company.close();
           businesses.close();
+          operations.close();
           error ? reject(error) : done();
         });
         server.closeIdleConnections();

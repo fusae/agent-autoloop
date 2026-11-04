@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { Company } from "../plugins/company/company.ts";
+import { Operations } from "../plugins/company/operations.ts";
 import { Businesses } from "../plugins/company/business.ts";
 
 const cli = resolve(import.meta.dirname, "../bin/agent-company.ts");
@@ -52,7 +53,7 @@ test(
 const context=JSON.parse(readFileSync(process.env.AGENT_AUTOLOOP_CONTEXT,'utf8'));
 const brief=JSON.parse(context.events[0].detail);
 const event={id:brief.task+':'+brief.assignment+':result',type:'company.result',subject:brief.task,
- detail:JSON.stringify({assignment:brief.assignment,verdict:'pass',summary:'模拟部门交付',artifacts:['tasks/'+brief.task+'/demo.md'],evidence:['模拟检查通过；非真实业务']})};
+ detail:JSON.stringify({assignment:brief.assignment,verdict:'pass',summary:'模拟部门交付',artifacts:['tasks/'+brief.task+'/demo.md'],evidence:['模拟检查通过；非真实业务'],...(brief.inspection?{inspection:{state:brief.role==='growth'?'action':'idle',actions:brief.role==='growth'?[{key:'guide',title:'使用说明',kind:'content',goal:'生成模拟使用说明',acceptance:['仅测试资料'],priority:1,dueDays:2,followUpDays:3,measure:'首次使用人数'}]:[],reviews:[]}}:{})})};
 console.log('模拟部门完成。\\n\\n\`\`\`agent-autoloop\\n'+JSON.stringify({events:[event]})+'\\n\`\`\`');`,
       );
       const rulesFile = join(directory, "hub/rules.json");
@@ -119,6 +120,35 @@ console.log('模拟部门完成。\\n\\n\`\`\`agent-autoloop\\n'+JSON.stringify(
           () => office!.tasks().filter((t) => t.id.startsWith("B-") && t.status === "awaiting_approval").length === 3,
         );
         assert.equal(businesses.list()[0].cycles.length, 3);
+        businesses.status("test-app", "paused");
+        businesses.autonomy("test-app", true);
+        businesses.status("test-app", "active");
+        const wake = async (id: string) =>
+          fetch(cfg.url + "/v1/events", {
+            method: "POST",
+            headers: { authorization: `Bearer ${cfg.source.key}`, "content-type": "application/json" },
+            body: JSON.stringify({ id, type: "company.business.wake", subject: "test-app", detail: "{}" }),
+          });
+        await wake("autonomy-first");
+        await until(
+          () => office!.tasks().filter((t) => t.kind.startsWith("check-") && t.status === "completed").length === 3,
+        );
+        await wake("autonomy-second");
+        await until(
+          () => office!.tasks().filter((t) => t.kind.startsWith("check-") && t.status === "completed").length === 6,
+        );
+        await wake("autonomy-work");
+        await until(() => office!.tasks().some((t) => t.kind === "internal-content" && t.status === "completed"));
+        const ops = new Operations(directory);
+        try {
+          await wake("autonomy-followup");
+          await until(() =>
+            ops.snapshot(businesses.list(), office!.tasks())[0].plans.some((p) => p.status === "observing"),
+          );
+          assert.equal(ops.snapshot(businesses.list(), office.tasks())[0].plans[0].outcome, null);
+        } finally {
+          ops.close();
+        }
         businesses.status("test-app", "paused");
       } finally {
         businesses.close();

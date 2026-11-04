@@ -46,13 +46,34 @@ export function businessRules(directory: string, worker: string) {
 export function ensureBusinessRules(directory: string) {
   const path = join(directory, "hub/rules.json"),
     rules = JSON.parse(readFileSync(path, "utf8"));
-  if (rules.agents["company-business"]) return;
-  const spec = businessRules(directory, rules.agents["company-office"].worker);
-  rules.agents["company-business"] = spec.agent;
-  rules.rules.push(...spec.rules);
-  writeFileSync(path + ".tmp", JSON.stringify(rules, null, 2) + "\n", { mode: 0o600 });
-  renameSync(path + ".tmp", path);
+  let changed = false;
+  if (!rules.agents["company-business"]) {
+    const spec = businessRules(directory, rules.agents["company-office"].worker);
+    rules.agents["company-business"] = spec.agent;
+    rules.rules.push(...spec.rules);
+    changed = true;
+  }
+  for (const role of Object.keys(departments) as Role[]) {
+    const rule = rules.rules.find((r: any) => r.name === `公司部门-${role}` && r.to === `company-${role}`);
+    if (rule && !rule.prompt.includes("员工检查协议 v1")) {
+      rule.prompt += "\n" + inspectionPrompt;
+      changed = true;
+    }
+  }
+  if (changed) {
+    writeFileSync(path + ".tmp", JSON.stringify(rules, null, 2) + "\n", { mode: 0o600 });
+    renameSync(path + ".tmp", path);
+  }
 }
+export const inspectionPrompt = `员工检查协议 v1：派工资料 inspection=true 时属于职责检查，以下专用格式替代普通交付要求。
+读取任务指定的 knowledge/operations 项目资料和自己的责任档案。每个项目有独立的计划、信号和历史结果；不得混用项目事实。
+检查只读取资料，不修改文件，artifacts 可以是空数组。没有新情况用 pass 和 inspection.state=idle；明确问题用 action；必须由负责人解除的阻塞用 blocked 状态并说明缺什么，不能编造反馈。
+在 company.result 的 detail 内额外提供 inspection 对象，格式：
+{"state":"idle|action|blocked","actions":[{"key":"稳定英文编号","title":"工作名称","kind":"software|content|support|finance","goal":"240字以内","acceptance":["验收标准"],"priority":1,"dueDays":2,"followUpDays":3,"measure":"业务效果指标"}],"reviews":[{"key":"已有计划编号","outcome":"improved|unchanged|worse|unknown","evidence":"引用真实数据来源与日期","nextDays":3}]}
+每轮最多 3 项新工作和 3 项复盘，总报告仍须不超过 1900 字；优先只提最重要的一项。priority 为 1–3（1最高），dueDays 为 1–14，followUpDays 和 nextDays 为 1–30。
+先检查已有计划，重复问题沿用同一个 key。不要为凑任务提出工作。复盘 key 使用计划的 id（跨岗位时必须如此），同岗位可用原 key。复盘仅针对到期计划；未执行或缺少实际指标必须返回 unknown，草稿交付不等于推广已执行或已有增长。
+新工作由固定调度器核验、去重、按类型交给部门并独立验收；不得直接派活。internal=true 的任务在验收通过后自动归档，仅限本地草稿、分析和隔离代码，不扩大任何外部操作权限。
+发布、付费、联系用户、修改线上服务仍不允许。需要这类操作时提出阻塞并列明需要负责人决定的具体事项。`;
 export function rolePrompt(role: Role) {
   return (
     `你是公司的${departments[role]}部门。先读工作区 AGENTS.md 和 knowledge/company.md，再读 handbook/${role}.md。\n` +
@@ -61,7 +82,8 @@ export function rolePrompt(role: Role) {
     `完成后必须提交 company.result 事件，subject 原样使用 task，id 使用 task + ':' + assignment + ':result'；` +
     `detail 必须是 JSON 字符串：{"assignment":原编号,"verdict":"pass或reject或blocked","summary":"400字以内",` +
     `"artifacts":["交付物相对路径，最多5项，每项150字"],"evidence":["实际检查依据，1至5项，每项150字"]}。` +
-    `报告 JSON 总长度不超过 1900 字，详细内容留在文件中。pass 必须有交付物和核验依据。其他部门不能替你提交，也不得自行派活。没有实际完成不得报 pass。`
+    `报告 JSON 总长度不超过 1900 字，详细内容留在文件中。pass 必须有交付物和核验依据。其他部门不能替你提交，也不得自行派活。没有实际完成不得报 pass。\n` +
+    inspectionPrompt
   );
 }
 export function makeRules(directory: string, worker: string, agent: "codex" | "claude") {

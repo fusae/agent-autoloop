@@ -34,6 +34,14 @@ const routes = {
   finance: ["finance", "qa"],
 };
 const kindNames = { software: "产品研发", content: "内容运营", support: "客户服务", finance: "财务分析" };
+for (const role of Object.keys(roleNames)) {
+  routes[`check-${role}`] = [role];
+  kindNames[`check-${role}`] = `${roleNames[role]}检查`;
+}
+for (const kind of ["software", "content", "support", "finance"]) {
+  routes[`internal-${kind}`] = routes[kind];
+  kindNames[`internal-${kind}`] = kindNames[kind];
+}
 const labels = {
   businesses: "业务管理",
   overview: "公司概览",
@@ -41,6 +49,8 @@ const labels = {
   approvals: "审批",
   departments: "部门",
   spending: "费用",
+  employees: "员工",
+  plans: "项目计划",
 };
 let live = null,
   demo = null,
@@ -394,7 +404,7 @@ function render() {
   $("#nav-tasks").textContent = d.tasks.length;
   $("#nav-approvals").textContent = d.cards.filter((c) => c.kind === "ask").length;
   $("#stats").innerHTML = statsHTML(d);
-  $("#stats").hidden = view === "departments" || view === "businesses";
+  $("#stats").hidden = ["departments", "businesses", "employees", "plans"].includes(view);
   $("#view-content").innerHTML =
     view === "businesses"
       ? businessesHTML(d)
@@ -406,7 +416,11 @@ function render() {
             ? approvalsHTML(d)
             : view === "departments"
               ? departmentHTML(d)
-              : spendingHTML(d);
+              : view === "employees"
+                ? employeesHTML(d)
+                : view === "plans"
+                  ? plansHTML(d)
+                  : spendingHTML(d);
   $("#new-task").disabled = view !== "businesses" && !d.connected;
   $("#new-task").innerHTML = view === "businesses" ? "＋ 新建业务" : "<span>＋</span> 新建任务";
   $("#last-updated").textContent = (isDemo ? "示例数据 · " : "最后同步 ") + time(d.at) + " · 北京时间";
@@ -468,7 +482,7 @@ async function showTask(id) {
     if (!t) throw new Error("任务不存在");
     const flow = routes[t.kind] ?? [];
     $("#detail-content").innerHTML =
-      `<div class="dialog-heading"><div><p class="eyebrow">${esc(t.id)} / ${esc(kindNames[t.kind])}</p><h2>${esc(t.title)}</h2></div><button class="close" data-close="detail-dialog" aria-label="关闭">×</button></div>${badge(t.status)}<p class="detail-goal">${esc(t.goal)}</p><div class="detail-section"><h3>验收标准</h3><ul>${t.acceptance.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></div><div class="detail-section"><h3>部门流转 · 已派工 ${t.assignment} / ${d.maxAssignments} 次</h3><p class="muted">${flow.map((r, i) => `${i < t.stage || t.status === "completed" ? "✓ " : i === t.stage ? "● " : ""}${roleNames[r]}`).join("　→　")}　→　负责人审批</p>${t.reason ? `<p class="muted">${esc(t.reason)}</p>` : ""}${["blocked", "rejected"].includes(t.status) ? `<button class="secondary" data-retry="${esc(t.id)}" ${!d.connected ? "disabled" : ""}>重新派工 →</button><p class="note">请先补充缺失资料或修改意见；返工仍计入派工额度。</p>` : ""}</div><div class="detail-section"><h3>部门交付与核验依据</h3>${t.reports.length ? t.reports.map((r) => `<article class="report"><h4>${esc(roleNames[r.role])}部 · ${r.verdict === "pass" ? "通过" : r.verdict === "blocked" ? "受阻" : "未通过"}</h4><p>${esc(r.summary)}</p><ul>${r.evidence.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>${r.artifacts.map((path) => `<button class="artifact" data-artifact="${esc(path)}" data-artifact-task="${esc(t.id)}">↗ ${esc(path)}</button>`).join("")}</article>`).join("") : '<p class="muted">暂无交付物</p>'}</div><div class="detail-section"><h3>操作记录</h3>${result.history.length ? result.history.map((h) => `<div class="history-row"><time>${time(h.at)}</time><span>${esc(h.kind === "created" ? "任务已创建" : h.kind === "retried" ? "已重新派工" : h.kind === "completed" ? "负责人已接受" : h.kind === "rejected" ? "负责人已退回" : h.kind === "invalid-report" ? "交付报告不合格" : `${roleNames[h.kind.split(":")[1]] ?? "部门"}已提交报告`)}</span></div>`).join("") : '<p class="muted">暂无操作记录</p>'}</div>`;
+      `<div class="dialog-heading"><div><p class="eyebrow">${esc(t.id)} / ${esc(kindNames[t.kind])}</p><h2>${esc(t.title)}</h2></div><button class="close" data-close="detail-dialog" aria-label="关闭">×</button></div>${badge(t.status)}<p class="detail-goal">${esc(t.goal)}</p><div class="detail-section"><h3>验收标准</h3><ul>${t.acceptance.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></div><div class="detail-section"><h3>部门流转 · 已派工 ${t.assignment} / ${d.maxAssignments} 次</h3><p class="muted">${flow.map((r, i) => `${i < t.stage || t.status === "completed" ? "✓ " : i === t.stage ? "● " : ""}${roleNames[r]}`).join("　→　")}${t.kind.startsWith("check-") || t.kind.startsWith("internal-") ? "" : "　→　负责人审批"}</p>${t.reason ? `<p class="muted">${esc(t.reason)}</p>` : ""}${["blocked", "rejected"].includes(t.status) ? `<button class="secondary" data-retry="${esc(t.id)}" ${!d.connected ? "disabled" : ""}>重新派工 →</button><p class="note">请先补充缺失资料或修改意见；返工仍计入派工额度。</p>` : ""}</div><div class="detail-section"><h3>部门交付与核验依据</h3>${t.reports.length ? t.reports.map((r) => `<article class="report"><h4>${esc(roleNames[r.role])}部 · ${r.verdict === "pass" ? "通过" : r.verdict === "blocked" ? "受阻" : "未通过"}</h4><p>${esc(r.summary)}</p><ul>${r.evidence.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>${r.artifacts.map((path) => `<button class="artifact" data-artifact="${esc(path)}" data-artifact-task="${esc(t.id)}">↗ ${esc(path)}</button>`).join("")}</article>`).join("") : '<p class="muted">暂无交付物</p>'}</div><div class="detail-section"><h3>操作记录</h3>${result.history.length ? result.history.map((h) => `<div class="history-row"><time>${time(h.at)}</time><span>${esc(h.kind === "created" ? "任务已创建" : h.kind === "retried" ? "已重新派工" : h.kind === "completed" ? "负责人已接受" : h.kind === "rejected" ? "负责人已退回" : h.kind === "invalid-report" ? "交付报告不合格" : `${roleNames[h.kind.split(":")[1]] ?? "部门"}已提交报告`)}</span></div>`).join("") : '<p class="muted">暂无操作记录</p>'}</div>`;
     $("#detail-dialog").showModal();
   } catch (error) {
     toast(error.message, true);
@@ -494,7 +508,7 @@ document.addEventListener("click", (event) => {
     $("#" + button.dataset.close).close();
     return;
   }
-  if (businessClick(button)) return;
+  if (operationsClick(button) || businessClick(button)) return;
   if (button.dataset.filter) {
     filter = button.dataset.filter;
     render();
@@ -658,6 +672,8 @@ for (const dialog of document.querySelectorAll("dialog"))
 
 const businessStatus = { draft: "待启动", active: "经营中", paused: "已暂停" };
 const businessById = (id) => (data()?.businesses ?? []).find((b) => b.id === id);
+const businessCycles = (b) =>
+  [...(b.cycles ?? []), ...(operationById(b.id)?.activity ?? [])].sort((a, b) => b.at.localeCompare(a.at));
 const metricNumber = (value) => (value == null ? "未记录" : Number(value).toLocaleString("zh-CN"));
 function businessesHTML(d) {
   const businesses = d.businesses ?? [];
@@ -666,17 +682,19 @@ function businessesHTML(d) {
     businesses
       .map((b) => {
         const metric = b.metrics?.[0],
-          tasks = d.tasks.filter((t) => (b.cycles ?? []).some((c) => c.task === t.id));
-        return `<article class="panel business-card"><div class="business-card-top"><span class="eyebrow">${b.stage === "operating" ? "现有业务" : "新业务"}</span><span class="badge ${b.status === "active" ? "active" : b.status === "paused" ? "blocked" : ""}">${businessStatus[b.status]}</span></div><h2>${esc(b.name)}</h2><div class="business-objective"><span>当前目标</span><strong>${esc(b.objective)}</strong></div><div class="business-metrics"><div><span>新增用户</span><b>${metricNumber(metric?.newUsers)}</b></div><div><span>活跃用户</span><b>${metricNumber(metric?.activeUsers)}</b></div><div><span>收入 / 元</span><b>${metricNumber(metric?.revenue)}</b></div></div><p class="note">${metric ? "记录日期 " + esc(metric.date) + " · " + esc(metric.source) : "暂无经营数据"}</p><div class="business-routine-strip">${b.routines
-          .filter((r) => r.enabled)
-          .map((r) => `<span>${r.cadence === "daily" ? "每日" : "每周"} · ${esc(r.title)}</span>`)
-          .join(
-            "",
-          )}</div><div class="business-card-bottom"><span>${tasks.filter((t) => t.status === "active").length} 项执行中 · ${tasks.filter((t) => t.status === "awaiting_approval").length} 项待审批</span><button class="secondary" data-business="${esc(b.id)}">进入业务 →</button></div></article>`;
+          tasks = d.tasks.filter((t) => businessCycles(b).some((c) => c.task === t.id));
+        return `<article class="panel business-card"><div class="business-card-top"><span class="eyebrow">${b.stage === "operating" ? "现有业务" : "新业务"}</span><span class="badge ${b.status === "active" ? "active" : b.status === "paused" ? "blocked" : ""}">${businessStatus[b.status]}</span></div><h2>${esc(b.name)}</h2><div class="business-objective"><span>当前目标</span><strong>${esc(b.objective)}</strong></div><div class="business-metrics"><div><span>新增用户</span><b>${metricNumber(metric?.newUsers)}</b></div><div><span>活跃用户</span><b>${metricNumber(metric?.activeUsers)}</b></div><div><span>收入 / 元</span><b>${metricNumber(metric?.revenue)}</b></div></div><p class="note">${metric ? "记录日期 " + esc(metric.date) + " · " + esc(metric.source) : "暂无经营数据"}</p><div class="business-routine-strip">${
+          b.autonomy
+            ? `<span>负责人：产品</span><span>员工职责检查</span>`
+            : b.routines
+                .filter((r) => r.enabled)
+                .map((r) => `<span>${r.cadence === "daily" ? "每日" : "每周"} · ${esc(r.title)}</span>`)
+                .join("")
+        }</div><div class="business-card-bottom"><span>${tasks.filter((t) => t.status === "active").length} 项执行中 · ${tasks.filter((t) => t.status === "awaiting_approval").length} 项待审批</span><button class="secondary" data-business="${esc(b.id)}">进入业务 →</button></div></article>`;
       })
       .join("") ||
     '<section class="panel empty"><h2>暂无业务</h2><button class="primary" data-business-create="true">新建业务</button></section>'
-  }</div><details class="operating-note"><summary>运行说明</summary><p>首轮立即派发，后续按日或周于 09:00 到期，每 15 分钟检查一次。上一轮未完成时不追加任务。</p><p>电脑与引擎须持续运行。发布、投放和业务数据接口未接入；效果手工记录。</p></details>`;
+  }</div><details class="operating-note"><summary>运行说明</summary><p>每 15 分钟检查一次，按职责、资料变化和到期跟进派工；无变化时跳过每日模型检查。内部交付经独立验收后自动归档。</p><p>电脑与引擎须持续运行。发布、投放和业务数据接口未接入；效果手工记录。</p></details>`;
 }
 function openBusinessForm(id) {
   const form = $("#business-form");
@@ -697,19 +715,23 @@ function showBusiness(id) {
   $("#business-content").innerHTML =
     `<div class="dialog-heading"><div><p class="eyebrow">${b.stage === "operating" ? "持续经营" : "新业务验证"} / ${businessStatus[b.status]}</p><h2>${esc(b.name)}</h2></div><button class="close" data-close="business-detail-dialog" aria-label="关闭">×</button></div>
   <p class="detail-goal">${esc(b.objective)}</p><p class="muted">目标用户：${esc(b.audience)}</p><p class="muted">渠道实验：${esc(b.channels || "未设置")}</p>${b.url ? `<p><a class="text-link" href="${esc(b.url)}" target="_blank" rel="noopener noreferrer">打开产品网站 ↗</a></p>` : ""}
-  <div class="business-actions"><button class="secondary" data-business-edit="${esc(b.id)}">编辑经营档案</button><button class="secondary" data-metric="${esc(b.id)}">记录效果与反馈</button><button class="primary" data-business-status="${esc(b.id)}" data-status="${b.status === "active" ? "paused" : "active"}" ${b.status !== "active" && !d.connected ? "disabled" : ""}>${b.status === "active" ? "暂停新周期" : b.status === "paused" ? "恢复经营" : "启动经营"}</button></div>
+  <div class="business-actions"><button class="secondary" data-business-edit="${esc(b.id)}">编辑经营档案</button><button class="secondary" data-metric="${esc(b.id)}">经营数据</button><button class="secondary" data-signal="${esc(b.id)}">业务动态</button>${!b.autonomy ? `<button class="secondary" data-autonomy="${esc(b.id)}">启用员工职责</button>` : ""}<button class="primary" data-business-status="${esc(b.id)}" data-status="${b.status === "active" ? "paused" : "active"}" ${b.status !== "active" && !d.connected ? "disabled" : ""}>${b.status === "active" ? "暂停新周期" : b.status === "paused" ? "恢复经营" : "启动经营"}</button></div>
   <p class="note">启动会派发首轮工作并消耗模型额度。暂停仅停止新周期，已派发任务继续执行。</p>
-  <section class="detail-section"><h3>周期工作</h3>${b.routines
-    .map((r) => {
-      const task = d.tasks.find((t) => t.id === r.lastTask);
-      const waiting = r.lastTask && task?.status !== "completed";
-      return `<div class="routine-row"><div><strong>${esc(r.title)}</strong><p class="note">${!r.enabled ? "已关闭" : b.status !== "active" ? "业务未启动" : waiting ? `等待上一轮：${esc(names[task?.status] ?? "派发中")}` : "下次到期 " + time(r.nextAt)}</p>${task ? `<button class="text-button" data-task="${esc(task.id)}">查看上一轮交付 ↗</button>` : ""}</div><div><select aria-label="${esc(r.title)}频率" data-routine-business="${esc(b.id)}" data-routine="${r.id}"><option value="daily" ${r.cadence === "daily" ? "selected" : ""}>每天</option><option value="weekly" ${r.cadence === "weekly" ? "selected" : ""}>每周</option></select><button class="secondary" data-routine-toggle="${r.id}" data-routine-business="${esc(b.id)}">${r.enabled ? "停用" : "启用"}</button></div></div>`;
-    })
-    .join("")}</section>
+  ${
+    b.autonomy
+      ? operationsBusinessHTML(b.id)
+      : `<section class="detail-section"><h3>周期工作</h3>${b.routines
+          .map((r) => {
+            const task = d.tasks.find((t) => t.id === r.lastTask);
+            const waiting = r.lastTask && task?.status !== "completed";
+            return `<div class="routine-row"><div><strong>${esc(r.title)}</strong><p class="note">${!r.enabled ? "已关闭" : b.status !== "active" ? "业务未启动" : waiting ? `等待上一轮：${esc(names[task?.status] ?? "派发中")}` : "下次到期 " + time(r.nextAt)}</p>${task ? `<button class="text-button" data-task="${esc(task.id)}">查看上一轮交付 ↗</button>` : ""}</div><div><select aria-label="${esc(r.title)}频率" data-routine-business="${esc(b.id)}" data-routine="${r.id}"><option value="daily" ${r.cadence === "daily" ? "selected" : ""}>每天</option><option value="weekly" ${r.cadence === "weekly" ? "selected" : ""}>每周</option></select><button class="secondary" data-routine-toggle="${r.id}" data-routine-business="${esc(b.id)}">${r.enabled ? "停用" : "启用"}</button></div></div>`;
+          })
+          .join("")}</section>`
+  }
   <section class="detail-section"><h3>实际效果记录</h3>${(b.metrics ?? []).length ? b.metrics.map((m) => `<article class="report"><h4>${esc(m.date)} · ${esc(m.source)}</h4><p>新增用户 ${metricNumber(m.newUsers)} · 活跃用户 ${metricNumber(m.activeUsers)} · 收入 ¥ ${metricNumber(m.revenue)}</p><p>${esc(m.note || "未填写实验记录")}</p></article>`).join("") : '<p class="muted">暂无数据</p>'}</section>
   <section class="detail-section"><h3>业务任务与交付</h3>${
-    (b.cycles ?? []).length
-      ? b.cycles
+    businessCycles(b).length
+      ? businessCycles(b)
           .map((c) => {
             const t = d.tasks.find((t) => t.id === c.task);
             return `<div class="history-row"><time>${time(c.at)}</time><span>${esc(t?.title ?? "等待派发")}</span>${t ? `<button class="text-button" data-task="${esc(t.id)}">${esc(names[t.status])} ↗</button>` : ""}</div>`;
@@ -804,6 +826,7 @@ $("#business-form").addEventListener("submit", async (event) => {
   pending++;
   try {
     const request = Object.fromEntries(new FormData(form));
+    request.autonomy = businessById(request.id)?.autonomy ?? true;
     if (isDemo) {
       demo.businesses ??= [];
       const old = businessById(request.id);
@@ -849,3 +872,185 @@ $("#metric-form").addEventListener("submit", async (event) => {
     pending--;
   }
 });
+
+let projectFilter = "all";
+const operationById = (id) => (data()?.operations ?? []).find((p) => p.business === id);
+const planNames = {
+  planned: "待执行",
+  working: "执行中",
+  blocked: "受阻",
+  observing: "效果待观察",
+  review: "待复盘",
+  closed: "已复盘",
+};
+const outcomeNames = { improved: "改善", unchanged: "无变化", worse: "下降", unknown: "无法判断" };
+function projectFilterHTML(d) {
+  return `<div class="project-toolbar"><label>项目 <select id="project-filter"><option value="all">全部项目</option>${(d.businesses ?? []).map((b) => `<option value="${esc(b.id)}" ${projectFilter === b.id ? "selected" : ""}>${esc(b.name)}</option>`).join("")}</select></label></div>`;
+}
+function employeesHTML(d) {
+  const projects = (d.operations ?? []).filter((p) => projectFilter === "all" || p.business === projectFilter);
+  return (
+    projectFilterHTML(d) +
+      projects
+        .map(
+          (p) =>
+            `<section class="employee-project"><div class="panel-heading"><h2>${esc(p.name)}</h2><span class="muted">负责人：${roleNames[p.owner]} · ${businessStatus[p.status]}</span></div><div class="employee-grid">${p.staff
+              .map((s) => {
+                const current = s.currentTask,
+                  waiting = current && ["active", "blocked", "awaiting_approval", "rejected"].includes(current.status);
+                const status = !p.enabled
+                  ? "未启用"
+                  : !s.enabled
+                    ? "已停用"
+                    : p.status !== "active"
+                      ? businessStatus[p.status]
+                      : waiting
+                        ? (names[current.status] ?? "待派工")
+                        : s.lastTask && !current
+                          ? "待接单"
+                          : "待检查";
+                return `<article class="panel employee-card"><div class="panel-heading"><h3>${roleNames[s.role]}${s.role === p.owner ? " · 项目负责人" : ""}</h3><span class="badge ${waiting && current.status === "blocked" ? "blocked" : ""}">${esc(status)}</span></div><p>${esc(s.duty)}</p><details><summary>检查事项</summary><ul>${s.checks.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></details><dl class="employee-facts"><div><dt>检查周期</dt><dd>${s.cadence === "daily" ? "每天" : "每周"}</dd></div><div><dt>最近检查</dt><dd>${s.lastChecked ? time(s.lastChecked) : "尚未检查"}</dd></div><div><dt>下次检查</dt><dd>${!s.enabled || !p.enabled || p.status !== "active" ? "—" : waiting ? "当前任务结束后" : time(s.nextAt)}</dd></div></dl><p class="employee-finding">${esc(waiting ? current.reason || "执行中" : s.finding)}</p><div class="business-actions"><button class="secondary" data-employee="${s.role}" data-project="${esc(p.business)}">责任档案</button>${current ? `<button class="text-button" data-task="${esc(current.id)}">${waiting ? "当前任务" : "最近任务"}</button>` : ""}</div></article>`;
+              })
+              .join("")}</div></section>`,
+        )
+        .join("") || '<section class="panel empty">暂无员工</section>'
+  );
+}
+function planRows(p) {
+  return p.plans.length
+    ? [...p.plans]
+        .sort((a, b) => a.priority - b.priority)
+        .map(
+          (a) =>
+            `<article class="panel plan-card"><div class="panel-heading"><h3>${esc(a.title)}</h3><span class="badge ${a.status === "blocked" ? "blocked" : ""}">${planNames[a.status]}</span></div><div class="plan-meta"><span>${esc(p.name)}</span><span>${roleNames[a.owner]}负责</span><span>P${a.priority}</span><span>期限 ${time(a.dueAt)}</span></div><p>${esc(a.goal)}</p><p class="note">验收：${a.acceptance.map(esc).join("；")}</p><div class="plan-result"><div><span>效果指标</span><strong>${esc(a.measure)}</strong></div><div><span>跟进时间</span><strong>${a.followUpAt ? time(a.followUpAt) : "交付后安排"}</strong></div><div><span>员工复盘</span><strong>${a.outcome ? outcomeNames[a.outcome.outcome] : "尚无结果"}</strong></div></div><p>${esc(a.result)}</p>${a.task ? `<button class="text-button" data-task="${esc(a.task)}">交付记录</button>` : ""}<button class="text-button" data-task="${esc(a.sourceTask)}">提出依据</button></article>`,
+        )
+        .join("")
+    : '<div class="panel empty">暂无计划</div>';
+}
+function plansHTML(d) {
+  const projects = (d.operations ?? []).filter((p) => projectFilter === "all" || p.business === projectFilter);
+  return (
+    projectFilterHTML(d) +
+    projects
+      .map(
+        (p) =>
+          `<section class="employee-project"><div class="panel-heading"><h2>${esc(p.name)}</h2><button class="secondary" data-signal="${esc(p.business)}">记录动态</button></div>${p.alerts.length ? `<div class="banner warning">${p.alerts.map((a) => `${esc(a.title)}：${esc(a.reason)}`).join("<br>")}</div>` : ""}${planRows(p)}</section>`,
+      )
+      .join("")
+  );
+}
+function operationsBusinessHTML(id) {
+  const p = operationById(id);
+  if (!p) return '<section class="detail-section"><h3>员工职责</h3><p>等待同步</p></section>';
+  return `<section class="detail-section"><div class="panel-heading"><h3>员工职责</h3><button class="text-button" data-project-view="employees" data-project="${esc(id)}">全部员工</button></div><div class="plan-meta"><span>负责人：${roleNames[p.owner]}</span><span>今日派工 ${p.todayTasks} / ${p.maxDailyTasks}</span><span>在途上限 ${p.maxActive}</span><button class="text-button" data-settings="${esc(id)}">派工额度</button></div>${p.staff.map((s) => `<div class="routine-row"><div><strong>${roleNames[s.role]}</strong><p class="note">${esc(s.duty)}</p><p class="note">${esc(s.finding)}</p></div><button class="secondary" data-employee="${s.role}" data-project="${esc(id)}">编辑</button></div>`).join("")}</section><section class="detail-section"><div class="panel-heading"><h3>项目计划</h3><button class="text-button" data-project-view="plans" data-project="${esc(id)}">全部计划</button></div><p>${p.plans.filter((a) => a.status === "working").length} 项执行中 · ${p.plans.filter((a) => ["observing", "review"].includes(a.status)).length} 项效果跟进 · ${p.alerts.length} 项异常</p></section><section class="detail-section"><h3>业务动态</h3>${
+    p.signals.length
+      ? p.signals
+          .slice(-5)
+          .reverse()
+          .map(
+            (s) =>
+              `<article class="report"><h4>${esc(s.title)}</h4><p>${esc(s.detail)}</p><p class="note">${esc(s.source)} · ${time(s.at)}</p></article>`,
+          )
+          .join("")
+      : '<p class="muted">暂无记录</p>'
+  }</section>`;
+}
+function operationsClick(button) {
+  if (button.dataset.projectView) {
+    projectFilter = button.dataset.project;
+    $("#business-detail-dialog").close();
+    location.hash = button.dataset.projectView;
+    render();
+    return true;
+  }
+  if (button.dataset.autonomy) {
+    action(button, async () => {
+      if (isDemo) {
+        toast("示例未配置员工职责");
+        return;
+      }
+      const id = button.dataset.autonomy;
+      await api(`/api/businesses/${id}/autonomy`, { enabled: true });
+      await refresh();
+      render();
+      showBusiness(id);
+    });
+    return true;
+  }
+  if (button.dataset.employee) {
+    const p = operationById(button.dataset.project),
+      s = p?.staff.find((s) => s.role === button.dataset.employee);
+    if (!s) return true;
+    const f = $("#employee-form");
+    f.reset();
+    f.elements.id.value = p.business;
+    f.elements.role.value = s.role;
+    f.elements.duty.value = s.duty;
+    f.elements.checks.value = s.checks.join("\n");
+    f.elements.cadence.value = s.cadence;
+    f.elements.enabled.value = String(s.enabled);
+    f.querySelector(".form-error").textContent = "";
+    $("#employee-project").textContent = `${p.name} · ${roleNames[s.role]}`;
+    $("#employee-dialog").showModal();
+    return true;
+  }
+  if (button.dataset.signal || button.dataset.settings) {
+    if (isDemo) {
+      toast("请返回真实公司后配置");
+      return true;
+    }
+    const type = button.dataset.signal ? "signal" : "settings",
+      id = button.dataset.signal ?? button.dataset.settings,
+      f = $("#" + type + "-form");
+    f.reset();
+    f.elements.id.value = id;
+    f.querySelector(".form-error").textContent = "";
+    if (type === "settings") {
+      const p = operationById(id);
+      f.elements.maxDailyTasks.value = p.maxDailyTasks;
+      f.elements.maxActive.value = p.maxActive;
+    }
+    $("#" + type + "-dialog").showModal();
+    return true;
+  }
+  return false;
+}
+document.addEventListener("change", (event) => {
+  if (event.target.id === "project-filter") {
+    projectFilter = event.target.value;
+    render();
+  }
+});
+for (const kind of ["employee", "signal", "settings"])
+  $("#" + kind + "-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.target,
+      button = form.querySelector("[type=submit]");
+    button.disabled = true;
+    pending++;
+    try {
+      const request = Object.fromEntries(new FormData(form));
+      if (kind === "employee") {
+        request.enabled = request.enabled === "true";
+        request.checks = request.checks
+          .split("\n")
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
+      if (kind === "settings") {
+        request.maxDailyTasks = Number(request.maxDailyTasks);
+        request.maxActive = Number(request.maxActive);
+      }
+      await api(`/api/businesses/${request.id}/${kind}`, request);
+      await refresh();
+      $("#" + kind + "-dialog").close();
+      render();
+      if ($("#business-detail-dialog").open) showBusiness(request.id);
+      toast("已保存");
+    } catch (error) {
+      form.querySelector(".form-error").textContent = error.message;
+    } finally {
+      button.disabled = false;
+      pending--;
+    }
+  });

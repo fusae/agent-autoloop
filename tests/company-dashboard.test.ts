@@ -111,6 +111,49 @@ test("dashboard protects mutations, keeps keys server-side, handles offline stat
     const businessView = await (await fetch(dashboard.url + "/api/overview")).json();
     assert.equal(businessView.businesses[0].name, "APP A");
     assert.equal(businessView.businesses[0].metrics.length, 0);
+    for (const [endpoint, data] of [
+      ["autonomy", { enabled: true }],
+      ["employee", { role: "growth", duty: "维护渠道和激活", cadence: "weekly", enabled: true }],
+      ["signal", { title: "入口问题", detail: "用户找不到入口", source: "人工整理", role: "support" }],
+      ["settings", { maxDailyTasks: 8, maxActive: 2 }],
+    ] as const) {
+      assert.equal(
+        (
+          await fetch(dashboard.url + "/api/businesses/app-a/" + endpoint, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(data),
+          })
+        ).status,
+        200,
+      );
+    }
+    const managed = await (await fetch(dashboard.url + "/api/overview")).json();
+    assert.equal(managed.operations[0].staff.length, 6);
+    assert.equal(managed.operations[0].maxDailyTasks, 8);
+    assert.equal(managed.operations[0].signals[0].title, "入口问题");
+    assert.equal(managed.businesses[0].autonomy, true);
+    assert.equal(managed.businesses[0].status, "draft");
+    assert.equal(
+      (
+        await fetch(dashboard.url + "/api/businesses/app-a/employee", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ role: "root", enabled: true }),
+        })
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await fetch(dashboard.url + "/api/businesses/missing/signal", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ title: "bad", detail: "bad", source: "bad" }),
+        })
+      ).status,
+      400,
+    );
     const task = { id: "T2", title: "新需求", kind: "software", goal: "制作工具", acceptance: ["可运行"] };
     assert.equal(
       (await fetch(dashboard.url + "/api/tasks", { method: "POST", headers, body: JSON.stringify(task) })).status,
