@@ -1,3 +1,11 @@
+# Agent Company · Company workflows on Agent Autoloop
+
+This fork of [KKKKhazix/agent-autoloop](https://github.com/KKKKhazix/agent-autoloop) adds product, engineering, QA, growth, support and finance departments, a persistent task ledger, owner acceptance and per-task assignment limits. The upstream kernel and wire protocol remain unchanged.
+
+See the [company setup guide](examples/recipes/company/README.md) and [architecture](docs/company.md). With Node 24+, run `npm ci` and `npm run company:demo` for an isolated, model-free end-to-end demonstration. Real work requires a signed-in CLI agent. Acceptance archives a deliverable; it does not deploy, pay or send messages. Upstream installation instructions below install upstream, not this company fork.
+
+---
+
 # Agent Autoloop
 
 **Let your command-line agents pick up work and follow it through in the background — staying quiet when they can handle it, and sending you a card only when a decision is yours to make.**

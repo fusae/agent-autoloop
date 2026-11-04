@@ -1,3 +1,21 @@
+# Agent Company · 基于 Agent Autoloop 的公司协作系统
+
+这是 [KKKKhazix/agent-autoloop](https://github.com/KKKKhazix/agent-autoloop) 的 fork，新增产品、研发、验收、运营、客服、财务六个部门，以及任务账本、跨部门交接、老板审批与派工次数控制。
+
+**[公司版启动与使用](examples/recipes/company/README.md)** · [公司架构](docs/company.md)
+
+```bash
+# Node.js 24+
+npm ci
+npm run company:demo
+npm run company -- init "$HOME/.agent-company" codex 3360
+npm run company -- up "$HOME/.agent-company"
+```
+
+演示使用模拟部门验证完整流程；真实业务需已登录的 Agent。接受交付不自动触发上线、付款或发信。以下保留上游的使用说明，原安装脚本安装的是上游版本；公司版使用以上 fork 内命令。
+
+---
+
 # Agent Autoloop
 
 **让你的命令行 Agent 在后台自己接活、自己跟进到底；平时不烦你，遇到拿不准的事才发卡片找你拍板。**

@@ -2,3 +2,10 @@ node_modules/
 .DS_Store
 *.log
 .claude/
+
+# Company state and credentials must stay outside the fork.
+.company/
+company-state/
+*.db
+*.db-wal
+*.db-shm

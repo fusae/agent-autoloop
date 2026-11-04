@@ -397,3 +397,7 @@ Apple M5 Pro、24 GB、Node 24.21.0，用 `node scripts/history.ts 1000 10000 10
 Ship 使用本引擎仓库的 `plugins/delivery/action.yml`，项目固定到发布后的完整提交。Action 只输出 `release` 和 `superseded`，项目已有发布步骤根据输出运行。它与交付进程共用 `project.ts` 的范围与健康判断，不在项目里长期复制工具。
 
 普通健康 URL 只允许 HTTPS。测试时必须显式传 `--test-local-health`，Action 同样要 `test-local-health: 'true'`，才接受 `http://127.0.0.1`；不接受其他 HTTP 地址。GitHub 合并规则由项目维护者设置。
+
+## 公司协作客户端
+
+本 fork 的 [公司协作层](company.md) 使用现有事件、回执、审批和 Agent 插件接口，不新增内核协议字段。`company-*` 来源与 `company.*` 类型属于该应用的约定，不是内核保留字段。

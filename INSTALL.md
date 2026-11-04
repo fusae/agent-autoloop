@@ -1,3 +1,5 @@
+> **公司 fork：** 使用 [公司版说明](examples/recipes/company/README.md) 的 `npm run company -- init/up`。它创建独立配置，不安装常驻服务；下文是原版安装流程，在线脚本仍指向上游。
+
 # 安装说明（写给 Agent）
 
 用户请你装好 Agent 自动化中台。先安装，再走一遍提问和继续处理；能自己做的直接做。

@@ -13,7 +13,8 @@
     "node": ">=24"
   },
   "bin": {
-    "agent-autoloop": "bin/agent-autoloop.ts"
+    "agent-autoloop": "bin/agent-autoloop.ts",
+    "agent-company": "bin/agent-company.ts"
   },
   "scripts": {
     "test": "node --disable-warning=ExperimentalWarning --test tests/*.test.ts",
@@ -22,7 +23,9 @@
     "format": "prettier --write \"**/*.{ts,json,yml}\"",
     "format:check": "prettier --check \"**/*.{ts,json,yml}\"",
     "test:nightly": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 sim/*.test.ts && node --disable-warning=ExperimentalWarning scripts/benchmark.ts --check",
-    "benchmark": "node --disable-warning=ExperimentalWarning scripts/benchmark.ts --check"
+    "benchmark": "node --disable-warning=ExperimentalWarning scripts/benchmark.ts --check",
+    "company": "node --disable-warning=ExperimentalWarning bin/agent-company.ts",
+    "company:demo": "node --disable-warning=ExperimentalWarning --test tests/company-e2e.test.ts"
   },
   "devDependencies": {
     "@types/node": "26.6.4",
