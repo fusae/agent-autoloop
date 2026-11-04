@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Company, taskId, taskRequest } from "../plugins/company/company.ts";
 import { initialize } from "../plugins/company/setup.ts";
@@ -19,6 +19,7 @@ export async function companyCLI(args: string[]) {
   if (!given || !command || command === "help") {
     console.log(
       "用法：agent-company init <新目录> [codex|claude] [端口]\n" +
+        "      agent-company start|web <目录> [网页端口]\n" +
         "      agent-company up|status <目录>\n" +
         "      agent-company submit <目录> <任务编号> <需求.json>\n" +
         "      agent-company retry <目录> <任务编号> [请求编号]\n" +
@@ -52,6 +53,46 @@ export async function companyCLI(args: string[]) {
     };
     writeFileSync(join(directory, "hub/config.json"), JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
     console.log(`公司已创建：${directory}\n启动：npm run company -- up ${JSON.stringify(directory)}`);
+    return;
+  }
+  if (command === "web" || command === "start") {
+    if (command === "start" && !existsSync(directory)) await companyCLI(["init", directory]);
+    const port = Number(rest[0] ?? 3361);
+    if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new Error("端口需要在 1024–65535 之间");
+    const { startDashboard } = await import("./company-dashboard.ts");
+    let child: ReturnType<typeof spawn> | undefined;
+    const dashboard = await startDashboard(directory, port);
+    try {
+      if (command === "start") {
+        const config = read(join(directory, "hub/config.json"));
+        const reachable = await fetch(config.url + "/healthz", { signal: AbortSignal.timeout(1500) })
+          .then((r) => r.ok)
+          .catch(() => false);
+        if (!reachable) {
+          child = spawn(process.execPath, [hubCLI, "up"], { env: environment(directory), stdio: "inherit" });
+          child.on("error", (error) => console.error(`任务引擎启动失败：${error.message}`));
+          child.on("exit", (code) => {
+            if (code) console.error(`任务引擎已退出（${code}），工作台保留只读视图。`);
+          });
+        }
+      }
+      console.log(`公司工作台：${dashboard.url}`);
+      await new Promise<void>((done) => {
+        const stop = () => {
+          process.off("SIGTERM", stop);
+          process.off("SIGINT", stop);
+          done();
+        };
+        process.on("SIGTERM", stop);
+        process.on("SIGINT", stop);
+      });
+    } finally {
+      await dashboard.close();
+      if (child && child.exitCode === null) {
+        child.kill("SIGTERM");
+        await new Promise((done) => child!.once("exit", done));
+      }
+    }
     return;
   }
   if (command === "up") {

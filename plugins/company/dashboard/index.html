@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#172e2b" />
+    <title>公司工作台 · Agent Company</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script defer src="/app.js"></script>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="#overview"
+        ><span class="brand-mark">同</span><span>同舟 <b>COMPANY OS</b></span></a
+      >
+      <div class="workspace-label">你的 AI 公司 <span>LOCAL</span></div>
+      <nav aria-label="主导航">
+        <a href="#overview" data-view="overview"><span>◫</span>公司总览</a>
+        <a href="#tasks" data-view="tasks"><span>▤</span>任务看板<span class="nav-count" id="nav-tasks">0</span></a>
+        <a href="#approvals" data-view="approvals"
+          ><span>◇</span>待我审批<span class="nav-count" id="nav-approvals">0</span></a
+        >
+        <a href="#departments" data-view="departments"><span>⊞</span>部门协作</a>
+        <a href="#spending" data-view="spending"><span>◴</span>运行费用</a>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="sidebar-note">
+          <span class="orbit">✳</span><strong>把目标交给团队，<br />把时间留给自己。</strong>
+          <p>六个部门，一处掌握。</p>
+        </div>
+        <button class="demo-toggle" id="demo-toggle">查看示例公司 <span>↗</span></button>
+        <div class="owner">
+          <span class="avatar">你</span>
+          <div>公司负责人<small>决策与最终验收</small></div>
+          <span class="owner-dot"></span>
+        </div>
+      </div>
+    </aside>
+    <div class="shell">
+      <header class="topbar">
+        <div class="breadcrumb">工作空间 <span>/</span> <strong id="company-name">Agent Company</strong></div>
+        <div class="topbar-right">
+          <span id="connection" class="connection">正在连接</span
+          ><button id="refresh" class="icon-button" aria-label="刷新数据">↻</button>
+        </div>
+      </header>
+      <main id="main" tabindex="-1">
+        <div id="demo-banner" class="banner" hidden>
+          示例预览 · 下方为演示数据，操作不会影响真实公司。<button id="exit-demo">返回我的公司 →</button>
+        </div>
+        <div id="offline-banner" class="banner warning" hidden></div>
+        <section class="page-heading">
+          <div>
+            <p class="eyebrow" id="eyebrow">COMPANY OVERVIEW</p>
+            <h1 id="page-title">公司的每一步，都在这里。</h1>
+            <p id="page-subtitle">看进展、处理决策，让团队继续向前。</p>
+          </div>
+          <button id="new-task" class="primary"><span>＋</span> 下达新任务</button>
+        </section>
+        <section class="stats" id="stats" aria-label="公司概览"></section>
+        <div id="view-content"></div>
+        <footer>
+          <span>同舟 · Agent Company <i>基于 Agent Autoloop</i></span
+          ><span id="last-updated">等待首次同步</span>
+        </footer>
+      </main>
+    </div>
+    <dialog id="task-form-dialog" class="form-dialog">
+      <form id="task-form">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">NEW MISSION</p>
+            <h2>给团队一个明确的目标。</h2>
+          </div>
+          <button type="button" class="close" data-close="task-form-dialog" aria-label="关闭">×</button>
+        </div>
+        <p class="muted">提交后，系统会按任务类型安排部门；真实任务会使用模型额度。</p>
+        <label>任务标题<input name="title" placeholder="例如：做一个本地周报生成器" required maxlength="120" /></label>
+        <label
+          >交给哪条业务线？<select name="kind">
+            <option value="software">产品研发 · 产品 → 研发 → 验收</option>
+            <option value="content">内容运营 · 运营 → 验收</option>
+            <option value="support">客户服务 · 客服 → 验收</option>
+            <option value="finance">财务分析 · 财务 → 验收</option>
+          </select></label
+        >
+        <label
+          >你想实现什么？<textarea
+            name="goal"
+            placeholder="说明背景、目标、范围，以及不能做的事情。"
+            required
+            maxlength="500"
+            rows="3"
+          ></textarea>
+        </label>
+        <label
+          >怎样才算完成？<textarea
+            name="acceptance"
+            placeholder="每行一条验收标准，最多 5 条。"
+            required
+            rows="3"
+          ></textarea>
+        </label>
+        <p id="form-error" class="form-error" role="alert"></p>
+        <div class="form-actions">
+          <button type="button" class="secondary" data-close="task-form-dialog">取消</button
+          ><button type="submit" class="primary">提交给团队 →</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="detail-dialog" class="detail-dialog"><div id="detail-content"></div></dialog>
+    <dialog id="artifact-dialog" class="artifact-dialog">
+      <div class="dialog-heading">
+        <h2 id="artifact-title">交付物</h2>
+        <button class="close" data-close="artifact-dialog" aria-label="关闭">×</button>
+      </div>
+      <pre id="artifact-content"></pre>
+    </dialog>
+    <div id="toast" class="toast" role="status" hidden></div>
+  </body>
+</html>

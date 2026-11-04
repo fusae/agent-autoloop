@@ -7,12 +7,10 @@
 ```bash
 # Node.js 24+
 npm ci
-npm run company:demo
-npm run company -- init "$HOME/.agent-company" codex 3360
-npm run company -- up "$HOME/.agent-company"
+npm run company -- start "$HOME/.agent-company"
 ```
 
-演示使用模拟部门验证完整流程；真实业务需已登录的 Agent。接受交付不自动触发上线、付款或发信。以下保留上游的使用说明，原安装脚本安装的是上游版本；公司版使用以上 fork 内命令。
+打开 **http://127.0.0.1:3361**：查看任务、六个部门、待审批与费用，直接下达目标、查看交付物和接受/退回审批。首次启动自动创建公司，之后复用数据；Ctrl+C 停止。网页里的「查看示例公司」可零消耗体验，真实业务需已登录的 Agent。接受交付不自动触发上线、付款或发信。以下保留上游的使用说明，原安装脚本安装的是上游版本；公司版使用以上 fork 内命令。
 
 ---
 
@@ -34,7 +32,7 @@ npm run company -- up "$HOME/.agent-company"
 
 - **一台电脑、一条命令就能跑。** 装在你的 Mac 或 Linux 上，不用买云服务器，也不用开放公网端口。
 - **一行配置接新 Agent。** 不需要 SDK，也不需要改 Agent 源码，能接收提示词并打印最后一条回复的命令行工具都能接。
-- **没有后台界面。** 需要你拍板时把卡片推到飞书、钉钉、企微、Slack、Discord 或桌面通知；想看全局进展，敲一行命令。
+- **上游通过命令行和通知交互；本 fork 另有公司工作台。** 需要你拍板时把卡片推到飞书、钉钉、企微、Slack、Discord 或桌面通知；想看全局进展，敲一行命令。
 
 ## 上手
 

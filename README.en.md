@@ -4,6 +4,8 @@ This fork of [KKKKhazix/agent-autoloop](https://github.com/KKKKhazix/agent-autol
 
 See the [company setup guide](examples/recipes/company/README.md) and [architecture](docs/company.md). With Node 24+, run `npm ci` and `npm run company:demo` for an isolated, model-free end-to-end demonstration. Real work requires a signed-in CLI agent. Acceptance archives a deliverable; it does not deploy, pay or send messages. Upstream installation instructions below install upstream, not this company fork.
 
+Start the local Chinese dashboard and task engine with `npm run company -- start "$HOME/.agent-company"`, then open **http://127.0.0.1:3361**. The dashboard shows tasks, departments, approvals, artifacts and reported spending. Its explicitly labeled demo mode never submits real work. `start` initializes a new directory automatically; Ctrl+C stops the processes and keeps your data.
+
 ---
 
 # Agent Autoloop
@@ -24,7 +26,7 @@ Most of us use command-line agents like Claude Code or Codex by babysitting a te
 
 - **One machine, one install command.** Runs on your Mac or Linux machine. No cloud server or inbound ports required.
 - **Connect a new agent in one line.** No SDK, no agent source code to fork. Any CLI tool that takes a prompt and prints a final reply can plug in.
-- **No web dashboard.** Cards reach you on Feishu, DingTalk, WeCom, Slack, Discord, or desktop notifications when you are needed. Everything else is one command away.
+- **Upstream uses CLI and notifications; this fork adds a company dashboard.** Cards reach you on Feishu, DingTalk, WeCom, Slack, Discord, or desktop notifications when you are needed. Everything else is one command away.
 
 ## Get started
 
