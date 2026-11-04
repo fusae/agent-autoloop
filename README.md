@@ -266,3 +266,5 @@ Apple M5 Pro、24 GB、Node 24.21.0。写入逐条提交，事务落盘后才应
 </details>
 
 [MIT License](LICENSE)
+
+服务器常驻运行与带认证的 HTTPS 网页部署见[服务器部署](docs/company.md#服务器部署)；迁移时先停本机副本，保留任务账本和飞书问答。

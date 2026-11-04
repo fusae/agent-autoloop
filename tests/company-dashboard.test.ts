@@ -1,7 +1,7 @@
 // Failure modes: a web page exposes owner keys, another origin can approve a task, offline data looks live,
 // or an artifact path escapes the workspace. The fake hub records only explicit browser actions.
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
+import { createServer, get } from "node:http";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -187,5 +187,62 @@ test("dashboard protects mutations, keeps keys server-side, handles offline stat
     await dashboard.close();
     hub.close();
     rmSync(temp, { recursive: true, force: true });
+  }
+});
+
+// An authenticated reverse proxy must not turn arbitrary forwarded origins into authority.
+test("a configured HTTPS origin supports a protected proxy without weakening CSRF or local defaults", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-proxy-"));
+  initialize(dir + "/office");
+  mkdirSync(join(dir, "office/hub"));
+  writeFileSync(
+    join(dir, "office/hub/config.json"),
+    JSON.stringify({ url: "http://127.0.0.1:1", owner: "test", source: { key: "test" } }),
+  );
+  const dashboard = await startDashboard(dir + "/office", 0, { publicOrigin: "https://company.example.com" });
+  try {
+    const html = await (await fetch(dashboard.url)).text();
+    const navigation = await new Promise<number>((resolve, reject) => {
+      get(dashboard.url, { headers: { "Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate" } }, (r) => {
+        r.resume();
+        resolve(r.statusCode!);
+      }).on("error", reject);
+    });
+    assert.equal(navigation, 200);
+    assert.equal(
+      (await fetch(dashboard.url + "/api/session", { headers: { "Sec-Fetch-Site": "cross-site" } })).status,
+      403,
+    );
+    assert.match(html, /href="\.\/style.css"/);
+    const { csrf } = await (await fetch(dashboard.url + "/api/session")).json();
+    for (const [origin, token, status] of [
+      ["https://company.example.com", csrf, 200],
+      ["https://evil.example.com", csrf, 403],
+      ["https://company.example.com", "wrong", 403],
+    ]) {
+      const r = await fetch(dashboard.url + "/api/businesses", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: origin, "X-Company-CSRF": token },
+        body: JSON.stringify({
+          id: "proxy-test",
+          name: "测试",
+          description: "提醒",
+          audience: "测试",
+          objective: "测试",
+          stage: "operating",
+        }),
+      });
+      assert.equal(r.status, status);
+    }
+    const wrongHost = await new Promise<number>((resolve, reject) => {
+      get(dashboard.url + "/api/session", { headers: { Host: "evil.example.com" } }, (r) => {
+        r.resume();
+        resolve(r.statusCode!);
+      }).on("error", reject);
+    });
+    assert.equal(wrongHost, 403);
+  } finally {
+    await dashboard.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });

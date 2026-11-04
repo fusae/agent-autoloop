@@ -17,6 +17,7 @@ export type SourceSnapshot = {
 };
 type SourceConfig = {
   releaseUrl?: string;
+  localDatabase?: { helper: string };
   repositories?: { path: string; files: string[] }[];
   ssh?: { host: string; databases: { name: string; path: string; queries: Record<string, string> }[] };
 };
@@ -50,6 +51,19 @@ const execute: SourceExecutor = async (kind, config) => {
         .filter((k) => value[k] !== undefined)
         .map((k) => [k, value[k]]),
     );
+  }
+  if (config.helper) {
+    if (!isAbsolute(config.helper)) throw Error("数据读取程序必须使用绝对路径");
+    return new Promise((resolve, reject) => {
+      execFile(config.helper, [], { timeout: 25000, maxBuffer: 256000, encoding: "utf8" }, (error, out) => {
+        if (error) return reject(Error("本机只读数据连接失败"));
+        try {
+          resolve(JSON.parse(out));
+        } catch {
+          reject(Error("数据格式错误"));
+        }
+      });
+    });
   }
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,100}$/.test(config.host)) throw Error("Invalid SSH host");
   for (const db of config.databases)
@@ -122,7 +136,9 @@ export async function collectSources(
     const release = await part("release", () =>
       spec.releaseUrl ? run("release", spec.releaseUrl) : Promise.resolve(null),
     );
-    const database = await part("database", () => (spec.ssh ? run("sqlite", spec.ssh) : Promise.resolve(null)));
+    const database = await part("database", () =>
+      spec.localDatabase || spec.ssh ? run("sqlite", spec.localDatabase ?? spec.ssh) : Promise.resolve(null),
+    );
     const repositories = await part("repositories", async () =>
       (spec.repositories ?? []).map((repo) => {
         const root = realpathSync(repo.path);

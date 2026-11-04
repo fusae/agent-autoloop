@@ -97,7 +97,7 @@ function toast(message, error = false) {
   toast.timer = setTimeout(() => (node.hidden = true), 4500);
 }
 async function api(path, body) {
-  const response = await fetch(path, {
+  const response = await fetch(new URL(path.replace(/^\//, ""), location.href), {
     method: body === undefined ? "GET" : "POST",
     headers: body === undefined ? {} : { "Content-Type": "application/json", "X-Company-CSRF": csrf },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -723,7 +723,9 @@ for (const dialog of document.querySelectorAll("dialog"))
   });
 (async () => {
   try {
-    csrf = (await api("/api/session")).csrf;
+    const session = await api("/api/session");
+    csrf = session.csrf;
+    $("#host-mode").textContent = session.remote ? "服务器" : "本机";
     await refresh();
   } catch (error) {
     toast(error.message, true);

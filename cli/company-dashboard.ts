@@ -33,7 +33,10 @@ async function body(req: IncomingMessage) {
     throw new HTTPError(400, "内容格式不正确");
   }
 }
-export async function startDashboard(directory: string, port = 3361) {
+export async function startDashboard(directory: string, port = 3361, options: { publicOrigin?: string } = {}) {
+  const publicOrigin = options.publicOrigin;
+  if (publicOrigin && (new URL(publicOrigin).protocol !== "https:" || new URL(publicOrigin).origin !== publicOrigin))
+    throw new Error("公开工作台地址必须是 HTTPS 来源，不含路径");
   const companyConfig = JSON.parse(readFileSync(join(directory, "company.json"), "utf8"));
   const config = JSON.parse(readFileSync(join(directory, "hub/config.json"), "utf8"));
   const company = new Company(companyConfig);
@@ -77,7 +80,12 @@ export async function startDashboard(directory: string, port = 3361) {
       "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
     );
     try {
-      if (req.headers.host !== new URL(origin).host || req.headers["sec-fetch-site"] === "cross-site")
+      const publicNavigation =
+        publicOrigin && req.method === "GET" && req.url === "/" && req.headers["sec-fetch-mode"] === "navigate";
+      if (
+        req.headers.host !== new URL(origin).host ||
+        (req.headers["sec-fetch-site"] === "cross-site" && !publicNavigation)
+      )
         throw new HTTPError(403, "请从本机工作台访问");
       const url = new URL(req.url ?? "/", origin);
       if (req.method === "GET") {
@@ -92,7 +100,7 @@ export async function startDashboard(directory: string, port = 3361) {
           res.end(readFileSync(join(assets, file)));
           return;
         }
-        if (url.pathname === "/api/session") return send(200, { csrf });
+        if (url.pathname === "/api/session") return send(200, { csrf, remote: !!publicOrigin });
         if (url.pathname === "/api/overview") {
           let state: any = null,
             connectionError: string | null = null;
@@ -166,7 +174,10 @@ export async function startDashboard(directory: string, port = 3361) {
         }
       }
       if (req.method === "POST") {
-        if (req.headers.origin !== origin || req.headers["x-company-csrf"] !== csrf)
+        if (
+          ![origin, ...(publicOrigin ? [publicOrigin] : [])].includes(req.headers.origin ?? "") ||
+          req.headers["x-company-csrf"] !== csrf
+        )
           throw new HTTPError(403, "页面已失效，请刷新后重试");
         const data = await body(req);
         if (url.pathname === "/api/businesses") {

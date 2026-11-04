@@ -103,7 +103,7 @@ export async function companyCLI(args: string[]) {
     if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new Error("端口需要在 1024–65535 之间");
     const { startDashboard } = await import("./company-dashboard.ts");
     let child: ReturnType<typeof spawn> | undefined;
-    const dashboard = await startDashboard(directory, port);
+    const dashboard = await startDashboard(directory, port, { publicOrigin: process.env.AGENT_COMPANY_PUBLIC_ORIGIN });
     try {
       if (command === "start") {
         const config = read(join(directory, "hub/config.json"));

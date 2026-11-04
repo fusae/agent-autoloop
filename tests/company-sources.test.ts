@@ -50,3 +50,18 @@ test("configured sources persist evidence, isolate failures and deduplicate unch
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Server deployments use a fixed local aggregate reader, not an SSH key with broad production access.
+test("trusted local database helpers provide aggregates without copying production databases", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-local-source-"));
+  try {
+    const helper = join(dir, "reader");
+    writeFileSync(helper, '#!/bin/sh\nprintf \'{"usage":{"rows":[[2]]}}\\n\'\n', { mode: 0o700 });
+    writeFileSync(join(dir, "sources.json"), JSON.stringify({ projects: { app: { localDatabase: { helper } } } }));
+    const result = await collectSources(dir);
+    assert.deepEqual(result.app.database.data, { usage: { rows: [[2]] } });
+    assert.equal(result.app.database.error, null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

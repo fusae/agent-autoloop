@@ -100,3 +100,5 @@ agent-autoloop uninstall
 公司 fork 的 CEO 模式：`npm run company -- ceo "$HOME/.agent-company"`；配置已授权机器人的本人私聊：`npm run company -- feishu "$HOME/.agent-company" ou_本人编号`，之后重启服务。需要 CLI 的机器人发消息、读取本人会话权限；不需要新增事件监听。[公司说明](docs/company.md#ceo-管理与飞书决策)。
 
 公司持续运行：前台 `start` 不自动安装服务。关闭终端后仍需运行时，为公司独立 hub 配置系统用户服务，另以 `agent-company web <目录> 3361` 运行网页服务；两者设置登录启动与异常重启。可信 `sources.json` 支持每小时只读同步，格式见[数据连接](docs/company.md#数据连接)。
+
+服务器常驻运行与带认证的 HTTPS 网页部署见[服务器部署](docs/company.md#服务器部署)；迁移时先停本机副本，保留任务账本和飞书问答。
