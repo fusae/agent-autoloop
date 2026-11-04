@@ -3,6 +3,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage } from "node:http";
 import { join, resolve, sep } from "node:path";
 import { Company, departments, taskId, taskRequest, workflows, type Task } from "../plugins/company/company.ts";
+import { Businesses } from "../plugins/company/business.ts";
 
 const assets = resolve(import.meta.dirname, "../plugins/company/dashboard");
 class HTTPError extends Error {
@@ -34,6 +35,7 @@ export async function startDashboard(directory: string, port = 3361) {
   const companyConfig = JSON.parse(readFileSync(join(directory, "company.json"), "utf8"));
   const config = JSON.parse(readFileSync(join(directory, "hub/config.json"), "utf8"));
   const company = new Company(companyConfig);
+  const businesses = new Businesses(directory);
   const csrf = randomBytes(32).toString("hex");
   let origin = "";
   async function hub(path: string, data?: unknown, source = false) {
@@ -106,6 +108,7 @@ export async function startDashboard(directory: string, port = 3361) {
             departments,
             workflows,
             tasks,
+            businesses: businesses.list(),
             cards: (state?.cards ?? []).map((c: any) => ({
               id: c.id,
               kind: c.kind,
@@ -153,6 +156,30 @@ export async function startDashboard(directory: string, port = 3361) {
         if (req.headers.origin !== origin || req.headers["x-company-csrf"] !== csrf)
           throw new HTTPError(403, "页面已失效，请刷新后重试");
         const data = await body(req);
+        if (url.pathname === "/api/businesses") return send(200, businesses.save(data));
+        const businessAction = /^\/api\/businesses\/([A-Za-z0-9_-]+)\/(status|routine|metrics)$/.exec(url.pathname);
+        if (businessAction) {
+          const [, id, operation] = businessAction;
+          if (operation === "metrics") return send(200, businesses.metric(id, data));
+          if (operation === "routine")
+            return send(200, businesses.routine(id, data.routineId, data.enabled, data.cadence));
+          if (data.status === "active") await hub("/v1/state");
+          const result = businesses.status(id, data.status);
+          let wakeError: string | null = null;
+          if (data.status === "active") {
+            try {
+              const wake = await hub(
+                "/v1/events",
+                { id: `business:wake:${id}:${randomUUID()}`, type: "company.business.wake", subject: id, detail: "{}" },
+                true,
+              );
+              if (!wake.routed?.length) wakeError = "经营已启用，但巡检规则未接单；请使用 company start 重启公司。";
+            } catch {
+              wakeError = "经营已启用，暂时无法立即派工；引擎恢复后由定期巡检接续。";
+            }
+          }
+          return send(200, { ...result, wakeError });
+        }
         if (url.pathname === "/api/tasks") {
           const id = taskId(data.id ?? `TASK-${randomUUID().replaceAll("-", "")}`);
           const request = taskRequest(data);
@@ -208,6 +235,7 @@ export async function startDashboard(directory: string, port = 3361) {
     origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
   } catch (error) {
     company.close();
+    businesses.close();
     throw error;
   }
   return {
@@ -216,6 +244,7 @@ export async function startDashboard(directory: string, port = 3361) {
       new Promise<void>((done, reject) => {
         server.close((error) => {
           company.close();
+          businesses.close();
           error ? reject(error) : done();
         });
         server.closeIdleConnections();

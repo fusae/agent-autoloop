@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { Company } from "../plugins/company/company.ts";
+import { Businesses } from "../plugins/company/business.ts";
 
 const cli = resolve(import.meta.dirname, "../bin/agent-company.ts");
 async function until<T>(get: () => T | Promise<T>, timeout = 120_000): Promise<NonNullable<T>> {
@@ -57,7 +58,7 @@ console.log('模拟部门完成。\\n\\n\`\`\`agent-autoloop\\n'+JSON.stringify(
       const rulesFile = join(directory, "hub/rules.json");
       const rules = JSON.parse(readFileSync(rulesFile, "utf8"));
       for (const [id, agent] of Object.entries(rules.agents) as [string, Record<string, unknown>][]) {
-        if (id !== "company-office") {
+        if (id !== "company-office" && id !== "company-business") {
           agent.use = "command";
           agent.command = [process.execPath, fixture];
         }
@@ -97,6 +98,31 @@ console.log('模拟部门完成。\\n\\n\`\`\`agent-autoloop\\n'+JSON.stringify(
         ["product", "engineering", "qa"],
       );
       assert.match(run("status", directory), /completed/);
+      const businesses = new Businesses(directory);
+      try {
+        businesses.save({
+          id: "test-app",
+          name: "测试业务",
+          description: "用于验证持续经营",
+          audience: "测试用户",
+          objective: "验证周期派工",
+          stage: "operating",
+        });
+        businesses.status("test-app", "active");
+        const response = await fetch(cfg.url + "/v1/events", {
+          method: "POST",
+          headers: { authorization: `Bearer ${cfg.source.key}`, "content-type": "application/json" },
+          body: JSON.stringify({ id: "wake-test", type: "company.business.wake", subject: "test-app", detail: "{}" }),
+        });
+        assert.equal(response.status, 200);
+        await until(
+          () => office!.tasks().filter((t) => t.id.startsWith("B-") && t.status === "awaiting_approval").length === 3,
+        );
+        assert.equal(businesses.list()[0].cycles.length, 3);
+        businesses.status("test-app", "paused");
+      } finally {
+        businesses.close();
+      }
     } catch (error) {
       throw new Error(`${(error as Error).message}\n${logs}`, { cause: error });
     } finally {

@@ -94,6 +94,23 @@ test("dashboard protects mutations, keeps keys server-side, handles offline stat
     assert.equal(denied.status, 403);
     const { csrf } = await (await fetch(dashboard.url + "/api/session")).json();
     const headers = { "Content-Type": "application/json", Origin: dashboard.url, "X-Company-CSRF": csrf };
+    const business = await fetch(dashboard.url + "/api/businesses", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        id: "app-a",
+        name: "APP A",
+        description: "提醒工具",
+        audience: "忙碌的人",
+        objective: "提升首次使用",
+        stage: "operating",
+      }),
+    });
+    assert.equal(business.status, 200);
+    assert.equal((await business.json()).status, "draft");
+    const businessView = await (await fetch(dashboard.url + "/api/overview")).json();
+    assert.equal(businessView.businesses[0].name, "APP A");
+    assert.equal(businessView.businesses[0].metrics.length, 0);
     const task = { id: "T2", title: "新需求", kind: "software", goal: "制作工具", acceptance: ["可运行"] };
     assert.equal(
       (await fetch(dashboard.url + "/api/tasks", { method: "POST", headers, body: JSON.stringify(task) })).status,

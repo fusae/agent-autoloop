@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Company, taskId, taskRequest } from "../plugins/company/company.ts";
-import { initialize } from "../plugins/company/setup.ts";
+import { initialize, ensureBusinessRules } from "../plugins/company/setup.ts";
 import { hubClient } from "../protocol/client.ts";
 
 const hubCLI = resolve(import.meta.dirname, "../bin/agent-autoloop.ts");
@@ -57,6 +57,7 @@ export async function companyCLI(args: string[]) {
   }
   if (command === "web" || command === "start") {
     if (command === "start" && !existsSync(directory)) await companyCLI(["init", directory]);
+    if (command === "start") ensureBusinessRules(directory);
     const port = Number(rest[0] ?? 3361);
     if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new Error("端口需要在 1024–65535 之间");
     const { startDashboard } = await import("./company-dashboard.ts");
@@ -96,6 +97,7 @@ export async function companyCLI(args: string[]) {
     return;
   }
   if (command === "up") {
+    ensureBusinessRules(directory);
     const child = spawn(process.execPath, [hubCLI, "up"], { env: environment(directory), stdio: "inherit" });
     const stop = () => child.kill("SIGTERM");
     process.on("SIGTERM", stop);

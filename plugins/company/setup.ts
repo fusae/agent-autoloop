@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, renameSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { departments, type Role } from "./company.ts";
 
@@ -10,6 +10,49 @@ const responsibilities: Record<Role, string> = {
   support: "整理客户问题、核对已有业务资料、制作回复草稿；不向客户发送消息，不承诺赔偿或退款。",
   finance: "依据提供的账目做分类、核对和预算报告；缺少原始凭证就标记缺失，不编造金额，不执行交易。",
 };
+export function businessRules(directory: string, worker: string) {
+  return {
+    agent: {
+      name: "经营巡检",
+      worker,
+      use: "company",
+      access: "read",
+      command: [join(directory, "company.json"), "business"],
+    },
+    rules: [
+      {
+        name: "公司经营-定期",
+        when: { cron: "*/15 * * * *" },
+        to: "company-business",
+        cwd: directory,
+        group: "company-business",
+        parallel: 1,
+        prompt: "检查经营周期。",
+        emits: { source: "company-inbox", types: ["company.task.create"] },
+      },
+      {
+        name: "公司经营-唤醒",
+        when: { source: "company-inbox", types: ["company.business.wake"] },
+        to: "company-business",
+        cwd: directory,
+        group: "company-business",
+        parallel: 1,
+        prompt: "检查经营周期。",
+        emits: { source: "company-inbox", types: ["company.task.create"] },
+      },
+    ],
+  };
+}
+export function ensureBusinessRules(directory: string) {
+  const path = join(directory, "hub/rules.json"),
+    rules = JSON.parse(readFileSync(path, "utf8"));
+  if (rules.agents["company-business"]) return;
+  const spec = businessRules(directory, rules.agents["company-office"].worker);
+  rules.agents["company-business"] = spec.agent;
+  rules.rules.push(...spec.rules);
+  writeFileSync(path + ".tmp", JSON.stringify(rules, null, 2) + "\n", { mode: 0o600 });
+  renameSync(path + ".tmp", path);
+}
 export function rolePrompt(role: Role) {
   return (
     `你是公司的${departments[role]}部门。先读工作区 AGENTS.md 和 knowledge/company.md，再读 handbook/${role}.md。\n` +
@@ -22,9 +65,11 @@ export function rolePrompt(role: Role) {
   );
 }
 export function makeRules(directory: string, worker: string, agent: "codex" | "claude") {
+  const business = businessRules(directory, worker);
   const roles = Object.keys(departments) as Role[];
   const sources = Object.fromEntries(["inbox", "office", ...roles].map((r) => [`company-${r}`, { name: `公司 ${r}` }]));
   const agents: Record<string, object> = {
+    "company-business": business.agent,
     "company-office": {
       name: "公司调度",
       worker,
@@ -69,7 +114,7 @@ export function makeRules(directory: string, worker: string, agent: "codex" | "c
     sources,
     agents,
     channels: {},
-    rules: [...controller, ...staff],
+    rules: [...controller, ...staff, ...business.rules],
   };
 }
 export function initialize(directory: string, worker = "local", agent: "codex" | "claude" = "codex") {

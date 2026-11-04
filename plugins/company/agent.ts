@@ -5,7 +5,12 @@ export default {
   command(turn: { command?: string[]; contextFile: string }) {
     const config = turn.command?.[0];
     if (!config) throw new Error("company Agent 的 command 需要公司配置文件路径");
-    return [process.execPath, join(import.meta.dirname, "run.ts"), config, turn.contextFile];
+    return [
+      process.execPath,
+      join(import.meta.dirname, turn.command?.[1] === "business" ? "business-run.ts" : "run.ts"),
+      config,
+      turn.contextFile,
+    ];
   },
   read(stdout: string, code: number | null, stderr: string) {
     if (code === null) return {};

@@ -35,6 +35,11 @@ const routes = {
 };
 const kindNames = { software: "产品研发", content: "内容运营", support: "客户服务", finance: "财务分析" };
 const labels = {
+  businesses: [
+    "BUSINESS OPERATIONS",
+    "让业务持续向前。",
+    "围绕产品经营：定目标、做推广、接住反馈，再用结果决定下一步。",
+  ],
   overview: ["COMPANY OVERVIEW", "公司的每一步，都在这里。", "看进展、处理决策，让团队继续向前。"],
   tasks: ["MISSION BOARD", "从一个目标，到一次交付。", "所有任务的负责人、进展与结果，放在一张看板上。"],
   approvals: ["YOUR DECISIONS", "关键的一步，等你拍板。", "核对交付结果，再决定接受还是退回修改。"],
@@ -47,7 +52,7 @@ let live = null,
   csrf = "",
   filter = "all",
   search = "",
-  view = "overview",
+  view = "businesses",
   pending = 0,
   draftId = "",
   lastRefresh = 0,
@@ -161,6 +166,50 @@ function demoData() {
     connected: true,
     at: new Date().toISOString(),
     tasks,
+    businesses: [
+      {
+        id: "demo-business",
+        name: "示例 · 灵感笔记",
+        stage: "operating",
+        status: "draft",
+        description: "虚构的笔记产品，用于体验持续经营界面。",
+        audience: "需要随时记录灵感的人",
+        objective: "验证内容是否带来首次使用",
+        channels: "场景内容与官网体验",
+        url: "",
+        metrics: [],
+        cycles: [],
+        routines: [
+          {
+            id: "growth",
+            title: "推广内容与转化实验",
+            kind: "content",
+            enabled: true,
+            cadence: "daily",
+            nextAt: new Date().toISOString(),
+            lastTask: null,
+          },
+          {
+            id: "feedback",
+            title: "用户反馈与留存维护",
+            kind: "support",
+            enabled: true,
+            cadence: "daily",
+            nextAt: new Date().toISOString(),
+            lastTask: null,
+          },
+          {
+            id: "review",
+            title: "经营复盘与下周计划",
+            kind: "content",
+            enabled: true,
+            cadence: "weekly",
+            nextAt: new Date().toISOString(),
+            lastTask: null,
+          },
+        ],
+      },
+    ],
     departments: roleNames,
     workflows: routes,
     cards: [
@@ -346,7 +395,7 @@ function render() {
   const d = data();
   if (!d) return;
   if (!isDemo) renderedState = signature(d);
-  view = location.hash.slice(1) || "overview";
+  view = location.hash.slice(1) || "businesses";
   if (!labels[view]) view = "overview";
   document.querySelectorAll("[data-view]").forEach((a) => {
     a.classList.toggle("active", a.dataset.view === view);
@@ -366,18 +415,21 @@ function render() {
   $("#nav-tasks").textContent = d.tasks.length;
   $("#nav-approvals").textContent = d.cards.filter((c) => c.kind === "ask").length;
   $("#stats").innerHTML = statsHTML(d);
-  $("#stats").hidden = view === "departments";
+  $("#stats").hidden = view === "departments" || view === "businesses";
   $("#view-content").innerHTML =
-    view === "overview"
-      ? `<div class="dashboard-grid"><div>${departmentHTML(d)}${tasksHTML(d)}</div><div class="right-column">${approvalsHTML(d)}${workflowHTML()}</div></div>`
-      : view === "tasks"
-        ? tasksHTML(d)
-        : view === "approvals"
-          ? approvalsHTML(d)
-          : view === "departments"
-            ? departmentHTML(d)
-            : spendingHTML(d);
-  $("#new-task").disabled = !d.connected;
+    view === "businesses"
+      ? businessesHTML(d)
+      : view === "overview"
+        ? `<div class="dashboard-grid"><div>${departmentHTML(d)}${tasksHTML(d)}</div><div class="right-column">${approvalsHTML(d)}${workflowHTML()}</div></div>`
+        : view === "tasks"
+          ? tasksHTML(d)
+          : view === "approvals"
+            ? approvalsHTML(d)
+            : view === "departments"
+              ? departmentHTML(d)
+              : spendingHTML(d);
+  $("#new-task").disabled = view !== "businesses" && !d.connected;
+  $("#new-task").innerHTML = view === "businesses" ? "＋ 新建业务" : "<span>＋</span> 下达新任务";
   $("#last-updated").textContent = (isDemo ? "示例数据 · " : "最后同步 ") + time(d.at) + " · 北京时间";
 }
 async function refresh() {
@@ -463,6 +515,7 @@ document.addEventListener("click", (event) => {
     $("#" + button.dataset.close).close();
     return;
   }
+  if (businessClick(button)) return;
   if (button.dataset.filter) {
     filter = button.dataset.filter;
     render();
@@ -588,7 +641,7 @@ document.addEventListener("input", (event) => {
     $("#task-rows").innerHTML = taskRows(data());
   }
 });
-$("#new-task").addEventListener("click", () => openForm());
+$("#new-task").addEventListener("click", () => (view === "businesses" ? openBusinessForm() : openForm()));
 $("#refresh").addEventListener("click", async () => {
   await refresh();
   if (!isDemo) render();
@@ -623,3 +676,197 @@ for (const dialog of document.querySelectorAll("dialog"))
     if (!document.hidden && !pending && Date.now() - lastRefresh > 4000) refresh();
   }, 5000);
 })();
+
+const businessStatus = { draft: "待启动", active: "经营中", paused: "已暂停" };
+const businessById = (id) => (data()?.businesses ?? []).find((b) => b.id === id);
+const metricNumber = (value) => (value == null ? "未记录" : Number(value).toLocaleString("zh-CN"));
+function businessesHTML(d) {
+  const businesses = d.businesses ?? [];
+  return `<div class="business-intro"><div><b>${businesses.length}</b> 条业务线 <span>· ${businesses.filter((b) => b.status === "active").length} 条持续经营</span></div><p>推广产出 → 人工发布与反馈 → 记录真实效果 → 调整下一轮</p></div>
+  <div class="business-grid">${
+    businesses
+      .map((b) => {
+        const metric = b.metrics?.[0],
+          tasks = d.tasks.filter((t) => (b.cycles ?? []).some((c) => c.task === t.id));
+        return `<article class="panel business-card"><div class="business-card-top"><span class="eyebrow">${b.stage === "operating" ? "RUNNING BUSINESS" : "NEW VENTURE"}</span><span class="badge ${b.status === "active" ? "active" : b.status === "paused" ? "blocked" : ""}">${businessStatus[b.status]}</span></div><h2>${esc(b.name)}</h2><p class="business-description">${esc(b.description)}</p><div class="business-objective"><span>当前目标</span><strong>${esc(b.objective)}</strong></div><div class="business-metrics"><div><span>新增用户</span><b>${metricNumber(metric?.newUsers)}</b></div><div><span>活跃用户</span><b>${metricNumber(metric?.activeUsers)}</b></div><div><span>收入 / 元</span><b>${metricNumber(metric?.revenue)}</b></div></div><p class="note">${metric ? "记录日期 " + esc(metric.date) + " · " + esc(metric.source) : "尚未接入经营数据；任务完成数不代表业务增长。"}</p><div class="business-routine-strip">${b.routines
+          .filter((r) => r.enabled)
+          .map((r) => `<span>${r.cadence === "daily" ? "每日" : "每周"} · ${esc(r.title)}</span>`)
+          .join(
+            "",
+          )}</div><div class="business-card-bottom"><span>${tasks.filter((t) => t.status === "active").length} 项执行中 · ${tasks.filter((t) => t.status === "awaiting_approval").length} 项待审批</span><button class="secondary" data-business="${esc(b.id)}">进入业务 →</button></div></article>`;
+      })
+      .join("") ||
+    '<section class="panel empty"><h2>从你正在做的产品开始。</h2><p>登记现有 APP，或新建一条待验证业务；每条业务拥有自己的目标、周期工作和效果记录。</p><button class="primary" data-business-create="true">建立第一条业务 →</button></section>'
+  }</div><section class="operating-note"><h3>团队如何持续经营？</h3><p>开启业务后，系统每 15 分钟检查到期工作；每日工作在北京时间 09:00 后派发，每周工作在上次执行 7 天后的 09:00 后派发。首次启动安排首轮。上一轮尚未完成时暂停该项后续派工，解决阻塞并完成审批后再接续。</p><p>关闭网页不会停止经营，电脑与公司引擎需要保持运行。当前交付为方案、内容与回复草稿；发布、投放和线上维护尚未接入。效果先手工记录，未来可接数据接口。</p></section>`;
+}
+function openBusinessForm(id) {
+  const form = $("#business-form");
+  form.reset();
+  $("#business-error").textContent = "";
+  const b = id ? businessById(id) : null;
+  form.elements.id.value = b?.id ?? "biz-" + crypto.randomUUID().replaceAll("-", "");
+  if (b)
+    for (const key of ["name", "stage", "description", "audience", "objective", "channels", "url"])
+      form.elements[key].value = b[key] ?? "";
+  $("#business-form-dialog").showModal();
+}
+function showBusiness(id) {
+  const b = businessById(id),
+    d = data();
+  if (!b) return;
+  const latest = b.metrics?.[0];
+  $("#business-content").innerHTML =
+    `<div class="dialog-heading"><div><p class="eyebrow">${b.stage === "operating" ? "持续经营" : "新业务验证"} / ${businessStatus[b.status]}</p><h2>${esc(b.name)}</h2></div><button class="close" data-close="business-detail-dialog" aria-label="关闭">×</button></div>
+  <p class="detail-goal">${esc(b.objective)}</p><p class="muted">目标用户：${esc(b.audience)}</p><p class="muted">渠道实验：${esc(b.channels || "待补充，第一轮由运营提出可验证方案")}</p>${b.url ? `<p><a class="text-link" href="${esc(b.url)}" target="_blank" rel="noopener noreferrer">打开产品网站 ↗</a></p>` : ""}
+  <div class="business-actions"><button class="secondary" data-business-edit="${esc(b.id)}">编辑经营档案</button><button class="secondary" data-metric="${esc(b.id)}">记录效果与反馈</button><button class="primary" data-business-status="${esc(b.id)}" data-status="${b.status === "active" ? "paused" : "active"}" ${b.status !== "active" && !d.connected ? "disabled" : ""}>${b.status === "active" ? "暂停新周期" : b.status === "paused" ? "恢复经营" : "启动经营"}</button></div>
+  <p class="note">启动会派发首轮工作并消耗模型额度。暂停仅停止新周期，已派发任务继续执行。</p>
+  <section class="detail-section"><h3>周期工作</h3>${b.routines
+    .map((r) => {
+      const task = d.tasks.find((t) => t.id === r.lastTask);
+      const waiting = r.lastTask && task?.status !== "completed";
+      return `<div class="routine-row"><div><strong>${esc(r.title)}</strong><p class="note">${!r.enabled ? "已关闭" : b.status !== "active" ? "业务未启动" : waiting ? `等待上一轮：${esc(names[task?.status] ?? "派发中")}` : "下次到期 " + time(r.nextAt)}</p>${task ? `<button class="text-button" data-task="${esc(task.id)}">查看上一轮交付 ↗</button>` : ""}</div><div><select aria-label="${esc(r.title)}频率" data-routine-business="${esc(b.id)}" data-routine="${r.id}"><option value="daily" ${r.cadence === "daily" ? "selected" : ""}>每天</option><option value="weekly" ${r.cadence === "weekly" ? "selected" : ""}>每周</option></select><button class="secondary" data-routine-toggle="${r.id}" data-routine-business="${esc(b.id)}">${r.enabled ? "停用" : "启用"}</button></div></div>`;
+    })
+    .join("")}</section>
+  <section class="detail-section"><h3>实际效果记录</h3>${(b.metrics ?? []).length ? b.metrics.map((m) => `<article class="report"><h4>${esc(m.date)} · ${esc(m.source)}</h4><p>新增用户 ${metricNumber(m.newUsers)} · 活跃用户 ${metricNumber(m.activeUsers)} · 收入 ¥ ${metricNumber(m.revenue)}</p><p>${esc(m.note || "未填写实验记录")}</p></article>`).join("") : '<p class="muted">没有实际数据。先记录基线，再评估推广是否有效；未上报不等于零。</p>'}</section>
+  <section class="detail-section"><h3>业务任务与交付</h3>${
+    (b.cycles ?? []).length
+      ? b.cycles
+          .map((c) => {
+            const t = d.tasks.find((t) => t.id === c.task);
+            return `<div class="history-row"><time>${time(c.at)}</time><span>${esc(t?.title ?? "等待派发")}</span>${t ? `<button class="text-button" data-task="${esc(t.id)}">${esc(names[t.status])} ↗</button>` : ""}</div>`;
+          })
+          .join("")
+      : '<p class="muted">启动经营后，所有周期任务与结果归入这条业务。</p>'
+  }</section>`;
+  if (!$("#business-detail-dialog").open) $("#business-detail-dialog").showModal();
+}
+function businessClick(button) {
+  if (button.dataset.businessCreate) {
+    openBusinessForm();
+    return true;
+  }
+  if (button.dataset.business) {
+    showBusiness(button.dataset.business);
+    return true;
+  }
+  if (button.dataset.businessEdit) {
+    openBusinessForm(button.dataset.businessEdit);
+    return true;
+  }
+  if (button.dataset.metric) {
+    const b = businessById(button.dataset.metric),
+      form = $("#metric-form");
+    form.reset();
+    $("#metric-error").textContent = "";
+    form.elements.id.value = b.id;
+    form.elements.date.value = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+    $("#metric-dialog").showModal();
+    return true;
+  }
+  if (button.dataset.businessStatus) {
+    action(button, async () => {
+      const id = button.dataset.businessStatus,
+        status = button.dataset.status;
+      if (isDemo) businessById(id).status = status;
+      else {
+        const result = await api(`/api/businesses/${id}/status`, { status });
+        toast(
+          result.wakeError ?? (status === "active" ? "经营已启动，团队将按周期接续工作" : "已暂停新周期"),
+          !!result.wakeError,
+        );
+        await refresh();
+      }
+      render();
+      showBusiness(id);
+    });
+    return true;
+  }
+  if (button.dataset.routineToggle) {
+    action(button, async () => {
+      const id = button.dataset.routineBusiness,
+        b = businessById(id),
+        r = b.routines.find((r) => r.id === button.dataset.routineToggle);
+      if (isDemo) r.enabled = !r.enabled;
+      else {
+        await api(`/api/businesses/${id}/routine`, { routineId: r.id, cadence: r.cadence, enabled: !r.enabled });
+        await refresh();
+      }
+      render();
+      showBusiness(id);
+    });
+    return true;
+  }
+  return false;
+}
+document.addEventListener("change", async (event) => {
+  const el = event.target;
+  if (!el.dataset.routine) return;
+  const id = el.dataset.routineBusiness,
+    r = businessById(id).routines.find((r) => r.id === el.dataset.routine),
+    old = r.cadence;
+  try {
+    if (isDemo) r.cadence = el.value;
+    else {
+      await api(`/api/businesses/${id}/routine`, { routineId: r.id, enabled: r.enabled, cadence: el.value });
+      await refresh();
+    }
+    render();
+    showBusiness(id);
+  } catch (error) {
+    el.value = old;
+    toast(error.message, true);
+  }
+});
+$("#business-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.target,
+    button = form.querySelector("[type=submit]");
+  button.disabled = true;
+  pending++;
+  try {
+    const request = Object.fromEntries(new FormData(form));
+    if (isDemo) {
+      demo.businesses ??= [];
+      const old = businessById(request.id);
+      if (old) Object.assign(old, request);
+      else demo.businesses.push({ ...request, status: "draft", routines: [], metrics: [], cycles: [] });
+    } else await api("/api/businesses", request);
+    await refresh();
+    $("#business-form-dialog").close();
+    render();
+    if ($("#business-detail-dialog").open) showBusiness(request.id);
+    toast("经营档案已保存");
+  } catch (error) {
+    $("#business-error").textContent = error.message;
+  } finally {
+    button.disabled = false;
+    pending--;
+  }
+});
+$("#metric-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.target,
+    button = form.querySelector("[type=submit]");
+  button.disabled = true;
+  pending++;
+  try {
+    const request = Object.fromEntries(new FormData(form));
+    for (const k of ["newUsers", "activeUsers", "revenue"]) request[k] = request[k] === "" ? null : Number(request[k]);
+    if (isDemo) {
+      const b = businessById(request.id);
+      b.metrics = [request, ...b.metrics.filter((m) => m.date !== request.date)].sort((a, b) =>
+        b.date.localeCompare(a.date),
+      );
+    } else await api(`/api/businesses/${request.id}/metrics`, request);
+    await refresh();
+    $("#metric-dialog").close();
+    render();
+    showBusiness(request.id);
+    toast("实际经营结果已记录");
+  } catch (error) {
+    $("#metric-error").textContent = error.message;
+  } finally {
+    button.disabled = false;
+    pending--;
+  }
+});

@@ -1,4 +1,4 @@
-> **公司 fork：** 使用 [公司版说明](examples/recipes/company/README.md) 的 `npm run company -- start "$HOME/.agent-company"`，打开 `http://127.0.0.1:3361`。它创建独立配置，不安装常驻服务；下文是原版安装流程，在线脚本仍指向上游。
+> **公司 fork：** 使用 [公司版说明](examples/recipes/company/README.md) 的 `npm run company -- start "$HOME/.agent-company"`，打开 `http://127.0.0.1:3361`。它创建独立配置，并为已有公司补齐经营巡检规则；新业务默认待启动，不安装常驻服务；下文是原版安装流程，在线脚本仍指向上游。
 
 # 安装说明（写给 Agent）
 

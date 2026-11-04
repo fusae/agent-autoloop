@@ -4,7 +4,7 @@ This fork of [KKKKhazix/agent-autoloop](https://github.com/KKKKhazix/agent-autol
 
 See the [company setup guide](examples/recipes/company/README.md) and [architecture](docs/company.md). With Node 24+, run `npm ci` and `npm run company:demo` for an isolated, model-free end-to-end demonstration. Real work requires a signed-in CLI agent. Acceptance archives a deliverable; it does not deploy, pay or send messages. Upstream installation instructions below install upstream, not this company fork.
 
-Start the local Chinese dashboard and task engine with `npm run company -- start "$HOME/.agent-company"`, then open **http://127.0.0.1:3361**. The dashboard shows tasks, departments, approvals, artifacts and reported spending. Its explicitly labeled demo mode never submits real work. `start` initializes a new directory automatically; Ctrl+C stops the processes and keeps your data.
+Start the local Chinese dashboard and task engine with `npm run company -- start "$HOME/.agent-company"`, then open **http://127.0.0.1:3361**. The dashboard shows tasks, departments, approvals, artifacts and reported spending. Business portfolios add persistent product briefs, daily/weekly growth and feedback work, manual outcome metrics and owner-controlled activation/pause. Native hub cron drives recurring tasks; unfinished cycles prevent more work from stacking. Publication, ad spending and product analytics are not connected. Its explicitly labeled demo mode never submits real work. `start` initializes a new directory automatically; Ctrl+C stops the processes and keeps your data.
 
 ---
 
