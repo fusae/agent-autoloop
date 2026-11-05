@@ -148,6 +148,44 @@ test("responsibilities, plans and follow-ups persist; replay and unchanged input
     );
     assert.deepEqual(ops.plan("waiting", businesses.list(), tasks, new Date("2026-11-05T02:00:00Z")), {});
     const work = second.events![0];
+    tasks[0].status = "blocked";
+    tasks.push({
+      id: work.subject,
+      ...JSON.parse(work.detail),
+      status: "active",
+      stage: 0,
+      assignment: 1,
+      approval: null,
+      reason: "制作草稿",
+      reports: [],
+    });
+    assert.equal(
+      ops.snapshot(businesses.list(), tasks, now)[0].staff.find((s) => s.role === "growth")!.workStatus,
+      "处理中",
+    );
+    tasks.pop();
+    tasks[0].status = "completed";
+    tasks.push({
+      id: work.subject,
+      ...JSON.parse(work.detail),
+      status: "active",
+      stage: 1,
+      assignment: 2,
+      approval: null,
+      reason: "草稿交验收",
+      reports: [],
+    });
+    const handoff = ops.snapshot(businesses.list(), tasks, now)[0];
+    assert.equal(handoff.staff.find((s) => s.role === "growth")!.workStatus, "等待交接");
+    assert.match(handoff.staff.find((s) => s.role === "growth")!.nextAction, /验收/);
+    // Disabled QA still shows its disabled state; enabling it exposes the current workflow stage.
+    ops.configure("app-a", "qa", { enabled: true }, now);
+    assert.equal(
+      ops.snapshot(businesses.list(), tasks, now)[0].staff.find((s) => s.role === "qa")!.workStatus,
+      "处理中",
+    );
+    ops.configure("app-a", "qa", { enabled: false }, now);
+    tasks.pop();
     tasks.push({
       id: work.subject,
       ...JSON.parse(work.detail),
@@ -227,7 +265,8 @@ test("idle staff skip unchanged data and wake on signals; invalid settings and e
   }
 });
 
-test("daily limits and per-project isolation survive later ticks", () => {
+// A real incident: inspections exhausted a shared daily quota and stopped already approved work.
+test("approved work continues after the legacy daily quota; pause, concurrency and project isolation remain", () => {
   const dir = mkdtempSync(join(tmpdir(), "autonomy-limits-"));
   const businesses = new Businesses(dir),
     ops = new Operations(dir);
@@ -266,16 +305,26 @@ test("daily limits and per-project isolation survive later ticks", () => {
     const first = ops.plan("first", businesses.list(), tasks, now);
     assert.equal(first.events?.length, 2);
     for (const e of first.events!) complete(e, { state: "action", actions: [proposal], reviews: [] });
-    assert.deepEqual(ops.plan("budget", businesses.list(), tasks, now), {});
+    businesses.status("app-b", "paused", now);
+    const immediate = ops.plan("budget", businesses.list(), tasks, now);
+    assert.equal(immediate.events?.length, 1);
+    assert.equal(JSON.parse(immediate.events![0].detail).kind, "internal-content");
+    assert.match(JSON.parse(immediate.events![0].detail).goal, /app-a.json/);
     const snapshot = ops.snapshot(businesses.list(), tasks, now);
-    assert.ok(snapshot.every((p) => p.plans.length === 1 && p.todayTasks === 1));
+    assert.ok(snapshot.every((p) => p.plans.length === 1));
+    assert.equal(snapshot.find((p) => p.business === "app-a")!.todayTasks, 2);
+    assert.equal(snapshot.find((p) => p.business === "app-b")!.plans[0].status, "planned");
+    assert.match(
+      snapshot.find((p) => p.business === "app-b")!.staff.find((s) => s.role === "growth")!.nextAction,
+      /暂停/,
+    );
     assert.notEqual(snapshot[0].plans[0].id, snapshot[1].plans[0].id);
     assert.doesNotMatch(JSON.stringify(snapshot), /DO-NOT-EXPOSE/);
     const tomorrow = new Date("2026-11-05T02:00:00Z");
-    businesses.status("app-b", "paused", now);
+    businesses.status("app-b", "active", now);
     const work = ops.plan("next-day", businesses.list(), tasks, tomorrow);
     assert.equal(work.events?.length, 1);
-    assert.match(JSON.parse(work.events![0].detail).goal, /app-a.json/);
+    assert.match(JSON.parse(work.events![0].detail).goal, /app-b.json/);
     assert.deepEqual(ops.plan("again", businesses.list(), tasks, tomorrow), {});
   } finally {
     ops.close();

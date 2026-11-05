@@ -964,7 +964,7 @@ function employeesHTML(d) {
               .map((s) => {
                 const current = s.currentTask,
                   waiting = current && ["active", "blocked", "awaiting_approval", "rejected"].includes(current.status);
-                const status = !p.enabled
+                const status = s.workStatus ?? (!p.enabled
                   ? "未启用"
                   : !s.enabled
                     ? "已停用"
@@ -974,8 +974,8 @@ function employeesHTML(d) {
                         ? (names[current.status] ?? "待派工")
                         : s.lastTask && !current
                           ? "待接单"
-                          : "待检查";
-                return `<article class="panel employee-card"><div class="panel-heading"><h3>${roleNames[s.role]}${s.role === p.owner ? " · 项目负责人" : ""}</h3><span class="badge ${waiting && current.status === "blocked" ? "blocked" : ""}">${esc(status)}</span></div><p>${esc(s.duty)}</p><details><summary>检查事项</summary><ul>${s.checks.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></details><dl class="employee-facts"><div><dt>检查周期</dt><dd>${s.cadence === "daily" ? "每天" : "每周"}</dd></div><div><dt>最近检查</dt><dd>${s.lastChecked ? time(s.lastChecked) : "尚未检查"}</dd></div><div><dt>下次检查</dt><dd>${!s.enabled || !p.enabled || p.status !== "active" ? "—" : waiting ? "当前任务结束后" : time(s.nextAt)}</dd></div></dl><p class="employee-finding">${esc(waiting ? current.reason || "执行中" : s.finding)}</p><div class="business-actions"><button class="secondary" data-employee="${s.role}" data-project="${esc(p.business)}">责任档案</button>${current ? `<button class="text-button" data-task="${esc(current.id)}">${waiting ? "当前任务" : "最近任务"}</button>` : ""}</div></article>`;
+                          : "待检查");
+                return `<article class="panel employee-card"><div class="panel-heading"><h3>${roleNames[s.role]}${s.role === p.owner ? " · 项目负责人" : ""}</h3><span class="badge ${waiting && current.status === "blocked" ? "blocked" : ""}">${esc(status)}</span></div><p>${esc(s.duty)}</p><details><summary>检查事项</summary><ul>${s.checks.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></details><dl class="employee-facts"><div><dt>检查周期</dt><dd>${s.cadence === "daily" ? "每天" : "每周"}</dd></div><div><dt>最近检查</dt><dd>${s.lastChecked ? time(s.lastChecked) : "尚未检查"}</dd></div><div><dt>下次检查</dt><dd>${!s.enabled || !p.enabled || p.status !== "active" ? "—" : waiting ? "当前任务结束后" : time(s.nextAt)}</dd></div></dl><p class="employee-finding">${esc(s.nextAction ?? (waiting ? current.reason || "执行中" : s.finding))}</p><div class="business-actions"><button class="secondary" data-employee="${s.role}" data-project="${esc(p.business)}">责任档案</button>${current ? `<button class="text-button" data-task="${esc(current.id)}">${waiting ? "当前任务" : "最近任务"}</button>` : ""}</div></article>`;
               })
               .join("")}</div></section>`,
         )
@@ -1008,7 +1008,7 @@ function plansHTML(d) {
 function operationsBusinessHTML(id) {
   const p = operationById(id);
   if (!p) return '<section class="detail-section"><h3>员工职责</h3><p>等待同步</p></section>';
-  return `<section class="detail-section"><div class="panel-heading"><h3>员工职责</h3><button class="text-button" data-project-view="employees" data-project="${esc(id)}">全部员工</button></div><div class="plan-meta"><span>负责人：${roleNames[p.owner]}</span><span>今日派工 ${p.todayTasks} / ${p.maxDailyTasks}</span><span>在途上限 ${p.maxActive}</span><button class="text-button" data-settings="${esc(id)}">派工额度</button></div>${p.staff.map((s) => `<div class="routine-row"><div><strong>${roleNames[s.role]}</strong><p class="note">${esc(s.duty)}</p><p class="note">${esc(s.finding)}</p></div><button class="secondary" data-employee="${s.role}" data-project="${esc(id)}">编辑</button></div>`).join("")}</section><section class="detail-section"><div class="panel-heading"><h3>项目计划</h3><button class="text-button" data-project-view="plans" data-project="${esc(id)}">全部计划</button></div><p>${p.plans.filter((a) => a.status === "working").length} 项执行中 · ${p.plans.filter((a) => ["observing", "review"].includes(a.status)).length} 项效果跟进 · ${p.alerts.length} 项异常</p></section><section class="detail-section"><h3>业务动态</h3>${
+  return `<section class="detail-section"><div class="panel-heading"><h3>员工职责</h3><button class="text-button" data-project-view="employees" data-project="${esc(id)}">全部员工</button></div><div class="plan-meta"><span>负责人：${roleNames[p.owner]}</span><span>今日派工 ${p.todayTasks}</span><span>在途上限 ${p.maxActive}</span><button class="text-button" data-settings="${esc(id)}">任务并发</button></div>${p.staff.map((s) => `<div class="routine-row"><div><strong>${roleNames[s.role]}</strong><p class="note">${esc(s.duty)}</p><p class="note">${esc(s.finding)}</p></div><button class="secondary" data-employee="${s.role}" data-project="${esc(id)}">编辑</button></div>`).join("")}</section><section class="detail-section"><div class="panel-heading"><h3>项目计划</h3><button class="text-button" data-project-view="plans" data-project="${esc(id)}">全部计划</button></div><p>${p.plans.filter((a) => a.status === "working").length} 项执行中 · ${p.plans.filter((a) => ["observing", "review"].includes(a.status)).length} 项效果跟进 · ${p.alerts.length} 项异常</p></section><section class="detail-section"><h3>业务动态</h3>${
     p.signals.length
       ? p.signals
           .slice(-5)
@@ -1073,7 +1073,6 @@ function operationsClick(button) {
     f.querySelector(".form-error").textContent = "";
     if (type === "settings") {
       const p = operationById(id);
-      f.elements.maxDailyTasks.value = p.maxDailyTasks;
       f.elements.maxActive.value = p.maxActive;
     }
     $("#" + type + "-dialog").showModal();
@@ -1104,7 +1103,6 @@ for (const kind of ["employee", "signal", "settings"])
           .filter(Boolean);
       }
       if (kind === "settings") {
-        request.maxDailyTasks = Number(request.maxDailyTasks);
         request.maxActive = Number(request.maxActive);
       }
       await api(`/api/businesses/${request.id}/${kind}`, request);
@@ -1136,8 +1134,8 @@ function ceoHTML(d) {
         : "自动修复中"
       : latest?.status === "active"
         ? "处理中"
-        : "等待业务变化";
-  return `<section class="panel"><div class="panel-heading"><h2>管理状态</h2><span class="badge">${channel?.online ? "飞书已连接" : "飞书未连接"}</span></div><div class="approval-list"><p>${management}${repair ? ` · 修复 ${repair.attempts} / 2 次` : ""}</p><p class="note">${c.nextReviewAt ? `下次管理复查 ${time(c.nextReviewAt)}；新结果和回复会提前唤醒` : "等待首次检查"}</p>${c.lastTask ? `<button class="text-button" data-task="${esc(c.lastTask)}">最近管理任务</button>` : ""}</div></section>
+        : c.stalled ? "管理停滞" : "等待业务变化";
+  return `<section class="panel"><div class="panel-heading"><h2>管理状态</h2><span class="badge">${channel?.online ? "飞书已连接" : "飞书未连接"}</span></div><div class="approval-list"><p>${management}${repair ? ` · 修复 ${repair.attempts} / 2 次` : ""}</p><p class="note">${c.stalled ? esc(c.stalled.reason) : c.nextReviewAt ? `下次管理复查 ${time(c.nextReviewAt)}；新结果和回复会提前唤醒` : "等待首次检查"}</p>${c.lastTask ? `<button class="text-button" data-task="${esc(c.lastTask)}">最近管理任务</button>` : ""}</div></section>
   <section class="panel"><div class="panel-heading"><h2>数据连接</h2></div><div class="approval-list">${(d.sources ?? []).map((s) => `<article class="report"><h3>${esc(business(s.business))}</h3><p>${{ ready: "已更新", partial: "部分读取失败", unavailable: "读取失败" }[s.status]} · ${time(s.checkedAt)}</p><p class="note">下次读取 ${time(s.nextAt)} · 只读汇总</p></article>`).join("") || '<p class="muted">未配置</p>'}</div></section>
   <section class="panel"><div class="panel-heading"><h2>业务目标</h2></div><div class="approval-list">${
     Object.entries(c.briefs)

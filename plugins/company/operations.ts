@@ -182,6 +182,8 @@ export class Operations {
       ["maxDailyTasks", 50],
       ["maxActive", 6],
     ] as const) {
+      // Older clients may still send this field; retain it without using it as a dispatch gate.
+      if (key === "maxDailyTasks" && data[key] === undefined) continue;
       if (!Number.isInteger(data[key]) || Number(data[key]) < 1 || Number(data[key]) > max)
         throw new Error("派工额度超出范围");
       p[key] = Number(data[key]);
@@ -210,16 +212,71 @@ export class Operations {
       const p = this.get(b.id, new Date(b.createdAt));
       return {
         ...p,
-        owner: this.executive().enabled ? "ceo" : p.owner,
+        owner: p.owner,
+        manager: this.executive().enabled ? "ceo" : null,
         name: b.name,
         enabled: !!b.autonomy,
         status: b.status,
         todayTasks: p.activity.filter((a) => day(new Date(a.at)) === day(now)).length,
         staff: p.staff.map((s) => {
-          const work = p.plans.find((a) => a.owner === s.role && ["working", "blocked"].includes(a.status));
-          const t = tasks.find((t) => t.id === (work?.task ?? s.lastTask));
+          const assigned = p.activity
+            .map((a) => tasks.find((t) => t.id === a.task))
+            .sort((a, b) => Number(b?.status === "active") - Number(a?.status === "active"))
+            .find(
+              (t) =>
+                t &&
+                ["active", "blocked", "awaiting_approval"].includes(t.status) &&
+                workflows[t.kind]?.[t.stage] === s.role,
+            );
+          const work =
+            p.plans.find((a) => assigned && a.task === assigned.id) ??
+            p.plans.find(
+              (a) => a.owner === s.role && ["planned", "working", "blocked", "proposed", "review"].includes(a.status),
+            );
+          const t = assigned ?? tasks.find((t) => t.id === (work?.task ?? s.lastTask));
           const currentTask = t ? (({ approval: _approval, ...safe }) => safe)(t) : null;
-          return { ...s, currentTask };
+          const issue = this.executive().issues.find(
+            (i) => i.business === b.id && i.role === s.role && i.state !== "answered",
+          );
+          let workStatus = "等待新情况",
+            nextAction = "暂无待执行工作；新资料或到期复盘会唤醒";
+          if (!b.autonomy || b.status !== "active" || !s.enabled) {
+            workStatus = !s.enabled ? "已停用" : b.status === "paused" ? "已暂停" : "未启动";
+            nextAction = `${workStatus}${work ? `：${work.title}` : ""}`;
+          } else if (assigned) {
+            workStatus =
+              assigned.status === "blocked" ? "受阻" : assigned.status === "awaiting_approval" ? "待审批" : "处理中";
+            nextAction = assigned.status === "blocked" ? assigned.reason : assigned.title;
+          } else if (work) {
+            workStatus =
+              work.status === "working"
+                ? "等待交接"
+                : work.status === "proposed"
+                  ? "待 CEO 审核"
+                  : work.status === "blocked"
+                    ? "受阻"
+                    : work.status === "review"
+                      ? "待复盘"
+                      : "待派工";
+            const busy = p.activity.filter(
+              (a) => !tasks.some((t) => t.id === a.task) || tasks.some((t) => t.id === a.task && t.status === "active"),
+            ).length;
+            const reason =
+              work.status === "planned"
+                ? busy >= p.maxActive
+                  ? "等待在途任务完成"
+                  : "等待下一次派工检查"
+                : work.status === "blocked"
+                  ? work.result
+                  : work.status === "working" && t
+                    ? `${departments[workflows[t.kind]?.[t.stage]] ?? "下一岗位"}处理中`
+                    : workStatus;
+            nextAction = `${work.title}：${reason}`;
+          } else if (issue) {
+            workStatus = issue.state === "owner" ? "待负责人答复" : "待 CEO 处理";
+            nextAction = issue.question;
+          }
+          return { ...s, currentTask, workStatus, nextAction };
         }),
         alerts: p.plans
           .filter(
@@ -249,14 +306,15 @@ export class Operations {
       JSON.stringify(
         {
           business: b,
-          owner: this.executive().enabled ? "ceo" : p.owner,
+          owner: p.owner,
+          manager: this.executive().enabled ? "ceo" : null,
           ceoGoal: this.executive().briefs[b.id] ?? null,
           knowledge: this.executive().knowledge.filter((k) => k.business === b.id),
           staff: p.staff,
           plans: p.plans,
           signals: p.signals,
           recent,
-          limits: { maxDailyTasks: p.maxDailyTasks, maxActive: p.maxActive },
+          limits: { maxActive: p.maxActive },
           evidence: sourceSnapshots(this.directory)[b.id] ?? null,
           sources: {
             metrics: sourceSnapshots(this.directory)[b.id]?.database.data
@@ -576,7 +634,8 @@ export class Operations {
           decisions: c.decisions.slice(-10),
           retryCounts: c.retries,
           repairs: c.repairs,
-          limits: { dailyCeoTasks: 24, blockedRetries: 2 },
+          limits: { unchangedReviews: 2, blockedRetries: 2 },
+          stalled: c.stalled,
         },
         null,
         2,
@@ -590,13 +649,42 @@ export class Operations {
     if (!active.length) return;
     const latest = tasks.find((t) => t.id === c.lastTask);
     if (c.lastTask && latest?.status !== "completed") return;
-    if (c.runs.filter((r) => day(new Date(r.at)) === day(now)).length >= 24) return;
     const fingerprint = this.ceoInputs(c, businesses, tasks, now);
     const agenda =
       c.issues.some((i) => i.state === "open") ||
       active.some((b) => this.get(b.id, now).plans.some((p) => p.status === "proposed" || p.status === "review"));
-    if (fingerprint === c.fingerprint && !(agenda && c.nextReviewAt && Date.parse(c.nextReviewAt) <= now.getTime()))
-      return;
+    const unchanged = fingerprint === c.fingerprint;
+    if (unchanged) {
+      if (!(agenda && c.nextReviewAt && Date.parse(c.nextReviewAt) <= now.getTime())) return;
+      if ((c.unchangedReviews ?? 0) >= 2) {
+        if (c.stalled?.fingerprint !== fingerprint) {
+          const pending = [
+            ...c.issues.filter((i) => i.state === "open").map((i) => i.question),
+            ...active.flatMap((b) =>
+              this.get(b.id, now)
+                .plans.filter((p) => p.status === "proposed" || p.status === "review")
+                .map((p) => p.title),
+            ),
+          ];
+          c.stalled = {
+            fingerprint,
+            at: now.toISOString(),
+            reason: `相同资料已复查两次，仍无处理结果：${pending.slice(0, 3).join("；")}`,
+          };
+          receipt.notice ??= [];
+          receipt.notice.push({
+            key: `ceo-stalled-${fingerprint}`,
+            title: "CEO · 管理停滞",
+            text: c.stalled.reason + "。已停止重复复查，现有工作继续；新资料或任务结果到达后自动恢复。",
+          });
+        }
+        return;
+      }
+    } else {
+      c.unchangedReviews = 0;
+      delete c.stalled;
+    }
+    if (unchanged) c.unchangedReviews = (c.unchangedReviews ?? 0) + 1;
     const id = "CEO-" + hash(`${fingerprint}:${c.lastTask ?? "initial"}`);
     this.writeCEOContext(c, businesses, tasks, now, join(this.directory, "workspace/knowledge/ceo.json"));
     const request = taskRequest({
@@ -744,8 +832,7 @@ export class Operations {
           b.status === "active" &&
           (!chief.enabled || !!chief.briefs[b.id]) &&
           (receipt.events?.length ?? 0) < 50 &&
-          busy().length < p.maxActive &&
-          p.activity.filter((a) => day(new Date(a.at)) === day(now)).length < p.maxDailyTasks;
+          busy().length < p.maxActive;
         const emit = (id: string, role: Role, kind: "check" | "work", request: ReturnType<typeof taskRequest>) => {
           receipt.events ??= [];
           receipt.events.push({
@@ -787,21 +874,7 @@ export class Operations {
           if (!capacity() || !s.enabled) continue;
           const previous = tasks.find((t) => t.id === s.lastTask);
           if (s.lastTask && previous?.status !== "completed") continue;
-          if (
-            chief.enabled &&
-            chief.issues.some(
-              (i) =>
-                i.business === b.id &&
-                i.role === s.role &&
-                (i.state === "open" || i.state === "owner") &&
-                !(
-                  chief.knowledge.some((k) => k.business === b.id && k.source === "owner" && k.at > i.at) ||
-                  (sourceSnapshots(this.directory)[b.id]?.changedAt ?? "") > i.at
-                ),
-            )
-          )
-            continue;
-          if (p.plans.some((a) => a.owner === s.role && ["planned", "working", "blocked"].includes(a.status))) continue;
+          if (p.plans.some((a) => a.owner === s.role && ["planned", "working"].includes(a.status))) continue;
           if (busy().some((a) => a.role === s.role)) continue;
           const reviews = p.plans
             .filter(
@@ -834,6 +907,22 @@ export class Operations {
           );
           const changed = fingerprint !== s.fingerprint;
           const newReviews = reviews.some((key) => !(s.reviewKeys ?? []).includes(key));
+          if (
+            !changed &&
+            !newReviews &&
+            chief.enabled &&
+            chief.issues.some(
+              (i) =>
+                i.business === b.id &&
+                i.role === s.role &&
+                (i.state === "open" || i.state === "owner") &&
+                !(
+                  chief.knowledge.some((k) => k.business === b.id && k.source === "owner" && k.at > i.at) ||
+                  (sourceSnapshots(this.directory)[b.id]?.changedAt ?? "") > i.at
+                ),
+            )
+          )
+            continue;
           if (!changed && !newReviews && Date.parse(s.nextAt) > now.getTime()) continue;
           if (!changed && !reviews.length && s.cadence === "daily") {
             s.nextAt = after(now, 1);

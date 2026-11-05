@@ -23,6 +23,51 @@ const action = {
   measure: "首次使用人数",
 };
 const decision = (more = {}) => ({ briefs: [], directives: [], approvals: [], answers: [], escalations: [], ...more });
+
+// New decisions must not stop at 24/day; identical unresolved agendas must not spin forever instead.
+test("CEO handles new information beyond the old daily cap, bounds unchanged reviews, and wakes on new facts", () =>
+  fixture((b, o, c, send) => {
+    for (const role of ["product", "engineering", "qa", "growth", "support", "finance"])
+      o.configure("app", role, { enabled: false }, now);
+    const finish = (e: any, at: Date, key: string) => {
+      send("company-inbox", e.type, e.subject, JSON.parse(e.detail));
+      send("company-ceo", "company.result", e.subject, {
+        assignment: 1,
+        verdict: "pass",
+        summary: "已核对，问题仍未解决",
+        artifacts: [],
+        evidence: ["档案"],
+        executive: decision({ briefs: [{ business: "app", objective: "维护现有业务" }] }),
+      });
+      o.plan("settle-" + key, b.list(), c.tasks(), at, [], 4);
+    };
+    for (let i = 0; i < 26; i++) {
+      const at = new Date(now.getTime() + i * 60000);
+      o.signal("app", { title: "新事实" + i, detail: "真实业务输入变化" + i, source: "测试", role: "all" }, at);
+      const e = o.plan("new-" + i, b.list(), c.tasks(), at).events?.find((e) => JSON.parse(e.detail).kind === "ceo");
+      assert.ok(e, "new facts must still reach CEO after 24 tasks");
+      finish(e, at, "new-" + i);
+    }
+    for (let i = 1; i <= 2; i++) {
+      const at = new Date(now.getTime() + (30 + i * 31) * 60000);
+      const e = o
+        .plan("unchanged-" + i, b.list(), c.tasks(), at)
+        .events?.find((e) => JSON.parse(e.detail).kind === "ceo");
+      assert.ok(e);
+      finish(e, at, "unchanged-" + i);
+    }
+    const later = new Date(now.getTime() + 125 * 60000);
+    const paused = o.plan("unchanged-stop", b.list(), c.tasks(), later);
+    assert.equal(paused.events, undefined);
+    assert.equal(paused.notice?.length, 1);
+    assert.ok(o.executive().stalled);
+    assert.deepEqual(o.plan("unchanged-again", b.list(), c.tasks(), new Date(later.getTime() + 60000)), {});
+    o.signal("app", { title: "新进展", detail: "补充了所需来源", source: "测试" }, later);
+    assert.ok(
+      o.plan("wake-again", b.list(), c.tasks(), later).events?.some((e) => JSON.parse(e.detail).kind === "ceo"),
+    );
+    assert.equal(o.executive().stalled, undefined);
+  }));
 function fixture(
   fn: (
     b: Businesses,
@@ -290,6 +335,49 @@ test("deep result chains save CEO decisions but defer new work to the next indep
     const next = o.plan("tick", b.list(), c.tasks(), now, [], 0);
     assert.ok(next.events?.some((e) => JSON.parse(e.detail).kind === "internal-content"));
     assert.equal(o.snapshot(b.list(), c.tasks(), now)[0].plans[0].status, "working");
+    assert.equal(o.snapshot(b.list(), c.tasks(), now)[0].owner, "product");
+  }));
+
+test("new project evidence wakes an employee with an unresolved question without repeating unchanged checks", () =>
+  fixture((b, o, c, send) => {
+    for (const role of ["engineering", "qa", "growth", "support", "finance"])
+      o.configure("app", role, { enabled: false }, now);
+    const e = o.plan("first", b.list(), c.tasks(), now).events![0];
+    send("company-inbox", e.type, e.subject, JSON.parse(e.detail));
+    send("company-ceo", "company.result", e.subject, {
+      assignment: 1,
+      verdict: "pass",
+      summary: "明确目标",
+      artifacts: [],
+      evidence: ["档案"],
+      executive: decision({ briefs: [{ business: "app", objective: "确认入口" }] }),
+    });
+    const check = o
+      .plan("staff", b.list(), c.tasks(), now)
+      .events!.find((e) => JSON.parse(e.detail).kind === "check-product")!;
+    send("company-inbox", check.type, check.subject, JSON.parse(check.detail));
+    send("company-product", "company.result", check.subject, {
+      assignment: 1,
+      verdict: "pass",
+      summary: "缺测试记录",
+      artifacts: [],
+      evidence: ["无结果"],
+      inspection: {
+        state: "blocked",
+        actions: [],
+        reviews: [],
+        questions: [{ key: "record", question: "测试记录在哪里？", context: "资料未提供" }],
+      },
+    });
+    o.plan("record", b.list(), c.tasks(), now, [], 4);
+    assert.ok(o.executive().issues.some((i) => i.role === "product" && i.state === "open"));
+    assert.ok(
+      !o.plan("idle", b.list(), c.tasks(), now).events?.some((e) => JSON.parse(e.detail).kind === "check-product"),
+    );
+    o.signal("app", { title: "记录已更新", detail: "新增专项测试记录", source: "资料更新", role: "product" }, now);
+    assert.ok(
+      o.plan("new-record", b.list(), c.tasks(), now).events?.some((e) => JSON.parse(e.detail).kind === "check-product"),
+    );
   }));
 
 // A descriptive escalation key caused a real CEO report to be rejected.

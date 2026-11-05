@@ -8,7 +8,7 @@ Start the local Chinese dashboard and task engine with `npm run company -- start
 
 Enable CEO management with `npm run company -- ceo "$HOME/.agent-company"`, configure the owner DM with `npm run company -- feishu "$HOME/.agent-company" ou_OWNER`, then restart. The CEO sets objectives, approves staff proposals, resolves blockers and escalates only unresolved questions to the owner. Reply `#42 your answer`; replies persist as project knowledge. Checks run every five minutes; the company Feishu channel polls owner replies every 30 seconds without a second WebSocket listener. See [company architecture](docs/company.md).
 
-Source snapshots refresh hourly and preserve last-success timestamps on failure. Malformed reports receive two bounded repair attempts; completed work schedules outcome follow-ups. CEO management is capped at 24 new tasks per day. Run the hub and dashboard as OS user services for restart persistence; see [continuous operation and data sources](docs/company.md#持续运行与故障恢复).
+Source snapshots refresh hourly and preserve last-success timestamps on failure. Malformed reports receive two bounded repair attempts; completed work schedules outcome follow-ups. Approved work and CEO management have no daily task-count cap. Identical unresolved CEO agendas get at most two additional reviews before a stalled-management notice; new facts wake management again. Run the hub and dashboard as OS user services for restart persistence; see [continuous operation and data sources](docs/company.md#持续运行与故障恢复).
 
 ---
 

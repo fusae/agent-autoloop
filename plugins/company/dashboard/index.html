@@ -190,13 +190,12 @@
     <dialog id="settings-dialog" class="form-dialog">
       <form id="settings-form">
         <div class="dialog-heading">
-          <h2>派工额度</h2>
+          <h2>任务并发</h2>
           <button type="button" class="close" data-close="settings-dialog" aria-label="关闭">×</button>
         </div>
         <input type="hidden" name="id" />
-        <label>每日任务上限<input name="maxDailyTasks" type="number" min="1" max="50" required /></label>
         <label>在途任务上限<input name="maxActive" type="number" min="1" max="6" required /></label>
-        <p class="note">包括员工检查与内部任务；不等于模型费用上限。</p>
+        <p class="note">控制同时在途的任务；已批准工作完成一项后继续下一项，不按每日次数停工。</p>
         <p class="form-error" role="alert"></p>
         <div class="form-actions"><button type="submit" class="primary">保存</button></div>
       </form>

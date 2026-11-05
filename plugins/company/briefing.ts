@@ -64,6 +64,7 @@ export function companyBriefing(directory: string, task?: string) {
             enabled: leader.enabled,
             briefs: leader.briefs,
             nextReviewAt: leader.nextReviewAt,
+            stalled: leader.stalled,
             issues: leader.issues,
             questions: leader.questions,
             knowledge: leader.knowledge,

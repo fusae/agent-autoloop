@@ -51,6 +51,8 @@ export type Leadership = {
   answeredCards: number[];
   retries: Record<string, number>;
   nextReviewAt?: string;
+  unchangedReviews?: number;
+  stalled?: { fingerprint: string; at: string; reason: string };
   pendingRetries?: { task: string; decision: string }[];
   repairs?: Record<
     string,
