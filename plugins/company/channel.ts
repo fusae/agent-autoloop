@@ -21,6 +21,7 @@ type Saved = {
   acknowledged?: boolean;
   interactive?: boolean;
   cardRef?: string;
+  layout?: number;
 };
 type State = { cards: Record<string, Saved>; seen: string[]; cursor: string };
 // Execution recovery is bookkeeping, not evidence of a business result.
@@ -58,7 +59,31 @@ function interactiveCard(card: Card) {
         behaviors: [{ type: "callback", value: { card: card.id, version: card.version, choice } }],
       })),
     );
-    elements.push({ tag: "div", text: { tag: "plain_text", content: `补充说明：回复 #${card.id} 加上内容` } });
+    elements.push({
+      tag: "form",
+      name: "owner_reply",
+      elements: [
+        {
+          tag: "input",
+          name: "reply",
+          label: { tag: "plain_text", content: "补充意见" },
+          placeholder: { tag: "plain_text", content: "输入你的决定或补充说明" },
+          input_type: "multiline_text",
+          rows: 3,
+          width: "fill",
+          max_length: 1000,
+          required: true,
+        },
+        {
+          tag: "button",
+          name: "submit_reply",
+          text: { tag: "plain_text", content: "提交" },
+          type: "primary",
+          form_action_type: "submit",
+          behaviors: [{ type: "callback", value: { card: card.id, version: card.version, action: "reply" } }],
+        },
+      ],
+    });
   } else {
     const answer = card.answer || (card.choice !== null ? card.options[card.choice] : "");
     if (answer) elements.push({ tag: "div", text: { tag: "plain_text", content: `你的决定：${answer}` } });
@@ -117,7 +142,8 @@ export class CompanyFeishu {
   }
   async deliver(card: Card) {
     let saved = this.state.cards[card.id];
-    const promote = this.cards && !saved?.interactive && card.kind === "ask" && card.state === "open";
+    const promote =
+      this.cards && (!saved?.interactive || saved.layout !== 2) && card.kind === "ask" && card.state === "open";
     if (!saved || saved.version < card.version || promote) {
       // Old closed states have already sent their acknowledgement; do not replay them on upgrade.
       const acknowledged = saved?.acknowledged ?? (!!saved && saved.version > 1 && !saved.open);
@@ -167,6 +193,7 @@ export class CompanyFeishu {
       }
       saved = {
         interactive: native || saved?.interactive,
+        layout: native ? 2 : saved?.layout,
         cardRef,
         ref,
         version: card.version,
@@ -190,8 +217,7 @@ export class CompanyFeishu {
       this.state.seen.includes(id) ||
       event?.operator?.open_id !== this.owner ||
       !Number.isSafeInteger(value?.card) ||
-      !Number.isSafeInteger(value?.version) ||
-      !Number.isSafeInteger(value?.choice)
+      !Number.isSafeInteger(value?.version)
     )
       return false;
     const saved = this.state.cards[value.card];
@@ -201,13 +227,34 @@ export class CompanyFeishu {
       !saved.ref ||
       !saved.cardRef ||
       event.context?.open_message_id !== saved.cardRef ||
-      saved.version !== value.version ||
-      value.choice < 0 ||
-      value.choice >= saved.options.length
+      saved.version !== value.version
     )
       return false;
+    let answer: { text: string } | { choice: number };
+    if (value.action === "reply") {
+      const text = event.action.form_value?.reply;
+      if (
+        value.choice !== undefined ||
+        event.action.tag !== "button" ||
+        event.action.name !== "submit_reply" ||
+        typeof text !== "string" ||
+        !text.trim() ||
+        text.length > 1000
+      )
+        return false;
+      answer = { text: text.trim() };
+    } else {
+      if (
+        value.action !== undefined ||
+        !Number.isSafeInteger(value.choice) ||
+        value.choice < 0 ||
+        value.choice >= saved.options.length
+      )
+        return false;
+      answer = { choice: value.choice };
+    }
     try {
-      await this.hub.answer(value.card, { choice: value.choice, by: this.owner, ref: saved.ref });
+      await this.hub.answer(value.card, { ...answer, by: this.owner, ref: saved.ref });
     } catch (error) {
       if (!(error instanceof HubError) || error.status !== 409) throw error;
     }

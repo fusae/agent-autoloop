@@ -451,3 +451,112 @@ if(a[0]==='event') {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Free-form decisions must submit text, never reinterpret a typed number as a button choice.
+test("decision cards accept validated owner form text and clear the form after submission", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-feishu-form-"));
+  const calls: string[][] = [],
+    answers: any[] = [];
+  let offline = true;
+  const hub = {
+    delivered: async () => {},
+    answer: async (...args: any[]) => {
+      if (offline) throw Error("offline");
+      answers.push(args);
+    },
+  } as any;
+  const lark = async (args: string[]) => {
+    calls.push(args);
+    return { data: { message_id: "om_form42" } };
+  };
+  try {
+    const file = join(dir, "state.json");
+    let bridge = new CompanyFeishu(file, "ou_owner", hub, lark, undefined, true);
+    await bridge.deliver(card);
+    const rendered = JSON.parse(calls[0][calls[0].indexOf("--content") + 1]);
+    const form = rendered.body.elements.find((e: any) => e.tag === "form");
+    assert.ok(form, "missing free-text form");
+    const input = form.elements.find((e: any) => e.tag === "input"),
+      button = form.elements.find((e: any) => e.tag === "button");
+    assert.equal(input.input_type, "multiline_text");
+    assert.equal(input.required, true);
+    assert.equal(button.form_action_type, "submit");
+    const event = {
+      header: { event_id: "text-42", event_type: "card.action.trigger" },
+      event: {
+        operator: { open_id: "ou_owner" },
+        context: { open_message_id: "om_form42" },
+        action: {
+          tag: "button",
+          name: button.name,
+          value: button.behaviors[0].value,
+          form_value: { [input.name]: "  2\n先做记住推广  " },
+        },
+      },
+    };
+    for (const bad of [
+      { ...event, event: { ...event.event, operator: { open_id: "ou_other" } } },
+      { ...event, event: { ...event.event, context: { open_message_id: "om_wrong" } } },
+      {
+        ...event,
+        event: {
+          ...event.event,
+          action: { ...event.event.action, value: { ...event.event.action.value, version: 99 } },
+        },
+      },
+      ...["", "   ", "x".repeat(1001), 42, {}].map((text) => ({
+        ...event,
+        event: { ...event.event, action: { ...event.event.action, form_value: { [input.name]: text } } },
+      })),
+      {
+        ...event,
+        event: { ...event.event, action: { ...event.event.action, value: { ...event.event.action.value, choice: 0 } } },
+      },
+    ])
+      assert.equal(await bridge.receiveAction(bad), false);
+    await assert.rejects(bridge.receiveAction(event), /offline/);
+    offline = false;
+    assert.equal(await bridge.receiveAction(event), true);
+    assert.deepEqual(answers, [[42, { text: "2\n先做记住推广", by: "ou_owner", ref: "om_form42" }]]);
+    bridge = new CompanyFeishu(file, "ou_owner", hub, lark, undefined, true);
+    assert.equal(await bridge.receiveAction(event), false);
+    await bridge.deliver({ ...card, version: 2, state: "decided", answer: "2\n先做记住推广" });
+    const updated = JSON.parse(JSON.parse(calls[1][calls[1].indexOf("--data") + 1]).content);
+    assert.equal(
+      updated.body.elements.some((e: any) => e.tag === "form"),
+      false,
+    );
+    assert.match(JSON.stringify(updated), /先做记住推广/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Existing unanswered native cards must gain the input in place, without changing kernel versions or resending.
+test("existing native cards gain the free-text form once on restart", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-feishu-form-upgrade-"));
+  const file = join(dir, "state.json"),
+    calls: string[][] = [];
+  const hub = { delivered: async () => {} } as any;
+  const lark = async (args: string[]) => {
+    calls.push(args);
+    return { data: { message_id: "om_existing" } };
+  };
+  try {
+    await new CompanyFeishu(file, "ou_owner", hub, lark, undefined, true).deliver(card);
+    const old = JSON.parse(readFileSync(file, "utf8"));
+    delete old.cards[42].layout;
+    writeFileSync(file, JSON.stringify(old));
+    const bridge = new CompanyFeishu(file, "ou_owner", hub, lark, undefined, true);
+    await bridge.deliver(card);
+    await bridge.deliver(card);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1][1], "PATCH");
+    assert.match(calls[1][2], /om_existing$/);
+    const saved = JSON.parse(readFileSync(file, "utf8")).cards[42];
+    assert.equal(saved.version, 1);
+    assert.equal(saved.ref, "om_existing");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
