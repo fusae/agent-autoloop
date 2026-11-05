@@ -7,7 +7,14 @@ export default {
     if (!config) throw new Error("company Agent 的 command 需要公司配置文件路径");
     return [
       process.execPath,
-      join(import.meta.dirname, turn.command?.[1] === "business" ? "business-run.ts" : "run.ts"),
+      join(
+        import.meta.dirname,
+        turn.command?.[1] === "business"
+          ? "business-run.ts"
+          : turn.command?.[1] === "publish"
+            ? "publish-run.ts"
+            : "run.ts",
+      ),
       config,
       turn.contextFile,
     ];

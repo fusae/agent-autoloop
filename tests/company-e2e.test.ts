@@ -246,10 +246,15 @@ test(
       const fixture = join(scratch, "ceo.ts");
       writeFileSync(
         fixture,
-        `import {readFileSync} from 'node:fs';
+        `import {readFileSync,mkdirSync,writeFileSync} from 'node:fs';
 const ctx=JSON.parse(readFileSync(process.env.AGENT_AUTOLOOP_CONTEXT,'utf8'));
 const question=ctx.events.find(e=>e.type==='company.owner.question');
 if(question || ctx.answers.some(a=>a.about==='chat-promotion')) {
+ if(question && JSON.parse(question.detail).question==='审核并发布') {
+   const plan=JSON.parse(readFileSync('knowledge/operations/app.json','utf8')).plans.find(p=>p.status==='delivered');
+   const executive={briefs:[],directives:[],approvals:[],answers:[],escalations:[],deliveries:[{business:'app',plan:plan.id,task:plan.task,verdict:'publish',reason:'模拟CEO已核对正文',files:['tasks/'+plan.task+'/draft.md']}]};
+   console.log('\`\`\`agent-autoloop\\n'+JSON.stringify({events:[{id:'publish-review-'+question.id,type:'company.ceo.decision',subject:'owner',detail:JSON.stringify({summary:'审核后发布',executive})}]})+'\\n\`\`\`'); process.exit(0);
+ }
  const waiting=question && JSON.parse(question.detail).question==='推广对象需要确认';
  const receipt=waiting?{ask:[{key:'audience',title:'CEO · 推广对象',text:'优先面向哪些用户？',options:['已有用户','新用户'],about:'chat-promotion'}]}:{events:[{id:'owner-decision-'+(question?.id??'card-'+ctx.answers[0].card),type:'company.ceo.decision',subject:'owner',detail:JSON.stringify({summary:'安排推广内容',executive:{briefs:[{business:'app',objective:'准备 APP 推广内容'}],directives:[{business:'app',action:{key:'owner-promotion',title:'APP 推广内容',kind:'content',goal:'制作模拟推广草稿',acceptance:['包含真实产品依据'],priority:1,dueDays:2,followUpDays:3,measure:'新增用户'}}],approvals:[],answers:[],escalations:[]}})}]};
  console.log('\`\`\`agent-autoloop\\n'+JSON.stringify(receipt)+'\\n\`\`\`');
@@ -262,13 +267,24 @@ if(brief.role==='ceo') {
  const informed=facts.knowledge.some(k=>k.source==='owner');
  extra={executive:{briefs:informed?[{business:'app',objective:'依据负责人提供的报表核对新增用户'}]:[],directives:[],approvals:[],answers:informed?facts.issues.filter(i=>i.state==='open').map(i=>({issue:i.id,answer:'数据在本机报表，先核对新增用户',evidence:'负责人答复'})):[],escalations:informed?[]:[{key:'onboarding',issues:facts.issues.map(i=>i.id),question:'数据在哪里？',context:'业务档案缺少数据入口'}]}};
 }
-const report={assignment:brief.assignment,verdict:'pass',summary:'模拟管理结果',artifacts:brief.role==='ceo'||brief.inspection?[]:['tasks/'+brief.task+'/draft.md'],evidence:['测试资料'],...extra};
+if(brief.role==='growth' && !brief.inspection) { mkdirSync('tasks/'+brief.task,{recursive:true}); writeFileSync('tasks/'+brief.task+'/draft.md','模拟审核正文'); }
+if(brief.publication && brief.role==='qa') extra={publication:brief.previous.publication};
+const report={assignment:brief.assignment,verdict:'pass',summary:'模拟管理结果',artifacts:brief.role==='ceo'||brief.inspection?[]:brief.publication?brief.previous.artifacts:['tasks/'+brief.task+'/draft.md'],evidence:['测试资料'],...extra};
 console.log('\`\`\`agent-autoloop\\n'+JSON.stringify({events:[{id:brief.task+':'+brief.assignment+':result',type:'company.result',subject:brief.task,detail:JSON.stringify(report)}]})+'\\n\`\`\`');`,
+      );
+      const publisher = join(scratch, "publisher.mjs");
+      writeFileSync(
+        publisher,
+        `import fs from 'node:fs'; let s=''; for await(const c of process.stdin)s+=c; const q=JSON.parse(s); const f='fake-platform.json'; if(q.action==='publish'){if(fs.existsSync(f))process.exit(2);fs.writeFileSync(f,JSON.stringify({state:'published',key:q.key,channel:q.channel,remoteId:'1',url:'https://example.com/test-post',publishedAt:new Date().toISOString()}));console.log('{}')}else console.log(fs.existsSync(f)?fs.readFileSync(f,'utf8'):'{"state":"absent"}');`,
+      );
+      writeFileSync(
+        join(directory, "publishing.json"),
+        JSON.stringify({ projects: { app: { channel: "测试渠道", command: [process.execPath, publisher] } } }),
       );
       const file = join(directory, "hub/rules.json"),
         rules = JSON.parse(readFileSync(file, "utf8"));
       for (const [id, a] of Object.entries(rules.agents) as [string, any][])
-        if (!["company-office", "company-business"].includes(id)) {
+        if (!["company-office", "company-business", "company-publisher"].includes(id)) {
           a.use = "command";
           a.command = [process.execPath, fixture];
         }
@@ -349,8 +365,32 @@ console.log('\`\`\`agent-autoloop\\n'+JSON.stringify({events:[{id:brief.task+':'
       assert.equal(office.tasks().filter((t) => t.title === "APP · APP 推广内容").length, 1);
       await wake("chat-followup");
       await until(
-        () => ops!.snapshot(b!.list(), office!.tasks())[0].plans.find((p) => p.title === "APP 推广内容")?.followUpAt,
+        () =>
+          ops!.snapshot(b!.list(), office!.tasks())[0].plans.find((p) => p.title === "APP 推广内容")?.status ===
+          "delivered",
       );
+      assert.equal(
+        ops.snapshot(b.list(), office.tasks())[0].plans.find((p) => p.title === "APP 推广内容")?.followUpAt,
+        null,
+      );
+      await bridge.receive([message("om_publish", "审核并发布")]);
+      await until(() => ops!.snapshot(b!.list(), office!.tasks())[0].plans.some((p) => p.status === "publishing"));
+      await until(() =>
+        office!
+          .tasks()
+          .filter((t) => t.kind.startsWith("check-"))
+          .every((t) => t.status === "completed"),
+      );
+      await wake("publication-dispatch");
+      await until(() => office!.tasks().some((t) => t.kind === "publish-content" && t.status === "completed"));
+      await wake("publication-followup");
+      await until(
+        () =>
+          ops!.snapshot(b!.list(), office!.tasks())[0].plans.find((p) => p.title === "APP 推广内容")?.status ===
+          "observing",
+      );
+      assert.ok(ops.snapshot(b.list(), office.tasks())[0].plans.find((p) => p.title === "APP 推广内容")?.followUpAt);
+      assert.equal(office.tasks().filter((t) => t.kind === "publish-content").length, 1);
       const history = (await import("../plugins/company/briefing.ts")).companyBriefing(directory).execution!
         .conversation;
       assert.ok(history.answers.some((r: any) => r.text.includes("APP 推广内容")));

@@ -946,6 +946,8 @@ const planNames = {
   working: "执行中",
   blocked: "受阻",
   observing: "效果待观察",
+  delivered: "待成果审核",
+  publishing: "发布中",
   review: "待复盘",
   closed: "已复盘",
 };
@@ -1008,7 +1010,7 @@ function plansHTML(d) {
 function operationsBusinessHTML(id) {
   const p = operationById(id);
   if (!p) return '<section class="detail-section"><h3>员工职责</h3><p>等待同步</p></section>';
-  return `<section class="detail-section"><div class="panel-heading"><h3>员工职责</h3><button class="text-button" data-project-view="employees" data-project="${esc(id)}">全部员工</button></div><div class="plan-meta"><span>负责人：${roleNames[p.owner]}</span><span>今日派工 ${p.todayTasks}</span><span>在途上限 ${p.maxActive}</span><button class="text-button" data-settings="${esc(id)}">任务并发</button></div>${p.staff.map((s) => `<div class="routine-row"><div><strong>${roleNames[s.role]}</strong><p class="note">${esc(s.duty)}</p><p class="note">${esc(s.finding)}</p></div><button class="secondary" data-employee="${s.role}" data-project="${esc(id)}">编辑</button></div>`).join("")}</section><section class="detail-section"><div class="panel-heading"><h3>项目计划</h3><button class="text-button" data-project-view="plans" data-project="${esc(id)}">全部计划</button></div><p>${p.plans.filter((a) => a.status === "working").length} 项执行中 · ${p.plans.filter((a) => ["observing", "review"].includes(a.status)).length} 项效果跟进 · ${p.alerts.length} 项异常</p></section><section class="detail-section"><h3>业务动态</h3>${
+  return `<section class="detail-section"><div class="panel-heading"><h3>员工职责</h3><button class="text-button" data-project-view="employees" data-project="${esc(id)}">全部员工</button></div><div class="plan-meta"><span>负责人：${roleNames[p.owner]}</span><span>今日派工 ${p.todayTasks}</span><span>在途上限 ${p.maxActive}</span><button class="text-button" data-settings="${esc(id)}">任务并发</button></div>${p.staff.map((s) => `<div class="routine-row"><div><strong>${roleNames[s.role]}</strong><p class="note">${esc(s.duty)}</p><p class="note">${esc(s.finding)}</p></div><button class="secondary" data-employee="${s.role}" data-project="${esc(id)}">编辑</button></div>`).join("")}</section><section class="detail-section"><div class="panel-heading"><h3>项目计划</h3><button class="text-button" data-project-view="plans" data-project="${esc(id)}">全部计划</button></div><p>${p.plans.filter((a) => ["working", "publishing"].includes(a.status)).length} 项执行中 · ${p.plans.filter((a) => ["observing", "review"].includes(a.status)).length} 项效果跟进 · ${p.alerts.length} 项异常</p></section><section class="detail-section"><h3>业务动态</h3>${
     p.signals.length
       ? p.signals
           .slice(-5)

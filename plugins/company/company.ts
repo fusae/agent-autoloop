@@ -1,3 +1,4 @@
+import { publication, verifiedPublication, type Publication } from "./publication.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
@@ -17,6 +18,7 @@ export const departments = {
 export type Role = keyof typeof departments;
 export const workflows: Record<string, Role[]> = {
   ceo: ["ceo"],
+  "publish-content": ["growth", "qa"],
   software: ["product", "engineering", "qa"],
   content: ["growth", "qa"],
   support: ["support", "qa"],
@@ -37,6 +39,7 @@ export type Report = {
   evidence: string[];
   inspection?: Inspection;
   executive?: ExecutiveDecision;
+  publication?: Publication;
 };
 export type Task = {
   id: string;
@@ -51,6 +54,7 @@ export type Task = {
   approval: string | null;
   reason: string;
   supervised?: boolean;
+  publication?: string;
 };
 export type Receipt = {
   events?: { id: string; type: string; subject: string; summary: string; detail: string }[];
@@ -80,6 +84,15 @@ export function taskRequest(value: unknown) {
     goal: words(data.goal, 500, "目标"),
     kind,
     acceptance: list(data.acceptance, "验收标准"),
+    ...(kind === "publish-content"
+      ? {
+          publication: (() => {
+            if (typeof data.publication !== "string" || !/^[a-f0-9]{32}$/.test(data.publication))
+              throw new CompanyInputError("发布任务缺少已审核的内容记录");
+            return data.publication;
+          })(),
+        }
+      : {}),
   };
   if (JSON.stringify(request).length > 1600)
     throw new CompanyInputError("需求 JSON 超过 1600 字，请缩短描述并引用工作区资料");
@@ -163,13 +176,14 @@ export class Company {
       inspection: task.kind.startsWith("check-"),
       internal: task.kind.startsWith("internal-"),
       supervised: !!task.supervised,
+      publication: task.publication ?? null,
       repair: task.assignment > 1 ? task.reason.slice(0, 400) : null,
       previous: task.reports.at(-1) ?? null,
     });
     receipt.events ??= [];
     receipt.events.push({
       id: `company:${task.id}:${task.assignment}`,
-      type: `company.work.${role}`,
+      type: task.kind === "publish-content" && role === "growth" ? "company.work.publish" : `company.work.${role}`,
       subject: task.id,
       summary: `${departments[role]}处理任务 ${task.id}`,
       detail,
@@ -189,7 +203,9 @@ export class Company {
         assignment: 0,
         supervised:
           !!this.config.ceoMode &&
-          (String(data.kind).startsWith("check-") || String(data.kind).startsWith("internal-")),
+          (String(data.kind).startsWith("check-") ||
+            String(data.kind).startsWith("internal-") ||
+            data.kind === "publish-content"),
         reports: [],
         approval: null,
         reason: "",
@@ -247,6 +263,21 @@ export class Company {
           throw new CompanyInputError((error as Error).message);
         }
       }
+      if (task.kind === "publish-content" && data.verdict === "pass") {
+        try {
+          report.publication = publication(data.publication);
+          if (
+            JSON.stringify(report.publication) !==
+            JSON.stringify(verifiedPublication(dirname(this.config.database), task.publication!))
+          )
+            throw Error("发布入口尚未确认这份平台结果");
+          if (report.publication.key !== task.publication) throw Error("发布结果不属于本次审核");
+          if (role === "qa" && JSON.stringify(report.publication) !== JSON.stringify(task.reports.at(-1)?.publication))
+            throw Error("验收结果与发布回执不一致");
+        } catch (error) {
+          throw new CompanyInputError((error as Error).message);
+        }
+      }
       if (JSON.stringify(report).length > (task.kind === "ceo" ? 3500 : 1900))
         throw new CompanyInputError("报告 JSON 超过 1900 字，请将详情留在交付文件");
     } catch (error) {
@@ -273,6 +304,7 @@ export class Company {
       this.dispatch(task, receipt);
     } else if (
       task.kind === "ceo" ||
+      task.kind === "publish-content" ||
       (task.kind.startsWith("check-") && (task.supervised || report.inspection?.state !== "blocked")) ||
       task.kind.startsWith("internal-")
     ) {

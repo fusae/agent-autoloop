@@ -3,6 +3,14 @@ export type ExecutiveDecision = {
   briefs: { business: string; objective: string }[];
   directives: { business: string; action: ActionProposal }[];
   approvals: { business: string; plan: string; approve: boolean; reason: string }[];
+  deliveries?: {
+    business: string;
+    plan: string;
+    task: string;
+    verdict: "revise" | "accept" | "publish";
+    files?: string[];
+    reason: string;
+  }[];
   answers: { issue: string; answer: string; evidence: string }[];
   escalations: {
     key: string;
@@ -100,6 +108,23 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
       if (typeof a.approve !== "boolean") throw new Error("计划决定需要布尔值");
       return { business: id(a.business), plan: id(a.plan), approve: a.approve, reason: text(a.reason, 200) };
     }),
+    ...(d.deliveries !== undefined
+      ? {
+          deliveries: list("deliveries", 6).map((a) => {
+            if (!["revise", "accept", "publish"].includes(a.verdict)) throw new Error("成果审核结论不正确");
+            if (a.verdict === "publish" && (!Array.isArray(a.files) || !a.files.length || a.files.length > 5))
+              throw Error("发布审核需要明确选择1–5个正文文件");
+            return {
+              business: id(a.business),
+              plan: id(a.plan),
+              task: id(a.task),
+              verdict: a.verdict,
+              reason: text(a.reason, 200),
+              ...(a.verdict === "publish" ? { files: a.files.map((v: unknown) => text(v, 150, "files")) } : {}),
+            };
+          }),
+        }
+      : {}),
     answers: list("answers", 5).map((a) => ({
       issue: id(a.issue),
       answer: text(a.answer, 700),

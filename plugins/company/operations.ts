@@ -1,3 +1,4 @@
+import { freezePublication } from "./publication.ts";
 import { sourceSnapshots } from "./sources.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
@@ -30,7 +31,12 @@ export type Plan = ActionProposal & {
   owner: Role;
   sourceTask: string;
   task: string | null;
-  status: "proposed" | "planned" | "working" | "blocked" | "observing" | "review" | "closed";
+  status:
+    "proposed" | "planned" | "working" | "blocked" | "observing" | "review" | "closed" | "delivered" | "publishing";
+  revision?: number;
+  deliveryTask?: string;
+  deliveryDecision?: "revise" | "accept" | "publish";
+  publicationKey?: string;
   createdAt: string;
   dueAt: string;
   followUpAt: string | null;
@@ -231,7 +237,9 @@ export class Operations {
           const work =
             p.plans.find((a) => assigned && a.task === assigned.id) ??
             p.plans.find(
-              (a) => a.owner === s.role && ["planned", "working", "blocked", "proposed", "review"].includes(a.status),
+              (a) =>
+                a.owner === s.role &&
+                ["planned", "working", "blocked", "proposed", "review", "delivered", "publishing"].includes(a.status),
             );
           const t = assigned ?? tasks.find((t) => t.id === (work?.task ?? s.lastTask));
           const currentTask = t ? (({ approval: _approval, ...safe }) => safe)(t) : null;
@@ -248,16 +256,15 @@ export class Operations {
               assigned.status === "blocked" ? "受阻" : assigned.status === "awaiting_approval" ? "待审批" : "处理中";
             nextAction = assigned.status === "blocked" ? assigned.reason : assigned.title;
           } else if (work) {
-            workStatus =
-              work.status === "working"
-                ? "等待交接"
-                : work.status === "proposed"
-                  ? "待 CEO 审核"
-                  : work.status === "blocked"
-                    ? "受阻"
-                    : work.status === "review"
-                      ? "待复盘"
-                      : "待派工";
+            workStatus = ["working", "publishing"].includes(work.status)
+              ? "等待交接"
+              : ["proposed", "delivered"].includes(work.status)
+                ? "待 CEO 审核"
+                : work.status === "blocked"
+                  ? "受阻"
+                  : work.status === "review"
+                    ? "待复盘"
+                    : "待派工";
             const busy = p.activity.filter(
               (a) => !tasks.some((t) => t.id === a.task) || tasks.some((t) => t.id === a.task && t.status === "active"),
             ).length;
@@ -282,7 +289,8 @@ export class Operations {
           .filter(
             (a) =>
               a.status === "blocked" ||
-              (["planned", "working"].includes(a.status) && Date.parse(a.dueAt) < now.getTime()),
+              (["planned", "working", "publishing", "delivered"].includes(a.status) &&
+                Date.parse(a.dueAt) < now.getTime()),
           )
           .map((a) => ({
             plan: a.id,
@@ -326,7 +334,7 @@ export class Operations {
               ? "数据源包含可用反馈汇总时见 evidence.database；没有反馈表不代表零反馈"
               : "人工录入",
             production: "未接入",
-            publishing: "未接入",
+            publishing: "内容完成后由 CEO 审核；发布入口执行，失败交 CEO 处理",
           },
         },
         null,
@@ -495,6 +503,36 @@ export class Operations {
     if (!valid) return "CEO 决策引用了不存在或暂停的项目、计划或问题，请重新核对编号。";
     if (d.escalations.some((a) => a.issues.some((id) => c.issues.find((i) => i.id === id)?.state === "answered")))
       return "上报引用了已答复的问题，不能作为新的待决事项。请先使用已有答案；确有新缺口时提供 business 项目编号和 issues:[]，不要借用历史问题编号。";
+    const deliveries = d.deliveries ?? [];
+    if (new Set(deliveries.map((a) => `${a.business}:${a.plan}`)).size !== deliveries.length)
+      return "同一成果不能重复审核";
+    for (const a of deliveries) {
+      const p = known(a.business) ? this.get(a.business, now).plans.find((p) => p.id === a.plan) : undefined;
+      if (
+        !p ||
+        p.status !== "delivered" ||
+        p.task !== a.task ||
+        tasks.find((t) => t.id === a.task)?.status !== "completed"
+      )
+        return "成果已变化或不在待审核状态，请核对当前计划和交付任务。";
+      if (a.verdict === "publish" && p.kind !== "content") return "当前发布入口仅支持已审核的运营内容";
+    }
+    const publications = new Map<string, string>();
+    try {
+      for (const a of deliveries.filter((a) => a.verdict === "publish"))
+        publications.set(
+          a.plan,
+          freezePublication(
+            this.directory,
+            a.business,
+            a.plan,
+            tasks.find((t) => t.id === a.task)!,
+            a.files,
+          ),
+        );
+    } catch (error) {
+      return `审核未通过：${(error as Error).message}`;
+    }
     for (const business of new Set(d.directives.map((v) => v.business))) {
       const p = this.get(business, now);
       const additions = new Set(
@@ -538,6 +576,32 @@ export class Operations {
       plan.status = a.approve ? "planned" : "closed";
       plan.result = a.reason;
       this.save(p, "ceo-approval", now);
+    }
+    for (const a of deliveries) {
+      const p = this.get(a.business, now),
+        plan = p.plans.find((p) => p.id === a.plan)!;
+      plan.deliveryTask = a.task;
+      plan.deliveryDecision = a.verdict;
+      plan.result = a.reason;
+      plan.followUpAt = null;
+      plan.outcome = null;
+      if (a.verdict === "revise") {
+        plan.revision = (plan.revision ?? 0) + 1;
+        plan.task = null;
+        plan.status = "planned";
+        plan.dueAt = after(now, plan.dueDays);
+        plan.deliveredAt = null;
+      } else if (a.verdict === "publish") {
+        plan.publicationKey = publications.get(a.plan)!;
+        plan.task = null;
+        plan.status = "publishing";
+      } else plan.status = "closed";
+      this.save(p, "ceo-delivery", now);
+    }
+    if (deliveries.length) {
+      // A bounded review batch must not make the remaining deliverables wait another 30 minutes.
+      c.nextReviewAt = now.toISOString();
+      c.unchangedReviews = 0;
     }
     for (const a of d.answers) {
       const i = c.issues.find((i) => i.id === a.issue)!;
@@ -663,6 +727,10 @@ export class Operations {
               )!;
               return `工作：${names(v.business)} · ${p.title}，${departments[p.owner]}负责${p.status === "closed" ? "（已有计划已结束）" : "，按现有任务流程执行和验收"}`;
             }),
+            ...(d.deliveries ?? []).map(
+              (v) =>
+                `成果：${names(v.business)} · ${this.get(v.business, now).plans.find((p) => p.id === v.plan)!.title}，${v.verdict === "revise" ? "退回修改" : v.verdict === "publish" ? "审核通过，进入发布" : "内部成果已验收"}；${v.reason}`,
+            ),
             ...d.approvals.map((v) => {
               const p = this.get(v.business, now).plans.find((p) => p.id === v.plan)!;
               const states = {
@@ -671,6 +739,8 @@ export class Operations {
                 working: "执行中",
                 blocked: "受阻",
                 observing: "跟进效果",
+                delivered: "待成果审核",
+                publishing: "发布中",
                 review: "待复盘",
                 closed: "已结束",
               };
@@ -778,7 +848,11 @@ export class Operations {
     const fingerprint = this.ceoInputs(c, businesses, tasks, now);
     const agenda =
       c.issues.some((i) => i.state === "open") ||
-      active.some((b) => this.get(b.id, now).plans.some((p) => p.status === "proposed" || p.status === "review"));
+      active.some((b) =>
+        this.get(b.id, now).plans.some(
+          (p) => p.status === "proposed" || p.status === "review" || p.status === "delivered",
+        ),
+      );
     const unchanged = fingerprint === c.fingerprint;
     if (unchanged) {
       if (!(agenda && c.nextReviewAt && Date.parse(c.nextReviewAt) <= now.getTime())) return;
@@ -788,7 +862,7 @@ export class Operations {
             ...c.issues.filter((i) => i.state === "open").map((i) => i.question),
             ...active.flatMap((b) =>
               this.get(b.id, now)
-                .plans.filter((p) => p.status === "proposed" || p.status === "review")
+                .plans.filter((p) => p.status === "proposed" || p.status === "review" || p.status === "delivered")
                 .map((p) => p.title),
             ),
           ];
@@ -799,7 +873,9 @@ export class Operations {
           };
           // An unanswered management blocker needs a reply path, not a terminal status notice.
           for (const b of active) {
-            for (const p of this.get(b.id, now).plans.filter((p) => p.status === "proposed" || p.status === "review")) {
+            for (const p of this.get(b.id, now).plans.filter(
+              (p) => p.status === "proposed" || p.status === "review" || p.status === "delivered",
+            )) {
               const id = hash(`stalled-plan:${p.id}:${p.status}`);
               if (!c.issues.some((i) => i.context.startsWith(`计划 ${p.id}：`) && i.state !== "answered"))
                 c.issues.push({
@@ -807,7 +883,7 @@ export class Operations {
                   business: b.id,
                   role: "ceo",
                   task: null,
-                  question: `${b.name} · ${p.title}：${p.status === "proposed" ? "CEO 未决定是否执行" : "CEO 未处理效果复盘"}`,
+                  question: `${b.name} · ${p.title}：${p.status === "proposed" ? "CEO 未决定是否执行" : p.status === "delivered" ? "CEO 未审核已交付成果" : "CEO 未处理效果复盘"}`,
                   context: `计划 ${p.id}：${p.result}`,
                   state: "open",
                   answer: null,
@@ -866,7 +942,7 @@ export class Operations {
     const request = taskRequest({
       title: "CEO · 经营管理",
       kind: "ceo",
-      goal: "读取 knowledge/ceo.json 及项目资料。先查已知事实，给员工明确目标；审核提案，解答员工问题，处理受阻工作。只有确实无法判断的事项才汇总提问负责人，并引用问题编号。用结构化决策反馈，不直接操作配置或外部系统。",
+      goal: "读取 knowledge/ceo.json 及项目资料。先查已知事实，给员工明确目标；审核提案和已交付成果，解答员工问题，处理受阻工作。只有确实无法判断的事项才汇总提问负责人，并引用问题编号。用结构化决策反馈，不直接操作配置或外部系统。",
       acceptance: [
         "先处理员工问题与已有计划，不重复派工或重复提问",
         "未知数据不得编造；汇报区分交付、实际执行和业务效果",
@@ -987,16 +1063,30 @@ export class Operations {
         }
         for (const a of p.plans) {
           const t = tasks.find((t) => t.id === a.task);
-          if (a.status === "working" || a.status === "blocked") {
+          // Old document-only observations are reclassified by the normal journaled tick.
+          if (
+            chief.enabled &&
+            ["observing", "review"].includes(a.status) &&
+            !a.deliveryDecision &&
+            t?.kind.startsWith("internal-") &&
+            t.status === "completed"
+          ) {
+            a.status = "delivered";
+            a.followUpAt = null;
+            a.outcome = null;
+            a.result = "内部交付已完成，待 CEO 审核成果及下一步执行";
+          }
+          if (["working", "blocked", "publishing"].includes(a.status)) {
             if (t?.status === "completed") {
-              a.status = "observing";
+              const published = t.kind === "publish-content" && t.reports.at(-1)?.publication?.key === a.publicationKey;
+              a.status = chief.enabled && !published ? "delivered" : "observing";
               a.deliveredAt = now.toISOString();
-              a.followUpAt = after(now, a.followUpDays);
+              a.followUpAt = a.status === "observing" ? after(now, a.followUpDays) : null;
               a.result = t.reason;
             } else if (t?.status === "blocked" || t?.status === "rejected") {
               a.status = "blocked";
               a.result = t.reason;
-            } else if (t?.status === "active") a.status = "working";
+            } else if (t?.status === "active") a.status = t.kind === "publish-content" ? "publishing" : "working";
           }
           if (a.status === "observing" && a.followUpAt && Date.parse(a.followUpAt) <= now.getTime())
             a.status = "review";
@@ -1028,31 +1118,47 @@ export class Operations {
         )) {
           if (
             !capacity() ||
-            a.status !== "planned" ||
+            (a.status !== "planned" && !(a.status === "publishing" && !a.task)) ||
             !p.staff.find((s) => s.role === a.owner)?.enabled ||
             busy().some((v) => v.role === a.owner)
           )
             continue;
-          const id = "W-" + hash(`${b.id}:${a.id}`);
+          const publishing = a.status === "publishing";
+          const id = publishing
+            ? "P-" + hash(a.publicationKey!)
+            : "W-" + hash(`${b.id}:${a.id}${a.revision ? `:${a.revision}` : ""}`);
           emit(
             id,
             a.owner,
             "work",
             taskRequest({
               title: `${b.name} · ${a.title}`.slice(0, 120),
-              kind: `internal-${a.kind}`,
-              goal: `项目资料：knowledge/operations/${b.id}.json。计划编号 ${a.id}。${a.goal} 仅交付本地草稿、分析或隔离代码；不发布、不付款、不联系用户、不修改线上服务。`,
-              acceptance: a.acceptance,
+              kind: publishing ? "publish-content" : `internal-${a.kind}`,
+              ...(publishing ? { publication: a.publicationKey } : {}),
+              goal: publishing
+                ? `项目资料：knowledge/operations/${b.id}.json。计划 ${a.id} 已经 CEO 审核。固定发布入口仅发布已冻结的内容；缺渠道或账号则报告具体阻塞。验收必须核对真实平台结果，不能把本地草稿当已发布。`
+                : `项目资料：knowledge/operations/${b.id}.json。计划编号 ${a.id}。${a.goal}${a.revision ? ` 返工：${a.result}；读取上一交付任务 ${a.deliveryTask}，在本任务目录修改。` : ""} 仅交付本地成果，交 CEO 审核。`.slice(
+                    0,
+                    500,
+                  ),
+              acceptance: publishing
+                ? ["平台返回真实链接、内容编号、渠道和时间", "验收核对平台回执，失败报告具体原因"]
+                : a.acceptance,
             }),
           );
           a.task = id;
-          a.status = "working";
+          a.status = publishing ? "publishing" : "working";
         }
         for (const s of p.staff) {
           if (!capacity() || !s.enabled) continue;
           const previous = tasks.find((t) => t.id === s.lastTask);
           if (s.lastTask && previous?.status !== "completed") continue;
-          if (p.plans.some((a) => a.owner === s.role && ["planned", "working"].includes(a.status))) continue;
+          if (
+            p.plans.some(
+              (a) => a.owner === s.role && ["planned", "working", "publishing", "delivered"].includes(a.status),
+            )
+          )
+            continue;
           if (busy().some((a) => a.role === s.role)) continue;
           const reviews = p.plans
             .filter(
@@ -1075,7 +1181,8 @@ export class Operations {
                       .filter(
                         (a) =>
                           a.status === "blocked" ||
-                          (["planned", "working"].includes(a.status) && Date.parse(a.dueAt) <= now.getTime()),
+                          (["planned", "working", "publishing", "delivered"].includes(a.status) &&
+                            Date.parse(a.dueAt) <= now.getTime()),
                       )
                       .map((a) => [a.id, a.status, a.result])
                   : [],

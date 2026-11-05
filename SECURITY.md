@@ -64,3 +64,5 @@ ACP 的授权依赖 Agent 遵守协议。桥接只按结构化工具种类、编
 公司飞书通知的静默过滤仅影响展示，不改变中台事件和回答权限；静默版本仍确认投递，保留原消息引用。未发送过消息且静默处理的事项允许空引用，但不能用于接受飞书答复。
 
 CEO 普通问答只接受配置本人的文本；固定来源密钥从私有 inboxFile 读取，内容仅作事件资料，不决定规则或权限。对话规则仅能以固定 company-ceo 来源发出 company.ceo.decision，协调器复用管理轮的字段与项目校验，在同一事务内记录决定及去重键、创建内部计划和回执。不能指定任意 Agent、目录、命令或发布/支付类型。非法决定不部分执行，失败不伪装成成功；对外操作未接入。CEO 模型仍使用只读文件权限，业务写入由固定协调器完成。实时简报只输出选定业务字段和数据汇总，不输出配置密钥、卡片令牌或原始个人信息。数据库使用只读连接；模型运行身份的文件读取边界仍由现有 OS/沙箱控制，不把只读简报误当作凭据隔离。
+
+Company publishing uses an operator-owned `publishing.json` outside the model workspace. Only a CEO-reviewed, frozen subset of registered deliverable files can reach the fixed command; model text never supplies executable paths or arguments. The adapter must implement stable-key idempotency and authoritative platform lookup. Unknown platform results block execution, and observation requires a verified receipt plus QA. Keep credentials inside the trusted adapter, not in event data or deliverables.

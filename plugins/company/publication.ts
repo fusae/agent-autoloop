@@ -1,0 +1,117 @@
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { spawnSync } from "node:child_process";
+import type { Task } from "./company.ts";
+
+export type Publication = { key: string; channel: string; remoteId: string; url: string; publishedAt: string };
+type Request = {
+  key: string;
+  business: string;
+  plan: string;
+  task: string;
+  artifacts: { path: string; sha256: string; content: string }[];
+};
+const digest = (s: string) => createHash("sha256").update(s).digest("hex");
+function file(directory: string, key: string, suffix = "") {
+  if (!/^[a-f0-9]{32}$/.test(key)) throw Error("发布记录编号不正确");
+  return join(directory, "publications", key + suffix + ".json");
+}
+function save(path: string, value: unknown) {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path + ".tmp", JSON.stringify(value), { mode: 0o600 });
+  renameSync(path + ".tmp", path);
+}
+export function freezePublication(
+  directory: string,
+  business: string,
+  plan: string,
+  task: Task,
+  selected?: string[],
+): string {
+  const workspace = realpathSync(join(directory, "workspace"));
+  const registered = task.reports.at(-1)?.artifacts ?? [];
+  const paths = selected ?? registered;
+  if (paths.some((path) => !registered.includes(path))) throw Error("只能发布本次已验收交付中的正文文件");
+  if (!paths.length) throw Error("成果缺少可审核的交付文件");
+  let size = 0;
+  const artifacts = paths.map((path) => {
+    const resolved = realpathSync(isAbsolute(path) ? path : join(workspace, path));
+    const rel = relative(workspace, resolved);
+    if (!rel || rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel))
+      throw Error("发布文件必须位于公司工作区");
+    const stat = statSync(resolved);
+    size += stat.size;
+    if (!stat.isFile() || size > 1_000_000) throw Error("发布内容须为总计不超过1MB的文本文件");
+    const content = readFileSync(resolved, "utf8");
+    if (content.includes("\u0000")) throw Error("当前发布入口只接受文本内容");
+    return { path: rel, content, sha256: digest(content) };
+  });
+  const key = digest(
+    JSON.stringify([business, plan, task.id, task.assignment, artifacts.map((a) => [a.path, a.sha256])]),
+  ).slice(0, 32);
+  if (!existsSync(file(directory, key)))
+    save(file(directory, key), { key, business, plan, task: task.id, artifacts } satisfies Request);
+  return key;
+}
+export function publication(value: unknown): Publication {
+  const p = value as Publication;
+  if (!p || !/^[a-f0-9]{32}$/.test(p.key)) throw Error("发布结果缺少审核记录");
+  for (const name of ["channel", "remoteId", "url", "publishedAt"] as const)
+    if (typeof p[name] !== "string" || !p[name].trim() || p[name].length > 200)
+      throw Error("发布结果缺少渠道、链接、平台编号或时间");
+  const url = new URL(p.url);
+  if (url.protocol !== "https:" || url.username || url.password || !Number.isFinite(Date.parse(p.publishedAt)))
+    throw Error("发布链接或时间无效");
+  return { key: p.key, channel: p.channel, remoteId: p.remoteId, url: p.url, publishedAt: p.publishedAt };
+}
+export function verifiedPublication(directory: string, key: string): Publication {
+  return publication(JSON.parse(readFileSync(file(directory, key, "-result"), "utf8")));
+}
+export function executePublication(directory: string, key: string): Publication {
+  const request: Request = JSON.parse(readFileSync(file(directory, key), "utf8"));
+  if (request.key !== key) throw Error("发布审核记录不匹配");
+  if (existsSync(file(directory, key, "-result")))
+    return publication(JSON.parse(readFileSync(file(directory, key, "-result"), "utf8")));
+  const configFile = join(directory, "publishing.json");
+  const config = existsSync(configFile) ? JSON.parse(readFileSync(configFile, "utf8")) : {};
+  const target = config.projects?.[request.business];
+  if (!target) throw Error("内容已审核，尚未接入该项目的发布渠道和账号；需要确定发布平台并完成账号接入");
+  if (
+    typeof target.channel !== "string" ||
+    !target.channel.trim() ||
+    !Array.isArray(target.command) ||
+    !target.command.length ||
+    !target.command.every((v: unknown) => typeof v === "string") ||
+    !isAbsolute(target.command[0])
+  )
+    throw Error("发布入口配置不完整，需要修复渠道及固定执行程序");
+  const call = (action: "lookup" | "publish"): any => {
+    // Commands come only from private operator configuration, never from CEO text or draft files.
+    const result = spawnSync(target.command[0], target.command.slice(1), {
+      input: JSON.stringify({ ...request, channel: target.channel, action }),
+      encoding: "utf8",
+      timeout: 30_000,
+      maxBuffer: 100_000,
+      cwd: directory,
+      shell: false,
+    });
+    if (result.error || result.status !== 0)
+      throw Error("发布入口调用失败，尚未确认平台结果；保留原发布编号核对，不能重复发布");
+    try {
+      return JSON.parse(result.stdout);
+    } catch {
+      throw Error("发布入口未返回可核验结果，不能视为发布成功");
+    }
+  };
+  let result = call("lookup");
+  if (result.state === "absent") {
+    call("publish");
+    result = call("lookup");
+  }
+  if (result.state !== "published") throw Error("平台尚未确认发布成功，需要检查账号、审核状态或发布入口");
+  const proof = publication(result);
+  if (proof.key !== key || proof.channel !== target.channel) throw Error("平台发布结果与本次审核或配置渠道不匹配");
+  save(file(directory, key, "-result"), proof);
+  return proof;
+}
