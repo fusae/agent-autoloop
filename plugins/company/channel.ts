@@ -47,8 +47,18 @@ function updateText(card: Card, acknowledged: boolean) {
     return `答复已记录\n事项：${subject}\n你的答复：${excerpt(answer, 240)}`;
   return null;
 }
-function interactiveCard(card: Card) {
-  const elements: any[] = [{ tag: "div", text: { tag: "plain_text", content: card.text } }];
+export function interactiveCard(card: Card) {
+  const answer = card.answer || (card.choice !== null ? card.options[card.choice] : "");
+  const deferred = card.state !== "open" && answer?.trim() === "暂缓";
+  const paragraphs = card.kind === "ask" ? card.text.split(/\n\s*\n/) : [card.text];
+  const elements: any[] = [{ tag: "div", text: { tag: "plain_text", content: paragraphs[0] } }];
+  if (paragraphs.length > 1)
+    elements.push({
+      tag: "collapsible_panel",
+      expanded: false,
+      header: { title: { tag: "plain_text", content: "背景" } },
+      elements: [{ tag: "div", text: { tag: "plain_text", content: paragraphs.slice(1).join("\n\n") } }],
+    });
   if (card.kind === "ask" && card.state === "open") {
     elements.push(
       ...card.options.map((label, choice) => ({
@@ -85,20 +95,29 @@ function interactiveCard(card: Card) {
       ],
     });
   } else {
-    const answer = card.answer || (card.choice !== null ? card.options[card.choice] : "");
     if (answer) elements.push({ tag: "div", text: { tag: "plain_text", content: `你的决定：${answer}` } });
     const result = card.result?.trim();
     if (result && !bookkeeping.has(result.replace(/[。.!！]+$/, "")))
       elements.push({ tag: "div", text: { tag: "plain_text", content: `处理结果：${result}` } });
     elements.push({
       tag: "div",
-      text: { tag: "plain_text", content: card.state === "decided" ? "已提交 CEO" : "已处理" },
+      text: {
+        tag: "plain_text",
+        content: deferred ? "已暂缓，事项尚未解决" : card.state === "decided" ? "已提交 CEO" : "答复已记录",
+      },
     });
   }
   return {
     schema: "2.0",
     config: { update_multi: true },
-    header: { title: { tag: "plain_text", content: card.title }, template: card.state === "open" ? "blue" : "green" },
+    header: {
+      title: {
+        tag: "plain_text",
+        content:
+          card.kind === "ask" && card.state !== "open" ? (deferred ? "CEO · 已暂缓" : "CEO · 答复已记录") : card.title,
+      },
+      template: deferred ? "grey" : card.state === "open" ? "blue" : "green",
+    },
     body: { elements },
   };
 }
@@ -143,7 +162,7 @@ export class CompanyFeishu {
   async deliver(card: Card) {
     let saved = this.state.cards[card.id];
     const promote =
-      this.cards && (!saved?.interactive || saved.layout !== 2) && card.kind === "ask" && card.state === "open";
+      this.cards && (!saved?.interactive || saved.layout !== 3) && card.kind === "ask" && card.state === "open";
     if (!saved || saved.version < card.version || promote) {
       // Old closed states have already sent their acknowledgement; do not replay them on upgrade.
       const acknowledged = saved?.acknowledged ?? (!!saved && saved.version > 1 && !saved.open);
@@ -193,7 +212,7 @@ export class CompanyFeishu {
       }
       saved = {
         interactive: native || saved?.interactive,
-        layout: native ? 2 : saved?.layout,
+        layout: native ? 3 : saved?.layout,
         cardRef,
         ref,
         version: card.version,

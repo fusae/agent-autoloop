@@ -815,11 +815,17 @@ export class Operations {
                 });
             }
           }
-          const issues = c.issues.filter((i) => i.state === "open").slice(0, 8);
+          // Automatic fallback cannot distinguish a new blocker from another department's follow-up.
+          // Keep those internal when that project already has an owner decision; explicit CEO escalations still work.
+          const waitingBusinesses = new Set(
+            c.questions
+              .filter((q) => q.state === "open" || q.state === "deferred")
+              .flatMap((q) => c.issues.filter((i) => q.issues.includes(i.id)).map((i) => i.business)),
+          );
+          const issues = c.issues.filter((i) => i.state === "open" && !waitingBusinesses.has(i.business)).slice(0, 8);
           if (issues.length) {
-            const question = issues
-              .map((i) => `${active.find((b) => b.id === i.business)?.name ?? i.business}：${i.question.slice(0, 180)}`)
-              .join("；");
+            const names = [...new Set(issues.map((i) => active.find((b) => b.id === i.business)?.name ?? i.business))];
+            const question = `项目：${names.join("、")}\n情况：CEO 两次复查仍未给出可执行方案。\n需要你决定：重新制定方案，还是暂缓？`;
             this.applyDecision(
               c,
               businesses,
@@ -833,8 +839,9 @@ export class Operations {
                   {
                     key: `stalled-${fingerprint}`,
                     issues: issues.map((i) => i.id),
-                    question: `CEO 未能解决以下事项，请决定处理方式或补充所缺信息：${question}`.slice(0, 800),
-                    context: "CEO 已连续复查两次，仍未给出处理结果。回复后由 CEO 继续处理原任务，其他工作继续。",
+                    question,
+                    context: [...new Set(issues.map((i) => i.question))].join("；").slice(0, 400),
+                    options: ["重新制定方案", "暂缓"],
                   },
                 ],
               },

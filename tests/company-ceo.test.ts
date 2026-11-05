@@ -661,3 +661,55 @@ test("CEO decision choices persist their labels and only explicit defer pauses t
       ),
     );
   }));
+
+// The bounded-review fallback must not turn employees' follow-ups into another owner question.
+test("stalled fallback keeps follow-ups internal while the project already awaits an owner decision", () =>
+  fixture((b, o, c) => {
+    for (const state of ["open", "deferred"] as const) {
+      const chief = o.executive();
+      chief.issues = [
+        {
+          id: "original",
+          business: "app",
+          role: "engineering",
+          task: null,
+          question: "提醒是否到达？",
+          context: "缺结果",
+          state: "owner",
+          answer: null,
+          at: now.toISOString(),
+        },
+        {
+          id: "followup",
+          business: "app",
+          role: "qa",
+          task: null,
+          question: "请CEO沿用已上报事项跟进N06，不重复向负责人提问",
+          context: "等待原问题答复",
+          state: "open",
+          answer: null,
+          at: now.toISOString(),
+        },
+      ];
+      chief.questions = [
+        {
+          id: "pending",
+          key: "reminder",
+          issues: ["original"],
+          question: "提醒是否到达？",
+          context: "缺结果",
+          state,
+          answer: state === "deferred" ? "暂缓" : null,
+          at: now.toISOString(),
+        },
+      ];
+      chief.fingerprint = (o as any).ceoInputs(chief, b.list(), c.tasks(), now);
+      chief.unchangedReviews = 2;
+      chief.nextReviewAt = now.toISOString();
+      const receipt: any = {};
+      (o as any).scheduleCEO(chief, b.list(), c.tasks(), receipt, now);
+      assert.equal(receipt.ask, undefined);
+      assert.equal(receipt.notice, undefined);
+      assert.equal(chief.issues[1].state, "open", "waiting must not falsely resolve employee blockers");
+    }
+  }));

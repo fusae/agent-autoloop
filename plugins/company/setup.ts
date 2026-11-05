@@ -11,6 +11,7 @@ const responsibilities: Record<Role, string> = {
   support: "整理客户问题、核对已有业务资料、制作回复草稿；不向客户发送消息，不承诺赔偿或退款。",
   finance: "依据提供的账目做分类、核对和预算报告；缺少原始凭证就标记缺失，不编造金额，不执行交易。",
 };
+const reportingPrompt = `负责人汇报规范 v1：先用日常语言说清“哪个业务、实际完成什么或卡在哪里、需要负责人决定什么”，待决策正文控制在180字内，一次只问一件事。把内部用例编号、任务编号、版本字段翻译为具体功能，例如“记事能否保存、提醒是否按时到达”；不要把员工原话、转交顺序、核验术语直接拼给负责人。重复问题合并成一句；证据路径和内部背景放 context，不在正文重复。已有待答复或已暂缓事项时，员工的跟进留在内部，不重新催问或改名上报；只有实质新增缺口才另提问。已暂缓表示仍未解决，不得说已处理或已完成。`;
 const ceoReceiptPrompt = `CEO 回执约束 v1：company.result 的 evidence 必须为 1–5 项，每项最多150字；只能列关键依据，相同来源合并，不要把所有查询逐条列成依据。summary 最多400字，artifacts 可为空数组，整个 detail 最多3500字。输出前核对数量及长度；收到 repair 时仅修复回执，不重复已经完成的业务。`;
 const decisionOptionsPrompt = `CEO 决策按钮协议 v1：需要负责人选择方案时，在每条 escalations 中增加 options，提供2–5个具体可选行动，每项最多40字，例如“先做记住推广”“先做阅读推广”“暂缓”；问题正文说明选项的影响与建议。需要资料而非方案时使用“资料已补充”“暂缓”，保留负责人文字补充。不要仅写“选项1/选项2”让人猜含义。系统将实际选中的文字写入知识，CEO 收到后执行对应方案；选项只表达当前内部授权范围，不产生发布、付款等未接入操作权限。`;
 const escalationPrompt = `CEO 自主上报协议 v1：员工已有未解决问题时，escalations.issues 关联1–8个真实问题编号；不要关联 answered 的历史问题。CEO 自己发现的新业务缺口尚无问题编号时，直接上报 {"key":"稳定英文编号","business":"真实项目编号","issues":[],"question":"需要负责人决定的具体问题","context":"已尝试办法及建议"}，系统会建立问题、投递飞书并保存答复，不需要先让员工制造一个问题。每个新问题只关联一个项目；同一问题沿用 key，已有答复先使用，不重复提问。没有需要上报的事项时使用 escalations:[]；不可无项目、无问题编号地上报，不得编造编号。所有数组可为空指顶层决策数组，单条上报须满足上述规则。`;
@@ -57,7 +58,9 @@ events[].detail.question 是已由通道核验身份的负责人本轮诉求；�
       "\n" +
       escalationPrompt +
       "\n" +
-      decisionOptionsPrompt,
+      decisionOptionsPrompt +
+      "\n" +
+      reportingPrompt,
     emits: { source: "company-ceo", types: ["company.ceo.decision"] },
   };
 }
@@ -117,6 +120,10 @@ export function ensureBusinessRules(directory: string) {
     changed = true;
   }
   for (const rule of rules.rules.filter((r: any) => r.name.startsWith("公司部门-") || r.name === "CEO · 业务答复")) {
+    if (rule.to === "company-ceo" && !rule.prompt.includes("负责人汇报规范 v1")) {
+      rule.prompt += "\n" + reportingPrompt;
+      changed = true;
+    }
     if (rule.to === "company-ceo" && !rule.prompt.includes("CEO 决策按钮协议 v1")) {
       rule.prompt += "\n" + decisionOptionsPrompt;
       changed = true;
@@ -267,7 +274,9 @@ export function rolePrompt(role: Role) {
       "\n" +
       escalationPrompt +
       "\n" +
-      decisionOptionsPrompt
+      decisionOptionsPrompt +
+      "\n" +
+      reportingPrompt
     );
   return (
     `你是公司的${departments[role]}部门。先读工作区 AGENTS.md 和 knowledge/company.md，再读 handbook/${role}.md。\n` +

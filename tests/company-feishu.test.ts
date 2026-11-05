@@ -560,3 +560,29 @@ test("existing native cards gain the free-text form once on restart", async () =
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Acknowledging an owner's deferral must not claim the business work was completed.
+test("deferred cards show paused status and put background in a collapsed panel", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-feishu-readable-"));
+  const calls: string[][] = [];
+  const hub = { delivered: async () => {} } as any;
+  const lark = async (args: string[]) => {
+    calls.push(args);
+    return { data: { message_id: "om_readable" } };
+  };
+  try {
+    const bridge = new CompanyFeishu(join(dir, "state.json"), "ou_owner", hub, lark, undefined, true);
+    await bridge.deliver({ ...card, text: "提醒是否按时到达？\n\n内部核验记录" });
+    const open = JSON.parse(calls[0][calls[0].indexOf("--content") + 1]);
+    assert.equal(open.body.elements[0].text.content, "提醒是否按时到达？");
+    const panel = open.body.elements.find((e: any) => e.tag === "collapsible_panel");
+    assert.equal(panel.expanded, false);
+    assert.match(JSON.stringify(panel), /内部核验记录/);
+    await bridge.deliver({ ...card, version: 3, state: "done", choice: 1, result: "经营周期已检查。" });
+    const done = JSON.parse(JSON.parse(calls[1][calls[1].indexOf("--data") + 1]).content);
+    assert.match(done.header.title.content, /已暂缓/);
+    assert.doesNotMatch(JSON.stringify(done), /待你决策|已处理|经营周期已检查/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
