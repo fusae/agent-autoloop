@@ -486,8 +486,14 @@ export class Operations {
       d.directives.every((a) => known(a.business)) &&
       d.approvals.every((a) => known(a.business) && this.get(a.business, now).plans.some((p) => p.id === a.plan)) &&
       d.answers.every((a) => c.issues.some((i) => i.id === a.issue)) &&
-      d.escalations.every((a) => a.issues.every((id) => c.issues.some((i) => i.id === id)));
+      d.escalations.every(
+        (a) =>
+          (!a.business || known(a.business)) &&
+          a.issues.every((id) => c.issues.some((i) => i.id === id && (!a.business || i.business === a.business))),
+      );
     if (!valid) return "CEO 决策引用了不存在或暂停的项目、计划或问题，请重新核对编号。";
+    if (d.escalations.some((a) => a.issues.some((id) => c.issues.find((i) => i.id === id)?.state === "answered")))
+      return "上报引用了已答复的问题，不能作为新的待决事项。请先使用已有答案；确有新缺口时提供 business 项目编号和 issues:[]，不要借用历史问题编号。";
     for (const business of new Set(d.directives.map((v) => v.business))) {
       const p = this.get(business, now);
       const additions = new Set(
@@ -565,10 +571,37 @@ export class Operations {
       }
     }
     for (const e of d.escalations) {
-      const ids = e.issues.filter((id) => c.issues.some((i) => i.id === id && i.state === "open"));
-      if (!ids.length || c.questions.some((q) => q.key === e.key && q.state === "open")) continue;
+      // CEO may discover a blocker directly; create its durable issue in this same decision transaction.
+      const linked = [...e.issues];
+      if (!linked.length && e.business) {
+        const id = hash(`ceo-question:${e.business}:${e.key}`);
+        if (!c.issues.some((i) => i.id === id))
+          c.issues.push({
+            id,
+            business: e.business,
+            role: "ceo",
+            task: null,
+            question: e.question,
+            context: e.context,
+            state: "open",
+            answer: null,
+            at: now.toISOString(),
+          });
+        linked.push(id);
+      }
+      const ids = linked.filter((id) => c.issues.some((i) => i.id === id && i.state === "open"));
+      if (
+        !ids.length ||
+        c.questions.some(
+          (q) =>
+            q.key === e.key &&
+            q.state === "open" &&
+            (!e.business || q.issues.some((id) => c.issues.some((i) => i.id === id && i.business === e.business))),
+        )
+      )
+        continue;
       const q = {
-        id: hash(`${decisionId}:${e.key}`),
+        id: hash(e.business ? `${decisionId}:${e.business}:${e.key}` : `${decisionId}:${e.key}`),
         key: e.key,
         issues: ids,
         question: e.question,

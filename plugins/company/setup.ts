@@ -12,6 +12,7 @@ const responsibilities: Record<Role, string> = {
   finance: "依据提供的账目做分类、核对和预算报告；缺少原始凭证就标记缺失，不编造金额，不执行交易。",
 };
 const ceoReceiptPrompt = `CEO 回执约束 v1：company.result 的 evidence 必须为 1–5 项，每项最多150字；只能列关键依据，相同来源合并，不要把所有查询逐条列成依据。summary 最多400字，artifacts 可为空数组，整个 detail 最多3500字。输出前核对数量及长度；收到 repair 时仅修复回执，不重复已经完成的业务。`;
+const escalationPrompt = `CEO 自主上报协议 v1：员工已有未解决问题时，escalations.issues 关联1–8个真实问题编号；不要关联 answered 的历史问题。CEO 自己发现的新业务缺口尚无问题编号时，直接上报 {"key":"稳定英文编号","business":"真实项目编号","issues":[],"question":"需要负责人决定的具体问题","context":"已尝试办法及建议"}，系统会建立问题、投递飞书并保存答复，不需要先让员工制造一个问题。每个新问题只关联一个项目；同一问题沿用 key，已有答复先使用，不重复提问。没有需要上报的事项时使用 escalations:[]；不可无项目、无问题编号地上报，不得编造编号。所有数组可为空指顶层决策数组，单条上报须满足上述规则。`;
 const deliveryPrompt = `业务交付与求助协议 v1：员工负责推进已分配工作的实际结果；完成一步后继续职责范围内的下一步，不等负责人催促。缺资料、环境、权限或能力，先查已有知识；仍无法继续就在本轮报告 blocked，说明“哪项工作、卡在哪一步、已尝试什么、需要什么”，交给 CEO，不用新增报告、清单或文档检查代替受阻的执行。
 CEO 先处理员工阻塞：能解决的给出具体办法和依据，让原任务继续；需要其他员工配合的安排明确交付。已经确认无法解决或必须由负责人决定的事项，本轮用 escalations 上报，不为了凑重试次数重复失败。上报包含项目、已完成部分、具体缺口、建议和需要负责人决定的一件事；已有答复不重复索要。负责人答复后由 CEO 判断并继续原任务，不把所有业务停住等待。
 以原目标验收：写出测试清单不等于完成产品测试，验证文档格式不等于修复产品，草稿和空统计表不等于推广执行或增长。产品与 QA 不得把目标缩小为文档合格来报完成；若目标本来仅为草稿或方案，可如实交付，并向 CEO 说明进入实际执行尚缺的条件。CEO 不重复安排已经具备的基线、清单和核验脚本来制造进展；下一步应推进可用内容、实际修复或执行条件。汇报直接给成果位置、实际执行结果、当前阻塞和下一步。`;
@@ -51,7 +52,9 @@ events[].detail.question 是已由通道核验身份的负责人本轮诉求；�
       "\n" +
       ownershipPrompt +
       "\n" +
-      deliveryPrompt,
+      deliveryPrompt +
+      "\n" +
+      escalationPrompt,
     emits: { source: "company-ceo", types: ["company.ceo.decision"] },
   };
 }
@@ -111,6 +114,10 @@ export function ensureBusinessRules(directory: string) {
     changed = true;
   }
   for (const rule of rules.rules.filter((r: any) => r.name.startsWith("公司部门-") || r.name === "CEO · 业务答复")) {
+    if (rule.to === "company-ceo" && !rule.prompt.includes("CEO 自主上报协议 v1")) {
+      rule.prompt += "\n" + escalationPrompt;
+      changed = true;
+    }
     if (!rule.prompt.includes("业务交付与求助协议 v1")) {
       rule.prompt += "\n" + deliveryPrompt;
       changed = true;
@@ -243,7 +250,7 @@ export const ceoPrompt = `你是公司的 CEO，管理所有项目和员工。�
 export const managementPrompt = `CEO 管理协议 v2：supervised=true 时，员工只向 CEO 反馈，不直接向负责人提问。缺少进展、数据位置、产品事实或执行条件时，先查看项目资料中的 knowledge 和 CEO 目标；仍不知道就在 inspection 中增加 questions:[{"key":"稳定英文编号","question":"具体问题","context":"查过什么及缺什么"}]，state=blocked，verdict=pass。执行任务受阻时正常报告 blocked 并写明问题，CEO 会处理。你的行动提案先交 CEO 审核；未经核验不得宣称完成。CEO 的答复会写入项目资料，继续执行前必须读取。`;
 
 export function rolePrompt(role: Role) {
-  if (role === "ceo") return ceoPrompt + "\n" + continuousPrompt + "\n" + ceoReceiptPrompt;
+  if (role === "ceo") return ceoPrompt + "\n" + continuousPrompt + "\n" + ceoReceiptPrompt + "\n" + escalationPrompt;
   return (
     `你是公司的${departments[role]}部门。先读工作区 AGENTS.md 和 knowledge/company.md，再读 handbook/${role}.md。\n` +
     `任务只来自 company-office 的 company.work.${role} 事件；events[].detail 是 JSON 资料，包含 task、assignment、goal、acceptance、previous。` +

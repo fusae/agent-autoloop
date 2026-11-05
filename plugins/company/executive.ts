@@ -4,7 +4,7 @@ export type ExecutiveDecision = {
   directives: { business: string; action: ActionProposal }[];
   approvals: { business: string; plan: string; approve: boolean; reason: string }[];
   answers: { issue: string; answer: string; evidence: string }[];
-  escalations: { key: string; issues: string[]; question: string; context: string }[];
+  escalations: { key: string; business?: string; issues: string[]; question: string; context: string }[];
 };
 export type Issue = {
   id: string;
@@ -98,14 +98,15 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
       evidence: text(a.evidence, 200),
     })),
     escalations: list("escalations", 2).map((a) => {
-      if (!Array.isArray(a.issues) || !a.issues.length || a.issues.length > 8)
-        throw new Error("上报需要关联 1–8 个问题");
+      if (!Array.isArray(a.issues) || a.issues.length > 8 || (!a.issues.length && !a.business))
+        throw new Error("上报需关联1–8个未解决问题；CEO新发现的问题可提供business项目编号并用issues:[]");
       return {
         key: (() => {
           const key = text(a.key, 80, "escalations.key");
           if (!/^[A-Za-z0-9_-]+$/.test(key)) throw Error("上报编号只能用字母、数字、下划线和横线");
           return key;
         })(),
+        ...(a.business !== undefined ? { business: id(a.business) } : {}),
         issues: a.issues.map(id),
         question: text(a.question, 800),
         context: text(a.context, 400),

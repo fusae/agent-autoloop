@@ -254,7 +254,8 @@ export class Company {
       task.status = "blocked";
       task.reason = `部门报告格式不合格：${error.message}`;
       this.save(task, "invalid-report");
-      if (!task.supervised) this.notice(receipt, id, `${task.reason}。请修正工作规范后显式 retry。`);
+      if (!task.supervised && !(this.config.ceoMode && task.kind === "ceo"))
+        this.notice(receipt, id, `${task.reason}。请修正工作规范后显式 retry。`);
       return;
     }
     task.reports.push({ ...report, role });

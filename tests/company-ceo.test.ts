@@ -344,7 +344,7 @@ test("malformed CEO output is repaired automatically with the original error and
         evidence: ["资料"],
         executive: decision({ briefs: [{ business: "app", objective: "x".repeat(301) }] }),
       });
-    fail(1);
+    assert.equal(fail(1).notice, undefined, "automatic CEO repair must not ask owner to edit configuration or retry");
     let r = o.plan("recover-1", b.list(), c.tasks(), now);
     const retry = r.events?.find((e) => e.type === "company.task.retry");
     assert.ok(retry);
@@ -553,4 +553,74 @@ test("owner answers reopen a blocked task retry allowance once and CEO resumes t
     assert.equal(o.executive().retries[first.subject], 1);
     o.plan("owner-replay", b.list(), c.tasks(), now, [answer], 4);
     assert.equal(o.executive().retries[first.subject], 1, "replayed owner answer cannot reset the allowance again");
+  }));
+
+// CEO-discovered business blockers have no employee issue ID yet; they still need a durable owner reply path.
+test("CEO can raise a new project question without inventing issue IDs and duplicate decisions do not resend it", () =>
+  fixture((b, o, c) => {
+    const escalation = {
+      key: "publishing-access",
+      business: "app",
+      issues: [],
+      question: "推广内容已准备，发布渠道由谁提供？",
+      context: "员工尚无发布渠道入口",
+    };
+    const parsed = executiveDecision(decision({ escalations: [escalation] }));
+    const chat = (id: string, executive: unknown) =>
+      o.plan(id, b.list(), c.tasks(), now, [], 4, [
+        {
+          id,
+          source: "company-ceo",
+          type: "company.ceo.decision",
+          subject: "owner",
+          detail: JSON.stringify({ summary: "需补充执行条件", executive }),
+        },
+      ]);
+    const first = chat("new-question", parsed);
+    assert.equal(first.ask?.length, 1);
+    const issue = o.executive().issues.find((i) => i.question === escalation.question)!;
+    assert.equal(issue.business, "app");
+    assert.equal(issue.state, "owner");
+    assert.equal(chat("same-question", parsed).ask, undefined);
+    b.save(
+      { id: "other", name: "其他APP", description: "阅读", audience: "测试", objective: "使用", stage: "operating" },
+      now,
+    );
+    b.autonomy("other", true, now);
+    b.status("other", "active", now);
+    const other = chat(
+      "other-question",
+      decision({ escalations: [{ ...escalation, business: "other", question: "其他APP的发布渠道？" }] }),
+    );
+    assert.equal(other.ask?.length, 1, "different projects may use the same local question key");
+    assert.notEqual(other.ask![0].about, first.ask![0].about);
+    assert.equal(o.executive().issues.filter((i) => i.question === escalation.question).length, 1);
+    o.plan(
+      "answer-new",
+      b.list(),
+      c.tasks(),
+      now,
+      [{ card: 87, choice: null, text: "先使用项目已有渠道", about: first.ask![0].about }],
+      4,
+    );
+    assert.ok(o.executive().knowledge.some((k) => k.issue === issue.id && k.source === "owner"));
+    chat(
+      "resolve-new",
+      decision({ answers: [{ issue: issue.id, answer: "按已有渠道准备具体执行", evidence: "负责人回复" }] }),
+    );
+    assert.equal(chat("answered-question", parsed).ask, undefined);
+    const closed = chat("closed-issue", decision({ escalations: [{ ...escalation, issues: [issue.id] }] }));
+    assert.match(closed.notice![0].text, /已答复/);
+    assert.equal(closed.ask, undefined);
+    const invalid = chat(
+      "unknown-project",
+      decision({
+        briefs: [{ business: "app", objective: "不可写入" }],
+        escalations: [{ ...escalation, business: "missing" }],
+      }),
+    );
+    assert.match(invalid.notice![0].text, /未执行/);
+    assert.notEqual(o.executive().briefs.app, "不可写入");
+    assert.throws(() => executiveDecision(decision({ escalations: [{ ...escalation, business: undefined }] })));
+    assert.throws(() => executiveDecision(decision({ escalations: [{ ...escalation, issues: Array(9).fill("x") }] })));
   }));
