@@ -132,6 +132,47 @@ async function until(worker: { tick(): Promise<boolean> }, done: () => boolean, 
 const worker = (hub: ReturnType<typeof fakeHub>, more: object = {}) =>
   createWorker({ hub: hub as any, name: "w1", wait: 0, ...more });
 
+// A transient Codex error followed by completion must not launch a fresh session or retry the business.
+test("a recovered Codex connection hands in its completed receipt without rerunning work", async () => {
+  const plugin = join(home, "plugins", "codex-recovered");
+  mkdirSync(plugin, { recursive: true });
+  writeFileSync(
+    join(plugin, "agent.ts"),
+    `
+import codex from ${JSON.stringify(new URL("../plugins/codex/agent.ts", import.meta.url).href)};
+export default { ...codex, command: t => ["/bin/sh", "-c", t.command[0]] };
+`,
+  );
+  const receipt = { events: [{ id: "delivery:1", type: "company.result", subject: "task", detail: "{}" }] };
+  const stream = [
+    { type: "thread.started", thread_id: "kept-session" },
+    { type: "error", message: "Reconnecting... 4/5 (request timed out)" },
+    {
+      type: "item.completed",
+      item: { type: "agent_message", text: "已交付\n\n```agent-autoloop\n" + JSON.stringify(receipt) + "\n```" },
+    },
+    { type: "turn.completed", usage: { input_tokens: 4, output_tokens: 2 } },
+  ]
+    .map((event) => JSON.stringify(event))
+    .join("\n");
+  writeFileSync(join(folder, "recovered.jsonl"), stream);
+  const hub = fakeHub();
+  hub.jobs.push(
+    job({
+      use: "codex-recovered",
+      session: "existing-session",
+      command: ["echo call >> recovered-calls.txt; cat recovered.jsonl"],
+    }),
+  );
+  const w = worker(hub);
+  await until(w, () => hub.results.length === 1);
+  assert.equal(hub.results[0].outcome, "done");
+  assert.equal(hub.results[0].error, undefined);
+  assert.equal(hub.results[0].session, "kept-session");
+  assert.deepEqual(hub.results[0].events, [{ ...receipt.events[0], summary: "", link: "", hops: 0 }]);
+  assert.equal(readFileSync(join(folder, "recovered-calls.txt"), "utf8"), "call\n");
+});
+
 test("a job runs in its rule's folder with the prompt and context file, and without the hub's secrets", async () => {
   const hub = fakeHub();
   const script = `pwd > out.txt; printenv AGENT_AUTOLOOP_CONTEXT >> out.txt; printenv AGENT_AUTOLOOP_SECRET_X >> out.txt; printenv AGENT_AUTOLOOP_RUN >> out.txt; echo "$PROMPT_ARG" >> out.txt; cat "$AGENT_AUTOLOOP_CONTEXT" > ctx.txt; echo 改好了`;

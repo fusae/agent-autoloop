@@ -121,6 +121,31 @@ test("Codex: new and resumed runs use only browser access configured for the bac
   }
 });
 
+// A recovered connection warning must not discard a completed turn and rerun business work.
+test("Codex: successful completion clears transient reconnect errors but failures keep their error", () => {
+  const lines = (...events: object[]) => events.map((e) => JSON.stringify(e)).join("\n");
+  const reconnect = { type: "error", message: "Reconnecting... 4/5 (request timed out)" };
+  const answer = { type: "item.completed", item: { type: "agent_message", text: "已完成交付" } };
+  const done = { type: "turn.completed", usage: { input_tokens: 9, output_tokens: 2 } };
+  for (const code of [null, 0]) {
+    const read = codex.read(lines(reconnect, answer, done), code, "");
+    assert.equal(read.error, undefined);
+    assert.equal(read.text, "已完成交付");
+    assert.equal(read.finished, true);
+    assert.equal(read.usage?.input, 9);
+  }
+  assert.equal(codex.read(lines(reconnect, answer), 1, "").error, reconnect.message);
+  assert.equal(codex.read(lines(reconnect, answer), 1, "").text, undefined);
+  assert.equal(codex.read(lines(reconnect, done), 0, "").error, "Codex 没有完成并留下实际结果");
+  const failed = codex.read(
+    lines(reconnect, answer, { type: "turn.failed", error: { message: "连接最终失败" } }),
+    1,
+    "",
+  );
+  assert.equal(failed.error, "连接最终失败");
+  assert.equal(failed.text, undefined);
+});
+
 test("Codex: only a finished turn's last message is its answer", () => {
   const lines = (...events: object[]) => events.map((e) => JSON.stringify(e)).join("\n");
   const started = { type: "thread.started", thread_id: "t" };

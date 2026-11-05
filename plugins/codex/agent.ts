@@ -48,6 +48,8 @@ export default {
       if (event.type === "thread.started") seen.session = event.thread_id;
       else if (event.type === "item.completed" && event.item?.type === "agent_message") seen.text = event.item.text;
       else if (event.type === "turn.completed") {
+        // Reconnect errors describe an interrupted attempt, not the eventual completed turn.
+        delete seen.error;
         seen.completed = seen.finished = true;
         const { input_tokens = 0, output_tokens = 0, cached_input_tokens = 0 } = event.usage ?? {};
         seen.usage = { input: input_tokens, output: output_tokens, cached: cached_input_tokens };

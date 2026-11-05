@@ -33,7 +33,7 @@ node --disable-warning=ExperimentalWarning --test --test-name-pattern='agent-aut
 | `link(session)` | 可选，会话链接；支持会话的插件可只重写错误回执 |
 | `check()` | 可选，能用返回 `null`，否则返回下一步怎么做 |
 
-`turn` 包含 `prompt`、`session`、`resume`、`cwd`、`access`、`model`、`effort`、`command`、`contextFile`、`folder`。`contextFile` 是资料文件，受限 CLI 需要允许读取 `folder`。`read` 要能处理未写完的输出；CLI 真正完成后才返回 `text`。
+`turn` 包含 `prompt`、`session`、`resume`、`cwd`、`access`、`model`、`effort`、`command`、`contextFile`、`folder`。`contextFile` 是资料文件，受限 CLI 需要允许读取 `folder`。`read` 要能处理未写完的输出；CLI 真正完成后才返回 `text`。Codex 中途重连的 `error` 在收到有效 `turn.completed` 后清除，避免将成功交付误判为失败并重做；没有完成事件、没有最终正文或最终 `turn.failed` 仍按失败处理。
 
 在规则里选择这个插件：
 
