@@ -10,6 +10,8 @@ import { test } from "node:test";
 import { Company } from "../plugins/company/company.ts";
 import { Operations } from "../plugins/company/operations.ts";
 import { Businesses } from "../plugins/company/business.ts";
+import { CompanyFeishu } from "../plugins/company/channel.ts";
+import { hubClient } from "../protocol/client.ts";
 
 const cli = resolve(import.meta.dirname, "../bin/agent-company.ts");
 async function until<T>(get: () => T | Promise<T>, timeout = 120_000): Promise<NonNullable<T>> {
@@ -46,11 +48,25 @@ test(
     let logs = "";
     try {
       run("init", directory, "codex", String(port));
+      const channelKey = spawnSync(
+        process.execPath,
+        [resolve(import.meta.dirname, "../bin/agent-autoloop.ts"), "key", "new", "channel", "test-chat"],
+        {
+          env: { ...env, AGENT_AUTOLOOP_HOME: join(directory, "hub") },
+          encoding: "utf8",
+        },
+      );
+      assert.equal(channelKey.status, 0, channelKey.stderr);
       const fixture = join(scratch, "department.ts");
       writeFileSync(
         fixture,
         `import {readFileSync} from 'node:fs';
 const context=JSON.parse(readFileSync(process.env.AGENT_AUTOLOOP_CONTEXT,'utf8'));
+if(context.events[0].type==='company.owner.question') {
+  const question=JSON.parse(context.events[0].detail).question;
+  console.log('业务答复。\\n\\n\`\`\`agent-autoloop\\n'+JSON.stringify({notice:[{key:'owner-answer-'+context.events[0].id,title:'CEO · 业务答复',text:'问题：'+question+'\\n答复：当前没有业务任务；此为测试记录。'}]})+'\\n\`\`\`');
+  process.exit(0);
+}
 const brief=JSON.parse(context.events[0].detail);
 const event={id:brief.task+':'+brief.assignment+':result',type:'company.result',subject:brief.task,
  detail:JSON.stringify({assignment:brief.assignment,verdict:'pass',summary:'模拟部门交付',artifacts:['tasks/'+brief.task+'/demo.md'],evidence:['模拟检查通过；非真实业务'],...(brief.inspection?{inspection:{state:brief.role==='growth'?'action':'idle',actions:brief.role==='growth'?[{key:'guide',title:'使用说明',kind:'content',goal:'生成模拟使用说明',acceptance:['仅测试资料'],priority:1,dueDays:2,followUpDays:3,measure:'首次使用人数'}]:[],reviews:[]}}:{})})};
@@ -58,6 +74,7 @@ console.log('模拟部门完成。\\n\\n\`\`\`agent-autoloop\\n'+JSON.stringify(
       );
       const rulesFile = join(directory, "hub/rules.json");
       const rules = JSON.parse(readFileSync(rulesFile, "utf8"));
+      rules.channels["test-chat"] = { name: "模拟飞书", answerers: ["ou_owner"] };
       for (const [id, agent] of Object.entries(rules.agents) as [string, Record<string, unknown>][]) {
         if (id !== "company-office" && id !== "company-business") {
           agent.use = "command";
@@ -74,6 +91,45 @@ console.log('模拟部门完成。\\n\\n\`\`\`agent-autoloop\\n'+JSON.stringify(
           .then((r) => r.ok)
           .catch(() => false),
       );
+      const config = JSON.parse(readFileSync(join(directory, "hub/config.json"), "utf8"));
+      const owner = hubClient(config.url, config.owner);
+      const messages: string[][] = [];
+      const bridge = new CompanyFeishu(
+        join(scratch, "feishu.json"),
+        "ou_owner",
+        hubClient(config.url, channelKey.stdout.trim()),
+        async (args) => {
+          messages.push(args);
+          return { data: { message_id: "om_reply" } };
+        },
+        hubClient(config.url, config.source.key).event,
+      );
+      const question = {
+        message_id: "om_question",
+        msg_type: "text",
+        sender: { id: "ou_owner", sender_type: "user" },
+        content: "目前员工在做什么？",
+      };
+      await bridge.receive([question, question]);
+      const reply = await until(async () => (await owner.state()).cards.find((c: any) => c.title === "CEO · 业务答复"));
+      // The notice reaches the same delivery path used by real Feishu; no live messages in tests.
+      const { companyBriefing } = await import("../plugins/company/briefing.ts");
+      const knowledge = companyBriefing(directory);
+      assert.equal(knowledge.execution!.conversation.questions.length, 1);
+      assert.match(String(knowledge.execution!.conversation.answers[0].text), /目前员工在做什么/);
+      await bridge.deliver({
+        ...reply,
+        ref: null,
+        options: [],
+        recommend: null,
+        choice: null,
+        answer: null,
+        result: null,
+        link: null,
+      });
+      assert.equal(messages.length, 1);
+      assert.match(messages[0][messages[0].indexOf("--text") + 1], /当前没有业务任务/);
+      assert.equal(office.tasks().length, 0);
       const request = join(scratch, "request.json");
       writeFileSync(
         request,

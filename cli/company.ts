@@ -75,6 +75,7 @@ export async function companyCLI(args: string[]) {
   if (command === "feishu") {
     const user = rest[0];
     if (!/^ou_[A-Za-z0-9]+$/.test(user ?? "")) throw new Error("需要本人飞书 open_id");
+    ensureBusinessRules(directory);
     const file = join(directory, "hub/config.json"),
       config = read(file),
       rulesFile = join(directory, "hub/rules.json"),
@@ -89,7 +90,14 @@ export async function companyCLI(args: string[]) {
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       }).trim();
-    config.channels["company-feishu"] = { use: "company", key, user, stateFile: join(directory, "feishu-state.json") };
+    config.channels["company-feishu"] = {
+      ...old,
+      use: "company",
+      key,
+      user,
+      stateFile: join(directory, "feishu-state.json"),
+      inboxFile: file,
+    };
     rules.channels["company-feishu"] = { name: "CEO 飞书", answerers: [user] };
     writeFileSync(file, JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
     writeFileSync(rulesFile, JSON.stringify(rules, null, 2) + "\n", { mode: 0o600 });

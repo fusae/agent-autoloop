@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { HubError } from "../../protocol/client.ts";
+import { HubError, hubClient } from "../../protocol/client.ts";
 import type { Card, ChannelContext } from "../../host/channels.ts";
 type Message = {
   message_id: string;
@@ -36,12 +36,26 @@ export class CompanyFeishu {
   private state: State;
   private hub: ChannelContext["hub"];
   private lark: (args: string[]) => Promise<any>;
-  constructor(file: string, owner: string, hub: ChannelContext["hub"], lark: (args: string[]) => Promise<any>) {
+  private onQuestion?: (event: {
+    id: string;
+    type: string;
+    subject: string;
+    summary: string;
+    detail: string;
+  }) => Promise<unknown>;
+  constructor(
+    file: string,
+    owner: string,
+    hub: ChannelContext["hub"],
+    lark: (args: string[]) => Promise<any>,
+    onQuestion?: CompanyFeishu["onQuestion"],
+  ) {
     if (!isAbsolute(file) || !/^ou_[A-Za-z0-9]+$/.test(owner)) throw new Error("需要飞书本人 open_id 和绝对状态路径");
     this.file = file;
     this.owner = owner;
     this.hub = hub;
     this.lark = lark;
+    this.onQuestion = onQuestion;
     mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
     this.state = existsSync(file)
       ? JSON.parse(readFileSync(file, "utf8"))
@@ -105,7 +119,24 @@ export class CompanyFeishu {
       )
         continue;
       const match = /^\s*(?:#C?|C)(\d+)\s+([\s\S]+)$/i.exec(m.content ?? "");
-      if (!match) continue;
+      if (!match) {
+        const question = m.content?.trim();
+        // Numbered replies never fall through to conversation, including incomplete/invalid replies.
+        if (!this.onQuestion || !question || question.length > 4000 || /^(?:#C?|C)\d+\b/i.test(question)) continue;
+        const detail = JSON.stringify({ question, message: m.message_id });
+        if (detail.length > 4000) continue;
+        await this.onQuestion({
+          id: "owner-question:" + createHash("sha256").update(m.message_id).digest("hex"),
+          type: "company.owner.question",
+          subject: "owner",
+          summary: "负责人向 CEO 提问",
+          detail,
+        });
+        this.state.seen.push(m.message_id);
+        this.state.seen = this.state.seen.slice(-2000);
+        this.save();
+        continue;
+      }
       const card = Number(match[1]),
         saved = this.state.cards[card],
         text = match[2].trim();
@@ -176,7 +207,15 @@ export default async function companyChannel({ hub, options, signal, log }: Chan
         }
       });
     });
-  const bridge = new CompanyFeishu(String(options.stateFile ?? ""), String(options.user ?? ""), hub, lark);
+  let onQuestion: CompanyFeishu["onQuestion"];
+  if (typeof options.inboxFile === "string") {
+    if (!isAbsolute(options.inboxFile)) throw Error("需要公司收件配置绝对路径");
+    const config = JSON.parse(readFileSync(options.inboxFile, "utf8"));
+    if (config.source?.name !== "company-inbox" || typeof config.source.key !== "string")
+      throw Error("公司收件来源未配置");
+    onQuestion = hubClient(config.url, config.source.key).event;
+  }
+  const bridge = new CompanyFeishu(String(options.stateFile ?? ""), String(options.user ?? ""), hub, lark, onQuestion);
   const pause = () => delay(30_000, undefined, { signal }).catch(() => {});
   const deliver = async () => {
     while (!signal.aborted) {

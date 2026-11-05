@@ -7,6 +7,44 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { CompanyFeishu } from "../plugins/company/channel.ts";
 import type { Card } from "../host/channels.ts";
+
+// Ordinary owner questions must be durable, authenticated data, never implicit card approvals.
+test("owner chat retries ingestion safely and survives restart without routing invalid card replies as chat", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-chat-")),
+    events: any[] = [];
+  const file = join(dir, "state.json");
+  let fail = true;
+  const onQuestion = async (event: any) => {
+    if (fail) throw Error("offline");
+    events.push(event);
+  };
+  const question = {
+    message_id: "om_question1",
+    msg_type: "text",
+    sender: { id: "ou_owner", sender_type: "user" },
+    content: "记住 APP 进展怎样？",
+  };
+  try {
+    let bridge = new CompanyFeishu(file, "ou_owner", {} as any, async () => ({}), onQuestion);
+    await assert.rejects(bridge.receive([question]), /offline/);
+    fail = false;
+    await bridge.receive([question]);
+    bridge = new CompanyFeishu(file, "ou_owner", {} as any, async () => ({}), onQuestion);
+    await bridge.receive([
+      question,
+      { ...question, message_id: "om_other", sender: { id: "ou_other", sender_type: "user" } },
+      { ...question, message_id: "om_bad", content: "#999 批准" },
+      { ...question, message_id: "om_bot", sender: { id: "ou_owner", sender_type: "app" } },
+    ]);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].type, "company.owner.question");
+    assert.equal(JSON.parse(events[0].detail).question, question.content);
+    assert.doesNotMatch(events[0].summary, /记住/);
+    assert.equal(events[0].subject, "owner");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 const card: Card = {
   id: 42,
   version: 1,
