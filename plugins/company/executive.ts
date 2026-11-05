@@ -11,6 +11,7 @@ export type ExecutiveDecision = {
     files?: string[];
     reason: string;
   }[];
+  ownerReplies?: { question: string; event: number }[];
   answers: { issue: string; answer: string; evidence: string }[];
   escalations: {
     key: string;
@@ -33,6 +34,7 @@ export type Issue = {
   at: string;
 };
 export type OwnerQuestion = {
+  answerEvent?: number;
   options?: string[];
   id: string;
   key: string;
@@ -44,6 +46,7 @@ export type OwnerQuestion = {
   at: string;
 };
 export type Knowledge = {
+  context?: string;
   id: string;
   business: string;
   issue: string;
@@ -65,6 +68,7 @@ export type Leadership = {
   decisions: { task: string; summary: string; at: string; decision: ExecutiveDecision }[];
   runs: { task: string; at: string }[];
   answeredCards: number[];
+  ownerReplyEvents?: string[];
   retries: Record<string, number>;
   nextReviewAt?: string;
   unchangedReviews?: number;
@@ -122,6 +126,14 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
               reason: text(a.reason, 200),
               ...(a.verdict === "publish" ? { files: a.files.map((v: unknown) => text(v, 150, "files")) } : {}),
             };
+          }),
+        }
+      : {}),
+    ...(d.ownerReplies !== undefined
+      ? {
+          ownerReplies: list("ownerReplies", 5).map((a) => {
+            if (!Number.isSafeInteger(a.event) || a.event < 1) throw Error("负责人答复需要真实消息事件编号");
+            return { question: id(a.question), event: a.event };
           }),
         }
       : {}),

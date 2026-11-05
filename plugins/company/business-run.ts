@@ -1,3 +1,4 @@
+import { syncOwnerReplyCards } from "./owner-replies.ts";
 import { failedWork } from "./recovery.ts";
 import { hubClient } from "../../protocol/client.ts";
 import { existsSync } from "node:fs";
@@ -36,6 +37,11 @@ try {
     try {
       const client = hubClient(cfg.url, cfg.owner),
         runs: any[] = [];
+      try {
+        await syncOwnerReplyCards(dirname(configFile), operations.executive(), client);
+      } catch {
+        /* Card sync is retried on the next tick without blocking task recovery. */
+      }
       let before: number | undefined;
       for (let page = 0; page < 5; page++) {
         const state = await client.state(before),

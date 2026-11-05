@@ -178,7 +178,10 @@ export class Company {
       supervised: !!task.supervised,
       publication: task.publication ?? null,
       repair: task.assignment > 1 ? task.reason.slice(0, 400) : null,
-      previous: task.reports.at(-1) ?? null,
+      previous:
+        (task.kind === "publish-content" && role === "qa"
+          ? task.reports.findLast((r) => r.role === "growth" && r.verdict === "pass")
+          : task.reports.at(-1)) ?? null,
     });
     receipt.events ??= [];
     receipt.events.push({
@@ -225,7 +228,8 @@ export class Company {
     if (event.source === "company-inbox" && event.type === "company.task.retry") {
       if (task.status !== "blocked" && task.status !== "rejected")
         throw new CompanyInputError("只能重试已阻塞或被否决的任务");
-      if (workflows[task.kind][task.stage] === "qa") task.stage = Math.max(0, task.stage - 1);
+      if (workflows[task.kind][task.stage] === "qa" && task.kind !== "publish-content")
+        task.stage = Math.max(0, task.stage - 1);
       this.dispatch(task, receipt);
       this.save(task, "retried");
       return;
@@ -272,7 +276,11 @@ export class Company {
           )
             throw Error("发布入口尚未确认这份平台结果");
           if (report.publication.key !== task.publication) throw Error("发布结果不属于本次审核");
-          if (role === "qa" && JSON.stringify(report.publication) !== JSON.stringify(task.reports.at(-1)?.publication))
+          if (
+            role === "qa" &&
+            JSON.stringify(report.publication) !==
+              JSON.stringify(task.reports.findLast((r) => r.role === "growth" && r.verdict === "pass")?.publication)
+          )
             throw Error("验收结果与发布回执不一致");
         } catch (error) {
           throw new CompanyInputError((error as Error).message);

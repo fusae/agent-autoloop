@@ -5,9 +5,10 @@ export function failedWork(office: Company, runs: any[], now = new Date()): NonN
   for (const t of office.tasks()) {
     if (t.status !== "active") continue;
     const role = workflows[t.kind][t.stage],
-      last = office.history(t.id).at(-1);
+      last = office.history(t.id).at(-1),
+      agent = t.kind === "publish-content" && t.stage === 0 ? "company-publisher" : `company-${role}`;
     const run = runs
-      .filter((r) => r.agent === `company-${role}` && r.events?.some((e: any) => e.subject === t.id))
+      .filter((r) => r.agent === agent && r.events?.some((e: any) => e.subject === t.id))
       .sort((a, b) => b.id - a.id)[0];
     if (!run || !["failed", "cancelled", "done", "nothing"].includes(run.state) || !run.finishedAt) continue;
     if (

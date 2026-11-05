@@ -1,3 +1,4 @@
+import { ownerReplyEvidence } from "./owner-replies.ts";
 import { freezePublication } from "./publication.ts";
 import { sourceSnapshots } from "./sources.ts";
 import { createHash, randomUUID } from "node:crypto";
@@ -301,6 +302,9 @@ export class Operations {
       };
     });
   }
+  private currentTask(p: Project, task: string) {
+    return p.plans.some((a) => a.task === task && a.status !== "closed") || p.staff.some((s) => s.lastTask === task);
+  }
   private profile(p: Project, b: Portfolio[number], tasks: Task[]) {
     const file = join(this.directory, "workspace/knowledge/operations", b.id + ".json"),
       temp = file + "." + randomUUID() + ".tmp";
@@ -382,6 +386,15 @@ export class Operations {
     now: Date,
   ) {
     const active = businesses.filter((b) => b.autonomy && b.status === "active");
+    // Verified completion resolves internal blockers; never infer an owner's answer or close their pending decision.
+    for (const issue of c.issues.filter((i) => i.state === "open" && active.some((b) => b.id === i.business))) {
+      const task = tasks.find((t) => t.id === issue.task),
+        report = task?.reports.at(-1);
+      if (task?.status === "completed" && report?.verdict === "pass" && report.inspection?.state !== "blocked") {
+        issue.state = "answered";
+        issue.answer = `原任务已通过验收：${task.reason}`;
+      }
+    }
     const addIssue = (issue: Issue) => {
       if (!c.issues.some((i) => i.id === issue.id)) c.issues.push(issue);
     };
@@ -402,7 +415,7 @@ export class Operations {
       for (const activity of p.activity) {
         const t = tasks.find((t) => t.id === activity.task),
           report = t?.reports.at(-1);
-        if (!t) continue;
+        if (!t || !this.currentTask(p, t.id)) continue;
         if (t.status !== "blocked" && !(t.status === "completed" && report?.inspection?.state === "blocked")) continue;
         const qs = report?.inspection?.questions?.length
           ? report.inspection.questions
@@ -503,6 +516,20 @@ export class Operations {
     if (!valid) return "CEO 决策引用了不存在或暂停的项目、计划或问题，请重新核对编号。";
     if (d.escalations.some((a) => a.issues.some((id) => c.issues.find((i) => i.id === id)?.state === "answered")))
       return "上报引用了已答复的问题，不能作为新的待决事项。请先使用已有答案；确有新缺口时提供 business 项目编号和 issues:[]，不要借用历史问题编号。";
+    if (new Set((d.ownerReplies ?? []).map((r) => r.question)).size !== (d.ownerReplies ?? []).length)
+      return "同一问题不能重复关联负责人答复";
+    const ownerReplies: { question: string; event: number; text: string; message: string; context?: string }[] = [];
+    try {
+      for (const reply of d.ownerReplies ?? []) {
+        const q = c.questions.find((q) => q.id === reply.question);
+        if (!q || !q.issues.every((id) => c.issues.some((i) => i.id === id && known(i.business))))
+          return "负责人答复引用了未知或暂停项目的问题";
+        if (c.ownerReplyEvents?.includes(`${q.id}:${reply.event}`)) continue;
+        ownerReplies.push({ ...reply, ...ownerReplyEvidence(this.directory, reply.event, q.at) });
+      }
+    } catch (error) {
+      return `答复未记录：${(error as Error).message}`;
+    }
     const deliveries = d.deliveries ?? [];
     if (new Set(deliveries.map((a) => `${a.business}:${a.plan}`)).size !== deliveries.length)
       return "同一成果不能重复审核";
@@ -510,9 +537,11 @@ export class Operations {
       const p = known(a.business) ? this.get(a.business, now).plans.find((p) => p.id === a.plan) : undefined;
       if (
         !p ||
-        p.status !== "delivered" ||
         p.task !== a.task ||
-        tasks.find((t) => t.id === a.task)?.status !== "completed"
+        !(
+          (p.status === "delivered" && tasks.find((t) => t.id === a.task)?.status === "completed") ||
+          (a.verdict === "revise" && p.status === "blocked" && tasks.find((t) => t.id === a.task)?.status === "blocked")
+        )
       )
         return "成果已变化或不在待审核状态，请核对当前计划和交付任务。";
       if (a.verdict === "publish" && p.kind !== "content") return "当前发布入口仅支持已审核的运营内容";
@@ -580,12 +609,18 @@ export class Operations {
     for (const a of deliveries) {
       const p = this.get(a.business, now),
         plan = p.plans.find((p) => p.id === a.plan)!;
-      plan.deliveryTask = a.task;
+      plan.deliveryTask = tasks.find((t) => t.id === a.task)?.kind === "publish-content" ? plan.deliveryTask : a.task;
       plan.deliveryDecision = a.verdict;
       plan.result = a.reason;
       plan.followUpAt = null;
       plan.outcome = null;
       if (a.verdict === "revise") {
+        for (const issue of c.issues.filter((i) => i.task === a.task && i.state === "open")) {
+          issue.state = "answered";
+          issue.answer = `CEO 已退回新一版任务：${a.reason}`;
+        }
+        c.pendingRetries = (c.pendingRetries ?? []).filter((r) => r.task !== a.task);
+        delete plan.publicationKey;
         plan.revision = (plan.revision ?? 0) + 1;
         plan.task = null;
         plan.status = "planned";
@@ -598,7 +633,28 @@ export class Operations {
       } else plan.status = "closed";
       this.save(p, "ceo-delivery", now);
     }
-    if (deliveries.length) {
+    for (const reply of ownerReplies) {
+      const q = c.questions.find((q) => q.id === reply.question)!;
+      q.state = "answered";
+      q.answer = reply.text;
+      q.answerEvent = reply.event;
+      (c.ownerReplyEvents ??= []).push(`${q.id}:${reply.event}`);
+      for (const i of c.issues.filter((i) => q.issues.includes(i.id))) {
+        i.state = "open";
+        if (i.task) c.retries[i.task] = 0;
+        c.knowledge.push({
+          id: hash(`owner-event:${q.id}:${reply.event}:${i.id}`),
+          business: i.business,
+          issue: i.id,
+          answer: reply.text,
+          source: "owner",
+          evidence: `负责人消息事件 ${reply.event}`,
+          context: reply.context ?? q.question,
+          at: now.toISOString(),
+        });
+      }
+    }
+    if (deliveries.length || ownerReplies.length) {
       // A bounded review batch must not make the remaining deliverables wait another 30 minutes.
       c.nextReviewAt = now.toISOString();
       c.unchangedReviews = 0;
@@ -720,6 +776,9 @@ export class Operations {
         else {
           const names = (id: string) => businesses.find((b) => b.id === id)!.name;
           const changes = [
+            ...(d.ownerReplies ?? []).map(
+              (v) => `答复已记录：${c.questions.find((q) => q.id === v.question)!.question}`,
+            ),
             ...d.briefs.map((v) => `目标：${names(v.business)} · ${v.objective}`),
             ...d.directives.map((v) => {
               const p = this.get(v.business, now).plans.find(
@@ -763,7 +822,10 @@ export class Operations {
     const active = new Set(
       businesses
         .filter((b) => b.autonomy && b.status === "active")
-        .flatMap((b) => this.get(b.id, now).activity.map((a) => a.task)),
+        .flatMap((b) => {
+          const p = this.get(b.id, now);
+          return p.activity.filter((a) => this.currentTask(p, a.task)).map((a) => a.task);
+        }),
     );
     for (const t of tasks) {
       if (
@@ -785,13 +847,14 @@ export class Operations {
       if (r.exhausted || r.assignment === t.assignment) continue;
       if (r.attempts >= 2) {
         r.exhausted = true;
-        receipt.notice ??= [];
-        receipt.notice.push({
-          key: `repair-exhausted-${t.id}`,
-          title: "运行异常",
-          text: `${t.title} 连续修复两次仍未通过：${t.reason}。其他工作继续；补充资料或下个经营日再恢复管理。`,
-        });
+        // Employee failures are already issues for the CEO. Only a broken CEO bypasses that escalation path.
         if (t.id === c.lastTask) {
+          receipt.notice ??= [];
+          receipt.notice.push({
+            key: `repair-exhausted-${t.id}`,
+            title: "CEO 运行异常",
+            text: `${t.title} 连续修复两次仍未通过：${t.reason}。其他工作继续；补充资料或下个经营日再恢复管理。`,
+          });
           c.lastTask = null;
           c.fingerprint = this.ceoInputs(c, businesses, tasks, now);
           c.nextReviewAt = after(now, 1);
@@ -992,7 +1055,7 @@ export class Operations {
             if (receipt.events?.some((e) => e.type === "company.task.retry" && e.subject === t.id)) continue;
             if (
               !businesses.some(
-                (b) => b.autonomy && b.status === "active" && this.get(b.id, now).activity.some((a) => a.task === t.id),
+                (b) => b.autonomy && b.status === "active" && this.currentTask(this.get(b.id, now), t.id),
               )
             )
               continue;
