@@ -15,7 +15,15 @@ type Message = {
 };
 type Saved = { version: number; ref: string | null; open: boolean; options: string[]; acknowledged?: boolean };
 type State = { cards: Record<string, Saved>; seen: string[]; cursor: string };
-const bookkeeping = new Set(["经营周期已检查", "公司任务状态已更新", "此事项已处理", "已处理"]);
+// Execution recovery is bookkeeping, not evidence of a business result.
+const bookkeeping = new Set([
+  "经营周期已检查",
+  "公司任务状态已更新",
+  "此事项已处理",
+  "已处理",
+  "后来跑成了",
+  "结果回来了",
+]);
 function excerpt(text: string, max: number) {
   const plain = text.replace(/\s+/g, " ").trim();
   return plain.length > max ? plain.slice(0, max) + "…" : plain;

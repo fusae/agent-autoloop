@@ -225,3 +225,50 @@ test("human-readable reply numbers keep owner and original-message checks", asyn
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// A recovered worker only confirms execution resumed, not that a business deliverable exists.
+test("generic runtime recovery closures stay silent across restarts while concrete results still deliver", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-feishu-recovery-"));
+  const file = join(dir, "state.json"),
+    calls: string[][] = [],
+    delivered: any[] = [];
+  const hub = {
+    delivered: async (...args: any[]) => {
+      delivered.push(args);
+    },
+  } as any;
+  const lark = async (args: string[]) => {
+    calls.push(args);
+    return { data: { message_id: "om_warning" } };
+  };
+  const warning: Card = {
+    ...card,
+    kind: "notice",
+    title: "公司部门-engineering",
+    options: [],
+    text: "连续 3 次自动处理没跑完（卡在：Reconnecting...），16:59 会自动再试。",
+  };
+  try {
+    let bridge = new CompanyFeishu(file, "ou_owner", hub, lark);
+    await bridge.deliver(warning);
+    assert.equal(calls.length, 1, "an ongoing failure must remain visible");
+    bridge = new CompanyFeishu(file, "ou_owner", hub, lark);
+    await bridge.deliver({ ...warning, version: 2, state: "closed", result: "后来跑成了" });
+    await bridge.deliver({ ...warning, version: 2, state: "closed", result: "后来跑成了" });
+    assert.equal(calls.length, 1, "no content-free recovery message");
+    assert.deepEqual(delivered.at(-1), [42, 2, "om_warning"]);
+    await bridge.deliver({ ...warning, id: 43, version: 2, state: "closed", result: "结果回来了。" });
+    assert.equal(calls.length, 1, "a skipped initial delivery must also stay silent");
+    await bridge.deliver({
+      ...warning,
+      id: 44,
+      version: 2,
+      state: "closed",
+      result: "英语阅读：短信登录修复已交付，隔离回归通过，待部署。",
+    });
+    assert.equal(calls.length, 2);
+    assert.match(calls[1][calls[1].indexOf("--text") + 1], /短信登录修复已交付/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
