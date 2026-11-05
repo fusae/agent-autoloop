@@ -26,7 +26,7 @@ for (const role of Object.keys(departments) as Role[]) workflows[`check-${role}`
 for (const kind of ["software", "content", "support", "finance"]) workflows[`internal-${kind}`] = [...workflows[kind]];
 export type CompanyConfig = { name: string; database: string; maxAssignments: number; ceoMode?: boolean };
 export type Context = {
-  events: { id: number; source: string; type: string; subject: string; detail: string; hops?: number }[];
+  events: { id: string | number; source: string; type: string; subject: string; detail: string; hops?: number }[];
   answers: { card: number; choice: number | null; about: string; text?: string | null }[];
 };
 export type Report = {

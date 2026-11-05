@@ -102,7 +102,7 @@ export function companyBriefing(directory: string, task?: string) {
         .all(),
       answers: db
         .prepare(
-          "SELECT id,text,created_at FROM cards WHERE rule='CEO · 业务答复' AND kind='notice' ORDER BY id DESC LIMIT 12",
+          "SELECT id,text,created_at FROM cards WHERE (rule='CEO · 业务答复' OR (rule='公司经营-对话' AND title='CEO · 工作安排')) AND kind='notice' ORDER BY id DESC LIMIT 12",
         )
         .all(),
     },

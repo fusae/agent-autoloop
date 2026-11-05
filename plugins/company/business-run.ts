@@ -18,7 +18,7 @@ try {
   const batch = createHash("sha256")
     .update(
       JSON.stringify({
-        events: context.events.map((e) => e.id).sort((a, b) => a - b),
+        events: context.events.map((e) => [e.source, e.id]).sort(),
         answers: context.answers.map((a) => a.card).sort((a, b) => a - b),
       }),
     )
@@ -27,7 +27,7 @@ try {
   const tasks = office.tasks(),
     now = new Date();
   const depth = Math.max(0, ...context.events.map((e) => e.hops ?? 0));
-  const proactive = operations.plan(batch, businesses.list(), tasks, now, context.answers, depth);
+  const proactive = operations.plan(batch, businesses.list(), tasks, now, context.answers, depth, context.events);
   const legacy = depth <= 1 ? businesses.plan(batch, tasks, now, 100 - (proactive.events?.length ?? 0)) : {};
   let failures: ReturnType<typeof failedWork> = [];
   const hubFile = join(dirname(configFile), "hub/config.json");

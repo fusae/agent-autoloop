@@ -55,7 +55,7 @@ test("CEO reads current decisions and task responsibility without creating missi
   }
 });
 
-test("new and upgraded rules keep chat read-only and refresh CEO knowledge without duplicating channels", () => {
+test("new and upgraded rules allow bounded CEO decisions and refresh knowledge without duplicating channels", () => {
   const parent = mkdtempSync(join(tmpdir(), "ceo-rules-")),
     dir = join(parent, "company");
   try {
@@ -63,11 +63,14 @@ test("new and upgraded rules keep chat read-only and refresh CEO knowledge witho
     const chat = rules.rules.find((r) => r.name === "CEO · 业务答复")!;
     assert.ok(chat);
     assert.equal(chat.to, "company-ceo");
-    assert.equal("emits" in chat, false);
+    assert.deepEqual(chat.emits, { source: "company-ceo", types: ["company.ceo.decision"] });
+    assert.doesNotMatch(chat.prompt, /这是只读业务问答/);
     assert.match(chat.prompt, /briefing.ts/);
     assert.match(rules.rules.find((r) => r.name === "公司部门-ceo")!.prompt, /briefing.ts/);
     mkdirSync(join(dir, "hub"));
-    rules.rules = rules.rules.filter((r) => r.name !== chat.name);
+    chat.prompt = "旧规则：这是只读业务问答，不得派工";
+    delete (chat as any).emits;
+    rules.rules = rules.rules.filter((r) => r.name !== "公司经营-对话");
     writeFileSync(join(dir, "hub/rules.json"), JSON.stringify(rules));
     writeFileSync(
       join(dir, "hub/config.json"),
@@ -78,6 +81,8 @@ test("new and upgraded rules keep chat read-only and refresh CEO knowledge witho
     ensureBusinessRules(dir);
     assert.equal(readFileSync(join(dir, "hub/rules.json"), "utf8"), first);
     assert.equal(JSON.parse(first).rules.filter((r: any) => r.name === chat.name).length, 1);
+    assert.doesNotMatch(first, /这是只读业务问答/);
+    assert.equal(JSON.parse(first).rules.filter((r: any) => r.name === "公司经营-对话").length, 1);
     const channel = JSON.parse(readFileSync(join(dir, "hub/config.json"), "utf8")).channels["company-feishu"];
     assert.equal(channel.lark, "/custom/lark");
     assert.equal(channel.key, "secret");

@@ -247,14 +247,22 @@ test(
       writeFileSync(
         fixture,
         `import {readFileSync} from 'node:fs';
-const ctx=JSON.parse(readFileSync(process.env.AGENT_AUTOLOOP_CONTEXT,'utf8')),brief=JSON.parse(ctx.events[0].detail);
+const ctx=JSON.parse(readFileSync(process.env.AGENT_AUTOLOOP_CONTEXT,'utf8'));
+const question=ctx.events.find(e=>e.type==='company.owner.question');
+if(question || ctx.answers.some(a=>a.about==='chat-promotion')) {
+ const waiting=question && JSON.parse(question.detail).question==='推广对象需要确认';
+ const receipt=waiting?{ask:[{key:'audience',title:'CEO · 推广对象',text:'优先面向哪些用户？',options:['已有用户','新用户'],about:'chat-promotion'}]}:{events:[{id:'owner-decision-'+(question?.id??'card-'+ctx.answers[0].card),type:'company.ceo.decision',subject:'owner',detail:JSON.stringify({summary:'安排推广内容',executive:{briefs:[{business:'app',objective:'准备 APP 推广内容'}],directives:[{business:'app',action:{key:'owner-promotion',title:'APP 推广内容',kind:'content',goal:'制作模拟推广草稿',acceptance:['包含真实产品依据'],priority:1,dueDays:2,followUpDays:3,measure:'新增用户'}}],approvals:[],answers:[],escalations:[]}})}]};
+ console.log('\`\`\`agent-autoloop\\n'+JSON.stringify(receipt)+'\\n\`\`\`');
+ process.exit(0);
+}
+const brief=JSON.parse(ctx.events[0].detail);
 let extra={inspection:{state:'idle',actions:[],reviews:[]}};
 if(brief.role==='ceo') {
  const facts=JSON.parse(readFileSync('knowledge/ceo.json','utf8'));
  const informed=facts.knowledge.some(k=>k.source==='owner');
  extra={executive:{briefs:informed?[{business:'app',objective:'依据负责人提供的报表核对新增用户'}]:[],directives:[],approvals:[],answers:informed?facts.issues.filter(i=>i.state==='open').map(i=>({issue:i.id,answer:'数据在本机报表，先核对新增用户',evidence:'负责人答复'})):[],escalations:informed?[]:[{key:'onboarding',issues:facts.issues.map(i=>i.id),question:'数据在哪里？',context:'业务档案缺少数据入口'}]}};
 }
-const report={assignment:brief.assignment,verdict:'pass',summary:'模拟管理结果',artifacts:[],evidence:['测试资料'],...extra};
+const report={assignment:brief.assignment,verdict:'pass',summary:'模拟管理结果',artifacts:brief.role==='ceo'||brief.inspection?[]:['tasks/'+brief.task+'/draft.md'],evidence:['测试资料'],...extra};
 console.log('\`\`\`agent-autoloop\\n'+JSON.stringify({events:[{id:brief.task+':'+brief.assignment+':result',type:'company.result',subject:brief.task,detail:JSON.stringify(report)}]})+'\\n\`\`\`');`,
       );
       const file = join(directory, "hub/rules.json"),
@@ -307,6 +315,45 @@ console.log('\`\`\`agent-autoloop\\n'+JSON.stringify({events:[{id:brief.task+':'
       assert.ok(ops.executive().issues.every((i) => i.state === "answered"));
       const profile = JSON.parse(readFileSync(join(directory, "workspace/knowledge/operations/app.json"), "utf8"));
       assert.ok(profile.knowledge.some((k: any) => k.source === "owner"));
+      // Natural chat reaches CEO and then the same employee/QA/follow-up pipeline.
+      const bridge = new CompanyFeishu(
+        join(scratch, "chat.json"),
+        "ou_owner",
+        owner,
+        async () => {
+          throw Error("tests must not send live messages");
+        },
+        source.event,
+      );
+      const message = (id: string, content: string) => ({
+        message_id: id,
+        msg_type: "text",
+        sender: { id: "ou_owner", sender_type: "user" },
+        content,
+      });
+      await bridge.receive([message("om_clarify", "推广对象需要确认")]);
+      const clarification = await until(async () =>
+        (await owner.state()).cards.find((c: any) => c.title === "CEO · 推广对象"),
+      );
+      await owner.answer(clarification.id, { text: "新用户，直接准备草稿" });
+      await until(async () => (await owner.state()).cards.find((c: any) => c.title === "CEO · 工作安排"));
+      await until(() => office!.tasks().some((t) => t.title === "APP · APP 推广内容" && t.status === "completed"));
+      const work = office.tasks().find((t) => t.title === "APP · APP 推广内容")!;
+      assert.deepEqual(
+        work.reports.map((r) => r.role),
+        ["growth", "qa"],
+      );
+      await bridge.receive([message("om_direct", "先推广 APP，准备内容草稿")]);
+      await until(async () => (await owner.state()).cards.filter((c: any) => c.title === "CEO · 工作安排").length >= 2);
+      await bridge.receive([message("om_direct", "先推广 APP，准备内容草稿")]);
+      assert.equal(office.tasks().filter((t) => t.title === "APP · APP 推广内容").length, 1);
+      await wake("chat-followup");
+      await until(
+        () => ops!.snapshot(b!.list(), office!.tasks())[0].plans.find((p) => p.title === "APP 推广内容")?.followUpAt,
+      );
+      const history = (await import("../plugins/company/briefing.ts")).companyBriefing(directory).execution!
+        .conversation;
+      assert.ok(history.answers.some((r: any) => r.text.includes("APP 推广内容")));
     } catch (error) {
       throw new Error(`${(error as Error).message}\n${logs}`, { cause: error });
     } finally {

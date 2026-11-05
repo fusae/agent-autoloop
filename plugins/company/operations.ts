@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { departments, taskId, taskRequest, workflows, type Role, type Task, type Receipt } from "./company.ts";
-import type { Leadership, ExecutiveDecision, Issue } from "./executive.ts";
+import { executiveDecision, type Leadership, type ExecutiveDecision, type Issue } from "./executive.ts";
 import type { Context } from "./company.ts";
 import type { Business, Metric } from "./business.ts";
 import type { ActionProposal, Inspection } from "./inspection.ts";
@@ -444,14 +444,8 @@ export class Operations {
       d = report?.executive;
     if (!d) return;
     c.processed = `${task.id}:${task.assignment}`;
-    const known = (id: string) => active.some((b) => b.id === id);
-    const valid =
-      d.briefs.every((a) => known(a.business)) &&
-      d.directives.every((a) => known(a.business)) &&
-      d.approvals.every((a) => known(a.business) && this.get(a.business, now).plans.some((p) => p.id === a.plan)) &&
-      d.answers.every((a) => c.issues.some((i) => i.id === a.issue)) &&
-      d.escalations.every((a) => a.issues.every((id) => c.issues.some((i) => i.id === id)));
-    if (!valid) {
+    const error = this.applyDecision(c, businesses, tasks, d, task.id, report!.summary, receipt, now);
+    if (error) {
       c.fingerprint = null;
       if (active[0])
         addIssue({
@@ -459,7 +453,7 @@ export class Operations {
           business: active[0].id,
           role: "ceo",
           task: null,
-          question: "CEO 决策引用了不存在或暂停的项目、计划或问题，请重新核对编号。",
+          question: error,
           context: report!.summary,
           state: "open",
           answer: null,
@@ -467,8 +461,44 @@ export class Operations {
         });
       return;
     }
+    if (c.lastReportDay !== day(now) && !receipt.ask?.length) {
+      receipt.notice ??= [];
+      receipt.notice.push({ key: `ceo-report-${day(now)}`, title: "CEO · 工作汇报", text: report!.summary });
+      c.lastReportDay = day(now);
+    }
+  }
+  private applyDecision(
+    c: Leadership,
+    businesses: Portfolio,
+    tasks: Task[],
+    d: ExecutiveDecision,
+    decisionId: string,
+    summary: string,
+    receipt: Receipt,
+    now: Date,
+  ): string | null {
+    const active = businesses.filter((b) => b.autonomy && b.status === "active");
+    const known = (id: string) => active.some((b) => b.id === id);
+    const valid =
+      d.briefs.every((a) => known(a.business)) &&
+      d.directives.every((a) => known(a.business)) &&
+      d.approvals.every((a) => known(a.business) && this.get(a.business, now).plans.some((p) => p.id === a.plan)) &&
+      d.answers.every((a) => c.issues.some((i) => i.id === a.issue)) &&
+      d.escalations.every((a) => a.issues.every((id) => c.issues.some((i) => i.id === id)));
+    if (!valid) return "CEO 决策引用了不存在或暂停的项目、计划或问题，请重新核对编号。";
+    for (const business of new Set(d.directives.map((v) => v.business))) {
+      const p = this.get(business, now);
+      const additions = new Set(
+        d.directives
+          .filter((v) => v.business === business)
+          .map((v) => hash(`${business}:ceo:${v.action.key}`))
+          .filter((id) => !p.plans.some((p) => p.id === id)),
+      );
+      if (p.plans.filter((p) => p.status !== "closed").length + additions.size > 30)
+        return "该项目已有 30 项未结束计划，请先处理已有工作。";
+    }
     c.nextReviewAt = new Date(now.getTime() + 30 * 60000).toISOString();
-    c.decisions.push({ task: task.id, summary: report!.summary, at: now.toISOString(), decision: d });
+    c.decisions.push({ task: decisionId, summary, at: now.toISOString(), decision: d });
     for (const brief of d.briefs) c.briefs[brief.business] = brief.objective;
     for (const directive of d.directives) {
       const p = this.get(directive.business, now),
@@ -480,7 +510,7 @@ export class Operations {
         id,
         proposedBy: "ceo",
         owner: workflows[a.kind][0],
-        sourceTask: task.id,
+        sourceTask: decisionId,
         task: null,
         status: "planned",
         createdAt: now.toISOString(),
@@ -509,7 +539,7 @@ export class Operations {
       i.state = escalated ? "open" : "answered";
       i.answer = a.answer;
       c.knowledge.push({
-        id: hash(`${task.id}:${i.id}`),
+        id: hash(`${decisionId}:${i.id}`),
         business: i.business,
         issue: i.id,
         answer: a.answer,
@@ -519,7 +549,7 @@ export class Operations {
       });
       const p = this.get(i.business, now);
       p.signals.push({
-        id: hash(`answer:${task.id}:${i.id}`),
+        id: hash(`answer:${decisionId}:${i.id}`),
         title: "CEO 答复",
         detail: a.answer,
         source: a.evidence,
@@ -529,14 +559,14 @@ export class Operations {
       this.save(p, "ceo-answer", now);
       if (!escalated && t?.status === "blocked") {
         c.pendingRetries ??= [];
-        if (!c.pendingRetries.some((v) => v.task === t.id)) c.pendingRetries.push({ task: t.id, decision: task.id });
+        if (!c.pendingRetries.some((v) => v.task === t.id)) c.pendingRetries.push({ task: t.id, decision: decisionId });
       }
     }
     for (const e of d.escalations) {
       const ids = e.issues.filter((id) => c.issues.some((i) => i.id === id && i.state === "open"));
       if (!ids.length || c.questions.some((q) => q.key === e.key && q.state === "open")) continue;
       const q = {
-        id: hash(`${task.id}:${e.key}`),
+        id: hash(`${decisionId}:${e.key}`),
         key: e.key,
         issues: ids,
         question: e.question,
@@ -556,10 +586,69 @@ export class Operations {
         about: `ceo:${q.id}`,
       });
     }
-    if (c.lastReportDay !== day(now) && !receipt.ask?.length) {
+    return null;
+  }
+  private conversation(
+    c: Leadership,
+    businesses: Portfolio,
+    tasks: Task[],
+    events: Context["events"],
+    receipt: Receipt,
+    now: Date,
+  ) {
+    for (const e of events) {
+      if (e.source !== "company-ceo" || e.type !== "company.ceo.decision") continue;
+      const decisionId = `CHAT-${hash(`${e.source}:${e.id}`)}`;
+      const key = `ceo-chat-${hash(`${e.source}:${e.id}`)}`;
+      if (this.db.prepare("SELECT 1 FROM batches WHERE id=?").get(key)) continue;
+      let text = "",
+        summary = "",
+        decision: ExecutiveDecision | undefined;
+      try {
+        if (!c.enabled) throw Error("CEO 管理尚未启用");
+        const data = JSON.parse(e.detail);
+        summary = words(data.summary, 400);
+        decision = executiveDecision(data.executive);
+      } catch (error) {
+        text = `安排未执行：${(error as Error).message}`;
+      }
+      if (decision) {
+        const d = decision;
+        const error = this.applyDecision(c, businesses, tasks, d, decisionId, summary, receipt, now);
+        if (error) text = `安排未执行：${error}`;
+        else {
+          const names = (id: string) => businesses.find((b) => b.id === id)!.name;
+          const changes = [
+            ...d.briefs.map((v) => `目标：${names(v.business)} · ${v.objective}`),
+            ...d.directives.map((v) => {
+              const p = this.get(v.business, now).plans.find(
+                (p) => p.id === hash(`${v.business}:ceo:${v.action.key}`),
+              )!;
+              return `工作：${names(v.business)} · ${p.title}，${departments[p.owner]}负责${p.status === "closed" ? "（已有计划已结束）" : "，按现有任务流程执行和验收"}`;
+            }),
+            ...d.approvals.map((v) => {
+              const p = this.get(v.business, now).plans.find((p) => p.id === v.plan)!;
+              const states = {
+                proposed: "待审核",
+                planned: "待执行",
+                working: "执行中",
+                blocked: "受阻",
+                observing: "跟进效果",
+                review: "待复盘",
+                closed: "已结束",
+              };
+              return `计划：${p.title}，${states[p.status]}；${p.result}`;
+            }),
+            ...d.answers.map((v) => `员工问题：${c.issues.find((i) => i.id === v.issue)!.question}；${v.answer}`),
+          ];
+          text = changes.length ? changes.join("\n") : summary;
+          c.fingerprint = null;
+          delete c.stalled;
+        }
+      }
       receipt.notice ??= [];
-      receipt.notice.push({ key: `ceo-report-${day(now)}`, title: "CEO · 工作汇报", text: report!.summary });
-      c.lastReportDay = day(now);
+      receipt.notice.push({ key, title: "CEO · 工作安排", text });
+      this.db.prepare("INSERT INTO batches VALUES (?,?)").run(key, JSON.stringify({ text }));
     }
   }
   private recover(c: Leadership, businesses: Portfolio, tasks: Task[], receipt: Receipt, now: Date) {
@@ -716,6 +805,7 @@ export class Operations {
     now = new Date(),
     answers: Context["answers"] = [],
     depth = 0,
+    events: Context["events"] = [],
   ): Receipt {
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -728,8 +818,9 @@ export class Operations {
         chief = this.executive();
       const beforeCEO = this.ceoInputs(chief, businesses, tasks, now),
         beforeProcessed = chief.processed;
+      if (chief.enabled) this.manage(chief, businesses, tasks, answers, receipt, now);
+      this.conversation(chief, businesses, tasks, events, receipt, now);
       if (chief.enabled) {
-        this.manage(chief, businesses, tasks, answers, receipt, now);
         if (depth <= 1) {
           this.recover(chief, businesses, tasks, receipt, now);
           for (const pending of chief.pendingRetries ?? []) {

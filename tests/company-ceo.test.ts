@@ -8,6 +8,7 @@ import { test } from "node:test";
 import { Company, type Context } from "../plugins/company/company.ts";
 import { Businesses } from "../plugins/company/business.ts";
 import { failedWork } from "../plugins/company/recovery.ts";
+import { parseResult } from "../protocol/validate.ts";
 import { executiveDecision } from "../plugins/company/executive.ts";
 import { Operations } from "../plugins/company/operations.ts";
 const now = new Date("2026-11-05T02:00:00Z");
@@ -23,6 +24,69 @@ const action = {
   measure: "首次使用人数",
 };
 const decision = (more = {}) => ({ briefs: [], directives: [], approvals: [], answers: [], escalations: [], ...more });
+
+// Owner chat must dispatch real work once, not merely claim success in a notice.
+test("CEO conversation decisions enter the existing employee workflow and survive replay", () =>
+  fixture((b, o, c, send) => {
+    const event = {
+      id: "owner-decision-owner-question:" + "a".repeat(64),
+      source: "company-ceo",
+      type: "company.ceo.decision",
+      subject: "owner",
+      detail: JSON.stringify({
+        summary: "先准备 APP 推广内容",
+        executive: decision({
+          briefs: [{ business: "app", objective: "推广 APP" }],
+          directives: [{ business: "app", action }],
+        }),
+      }),
+    };
+    const receipt = o.plan("chat", b.list(), c.tasks(), now, [], 1, [event]);
+    const work = receipt.events?.find((e) => JSON.parse(e.detail).kind === "internal-content");
+    assert.ok(work, "chat must create an executable employee task immediately");
+    assert.doesNotThrow(() => parseResult({ outcome: "done", ...receipt }));
+    assert.match(receipt.notice?.find((n) => n.title === "CEO · 工作安排")?.text ?? "", /首次使用说明/);
+    assert.equal(o.executive().briefs.app, "推广 APP");
+    assert.equal(o.snapshot(b.list(), c.tasks())[0].plans.length, 1);
+    assert.deepEqual(o.plan("chat", b.list(), c.tasks(), now, [], 1, [event]), receipt);
+    send("company-inbox", work.type, work.subject, JSON.parse(work.detail));
+    const replay = o.plan("chat-replay", b.list(), c.tasks(), now, [], 1, [event]);
+    assert.equal(
+      replay.notice?.some((n) => n.title === "CEO · 工作安排"),
+      undefined,
+    );
+    assert.equal(o.snapshot(b.list(), c.tasks())[0].plans.length, 1);
+    assert.equal(c.task(work.subject)?.kind, "internal-content");
+    assert.equal(c.task(work.subject)?.stage, 0);
+  }));
+
+test("CEO chat rejects unknown projects and external task types atomically; other sources cannot dispatch", () =>
+  fixture((b, o, c) => {
+    const events = (source: string, executive: unknown, id: number) => [
+      {
+        id,
+        source,
+        type: "company.ceo.decision",
+        subject: "owner",
+        detail: JSON.stringify({ summary: "测试决定", executive }),
+      },
+    ];
+    const valid = decision({
+      briefs: [{ business: "app", objective: "不可误写" }],
+      directives: [{ business: "app", action }],
+    });
+    o.plan("untrusted", b.list(), c.tasks(), now, [], 2, events("company-growth", valid, 1));
+    assert.equal(o.executive().briefs.app, undefined);
+    for (const [i, d] of [
+      decision({ ...valid, directives: [{ business: "missing", action }] }),
+      decision({ ...valid, directives: [{ business: "app", action: { ...action, kind: "publish" } }] }),
+    ].entries()) {
+      const result = o.plan("invalid-" + i, b.list(), c.tasks(), now, [], 1, events("company-ceo", d, i + 2));
+      assert.match(result.notice?.[0].text ?? "", /未执行/);
+      assert.equal(o.executive().briefs.app, undefined);
+      assert.equal(o.snapshot(b.list(), c.tasks())[0].plans.length, 0);
+    }
+  }));
 
 // New decisions must not stop at 24/day; identical unresolved agendas must not spin forever instead.
 test("CEO handles new information beyond the old daily cap, bounds unchanged reviews, and wakes on new facts", () =>
