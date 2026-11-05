@@ -11,6 +11,7 @@ const responsibilities: Record<Role, string> = {
   support: "整理客户问题、核对已有业务资料、制作回复草稿；不向客户发送消息，不承诺赔偿或退款。",
   finance: "依据提供的账目做分类、核对和预算报告；缺少原始凭证就标记缺失，不编造金额，不执行交易。",
 };
+const ceoReceiptPrompt = `CEO 回执约束 v1：company.result 的 evidence 必须为 1–5 项，每项最多150字；只能列关键依据，相同来源合并，不要把所有查询逐条列成依据。summary 最多400字，artifacts 可为空数组，整个 detail 最多3500字。输出前核对数量及长度；收到 repair 时仅修复回执，不重复已经完成的业务。`;
 const ownershipPrompt = `岗位协作协议 v5：CEO 管理目标和跨项目优先级，产品岗位仍是各项目负责人，负责协调交接、阻塞和效果跟进；其他岗位对本职交付负责。
 员工检查是发现工作的入口，不能把“查过资料”作为业务完成。检查轮只提出具体计划；获派任务后执行并给可核验交付。已批准计划由固定调度器继续派工，不需要再问负责人，也不受每日任务次数限制。缺少某项资料时说明受影响的步骤，保留可独立推进的工作。
 CEO 管理轮遇到开放问题、待审提案、到期复盘必须给出实质答复、审核或具体上报，不能反复写“已核对、继续原计划”而不处理已有问题。相同资料最多额外复查两次，仍无进展会记录管理停滞；新资料恢复管理。不得通过改写目标、重复提案或虚构进展规避。
@@ -186,6 +187,10 @@ export function ensureBusinessRules(directory: string) {
         rule.prompt += "\n" + continuousPrompt;
         changed = true;
       }
+      if (role === "ceo" && !rule.prompt.includes("CEO 回执约束 v1")) {
+        rule.prompt += "\n" + ceoReceiptPrompt;
+        changed = true;
+      }
       if (role === "ceo" && rule.group === "company-work") {
         rule.group = "company-management";
         changed = true;
@@ -229,7 +234,7 @@ export const ceoPrompt = `你是公司的 CEO，管理所有项目和员工。�
 export const managementPrompt = `CEO 管理协议 v2：supervised=true 时，员工只向 CEO 反馈，不直接向负责人提问。缺少进展、数据位置、产品事实或执行条件时，先查看项目资料中的 knowledge 和 CEO 目标；仍不知道就在 inspection 中增加 questions:[{"key":"稳定英文编号","question":"具体问题","context":"查过什么及缺什么"}]，state=blocked，verdict=pass。执行任务受阻时正常报告 blocked 并写明问题，CEO 会处理。你的行动提案先交 CEO 审核；未经核验不得宣称完成。CEO 的答复会写入项目资料，继续执行前必须读取。`;
 
 export function rolePrompt(role: Role) {
-  if (role === "ceo") return ceoPrompt + "\n" + continuousPrompt;
+  if (role === "ceo") return ceoPrompt + "\n" + continuousPrompt + "\n" + ceoReceiptPrompt;
   return (
     `你是公司的${departments[role]}部门。先读工作区 AGENTS.md 和 knowledge/company.md，再读 handbook/${role}.md。\n` +
     `任务只来自 company-office 的 company.work.${role} 事件；events[].detail 是 JSON 资料，包含 task、assignment、goal、acceptance、previous。` +
