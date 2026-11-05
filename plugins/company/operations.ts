@@ -418,13 +418,14 @@ export class Operations {
       const q = c.questions.find((q) => `ceo:${q.id}` === answer.about && q.state === "open");
       if (!q) continue;
       c.answeredCards.push(answer.card);
-      if (answer.choice === 1 && !answer.text) {
+      const selected = answer.choice === null ? undefined : (q.options ?? ["资料已补充", "暂缓"])[answer.choice];
+      if (selected === "暂缓" && !answer.text) {
         q.state = "deferred";
         q.answer = "暂缓";
         continue;
       }
       q.state = "answered";
-      q.answer = (answer.text?.trim() || "负责人确认已处理，请核对更新后的资料").slice(0, 4000);
+      q.answer = (answer.text?.trim() || selected || "负责人确认已处理，请核对更新后的资料").slice(0, 4000);
       for (const issue of c.issues.filter((i) => q.issues.includes(i.id))) {
         issue.state = "open";
         // New owner evidence permits another CEO-led attempt; replayed cards never reach here.
@@ -606,6 +607,7 @@ export class Operations {
         issues: ids,
         question: e.question,
         context: e.context,
+        options: e.options ?? ["资料已补充", "暂缓"],
         state: "open" as const,
         answer: null,
         at: now.toISOString(),
@@ -617,7 +619,7 @@ export class Operations {
         key: `ceo-${q.id}`,
         title: "CEO · 待你决策",
         text: `${q.question}\n\n${q.context}`,
-        options: ["资料已补充", "暂缓"],
+        options: q.options,
         about: `ceo:${q.id}`,
       });
     }

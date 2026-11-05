@@ -1,11 +1,11 @@
 // Failure modes: replies from another sender or unrelated messages become decisions, restart loses routing,
 // failed delivery drops a card, or retry sends the same report twice.
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { CompanyFeishu } from "../plugins/company/channel.ts";
+import companyChannel, { CompanyFeishu } from "../plugins/company/channel.ts";
 import type { Card } from "../host/channels.ts";
 
 // Ordinary owner questions must be durable, authenticated data, never implicit card approvals.
@@ -269,6 +269,185 @@ test("generic runtime recovery closures stay silent across restarts while concre
     assert.equal(calls.length, 2);
     assert.match(calls[1][calls[1].indexOf("--text") + 1], /短信登录修复已交付/);
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Native buttons must bind owner, message and card version; delivery retries cannot re-send or re-decide.
+test("interactive decision cards bind clicks and update the original message after a choice", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-feishu-buttons-"));
+  const calls: string[][] = [],
+    answers: any[] = [];
+  const hub = {
+    delivered: async () => {},
+    answer: async (...args: any[]) => {
+      answers.push(args);
+    },
+  } as any;
+  const lark = async (args: string[]) => {
+    calls.push(args);
+    return { data: { message_id: "om_card42" } };
+  };
+  try {
+    let bridge = new CompanyFeishu(join(dir, "state.json"), "ou_owner", hub, lark, undefined, true);
+    await bridge.deliver({ ...card, options: ["先推广记住", "先推广阅读", "暂缓"] });
+    const sent = calls[0];
+    assert.ok(sent.includes("interactive"));
+    const content = JSON.parse(sent[sent.indexOf("--content") + 1]);
+    const buttons = content.body.elements.filter((e: any) => e.tag === "button");
+    assert.equal(buttons.length, 3);
+    assert.match(buttons[1].text.content, /先推广阅读/);
+    const event = {
+      header: { event_id: "click-42", event_type: "card.action.trigger" },
+      event: {
+        operator: { open_id: "ou_owner" },
+        context: { open_message_id: "om_card42" },
+        action: { value: buttons[1].behaviors[0].value },
+      },
+    };
+    for (const bad of [
+      { ...event, event: { ...event.event, operator: { open_id: "ou_other" } } },
+      { ...event, event: { ...event.event, context: { open_message_id: "om_wrong" } } },
+      { ...event, event: { ...event.event, action: { value: { ...event.event.action.value, version: 999 } } } },
+      { ...event, event: { ...event.event, action: { value: { ...event.event.action.value, choice: 8 } } } },
+    ])
+      assert.equal(await bridge.receiveAction(bad), false);
+    assert.equal(answers.length, 0);
+    assert.equal(await bridge.receiveAction(event), true);
+    assert.deepEqual(answers[0], [42, { choice: 1, by: "ou_owner", ref: "om_card42" }]);
+    bridge = new CompanyFeishu(join(dir, "state.json"), "ou_owner", hub, lark, undefined, true);
+    assert.equal(await bridge.receiveAction(event), false);
+    await bridge.deliver({
+      ...card,
+      options: ["先推广记住", "先推广阅读", "暂缓"],
+      version: 2,
+      state: "decided",
+      choice: 1,
+    });
+    assert.equal(calls[1][0], "api");
+    assert.equal(calls[1][1], "PATCH");
+    const updated = JSON.parse(JSON.parse(calls[1][calls[1].indexOf("--data") + 1]).content);
+    assert.equal(updated.body.elements.filter((e: any) => e.tag === "button").length, 0);
+    assert.match(JSON.stringify(updated), /先推广阅读/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Upgrading an unanswered text message must preserve the kernel's immutable answer reference.
+test("legacy questions gain buttons without changing their answer binding and transient failures can retry", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-feishu-upgrade-"));
+  const file = join(dir, "state.json"),
+    calls: string[][] = [],
+    answers: any[] = [];
+  let offline = true;
+  const hub = {
+    delivered: async () => {},
+    answer: async (...args: any[]) => {
+      if (offline) throw Error("offline");
+      answers.push(args);
+    },
+  } as any;
+  const lark = async (args: string[]) => {
+    calls.push(args);
+    return { data: { message_id: calls.length === 1 ? "om_old" : "om_new" } };
+  };
+  try {
+    await new CompanyFeishu(file, "ou_owner", hub, lark).deliver(card);
+    const bridge = new CompanyFeishu(file, "ou_owner", hub, lark, undefined, true);
+    await bridge.deliver({ ...card, ref: "om_old" });
+    await bridge.deliver({ ...card, ref: "om_old" });
+    assert.equal(calls.length, 2);
+    const event = {
+      header: { event_id: "upgraded", event_type: "card.action.trigger" },
+      event: {
+        operator: { open_id: "ou_owner" },
+        context: { open_message_id: "om_new" },
+        action: { value: { card: 42, version: 1, choice: 0 } },
+      },
+    };
+    await assert.rejects(bridge.receiveAction(event), /offline/);
+    offline = false;
+    assert.equal(await bridge.receiveAction(event), true);
+    assert.deepEqual(answers, [[42, { choice: 0, by: "ou_owner", ref: "om_old" }]]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The one managed listener consumes persisted raw callbacks and exits with the channel; no real CLI is used.
+test("channel drains durable callback files and stops its sole listener", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-feishu-listener-"));
+  const file = join(dir, "state.json"),
+    spool = file + ".callbacks",
+    script = join(dir, "lark");
+  const abort = new AbortController(),
+    answers: any[] = [];
+  const timeout = setTimeout(() => abort.abort(), 5000);
+  const hub = {
+    delivered: async () => {},
+    failed: async () => {},
+    answer: async (...args: any[]) => {
+      answers.push(args);
+    },
+    nextCard: async () => {
+      await new Promise<void>((resolve) => {
+        if (abort.signal.aborted) resolve();
+        else abort.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return { card: null };
+    },
+  } as any;
+  try {
+    await new CompanyFeishu(
+      file,
+      "ou_owner",
+      hub,
+      async () => ({ data: { message_id: "om_native" } }),
+      undefined,
+      true,
+    ).deliver(card);
+    mkdirSync(spool);
+    writeFileSync(
+      join(spool, "pending.json"),
+      JSON.stringify({
+        header: { event_id: "persisted", event_type: "card.action.trigger" },
+        event: {
+          operator: { open_id: "ou_owner" },
+          context: { open_message_id: "om_native" },
+          action: { value: { card: 42, version: 1, choice: 0 } },
+        },
+      }),
+    );
+    writeFileSync(
+      script,
+      `#!${process.execPath}
+const fs=require('node:fs'); const a=process.argv.slice(2);
+if(a[0]==='event') {
+  if(a.includes('--force')||a.includes('--mode')||!a.includes('card.action.trigger')) process.exit(2);
+  fs.writeFileSync(${JSON.stringify(join(dir, "pid"))},String(process.pid));
+  process.on('SIGTERM',()=>{fs.writeFileSync(${JSON.stringify(join(dir, "stopped"))},'yes');process.exit(0);});
+  setInterval(()=>{},1000);
+} else console.log(JSON.stringify({data:{messages:[],has_more:false}}));
+`,
+      { mode: 0o700 },
+    );
+    const running = companyChannel({
+      hub,
+      signal: abort.signal,
+      log: () => {},
+      options: { lark: script, stateFile: file, user: "ou_owner", cards: true, cardCallbacks: true },
+    });
+    while (!abort.signal.aborted && (!existsSync(join(dir, "pid")) || !answers.length))
+      await new Promise((r) => setTimeout(r, 20));
+    assert.equal(answers.length, 1);
+    assert.equal(existsSync(join(spool, "pending.json")), false);
+    abort.abort();
+    await running;
+    assert.equal(readFileSync(join(dir, "stopped"), "utf8"), "yes");
+  } finally {
+    abort.abort();
+    clearTimeout(timeout);
     rmSync(dir, { recursive: true, force: true });
   }
 });

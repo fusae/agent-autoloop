@@ -624,3 +624,40 @@ test("CEO can raise a new project question without inventing issue IDs and dupli
     assert.throws(() => executiveDecision(decision({ escalations: [{ ...escalation, business: undefined }] })));
     assert.throws(() => executiveDecision(decision({ escalations: [{ ...escalation, issues: Array(9).fill("x") }] })));
   }));
+
+// The second button is not always "defer"; preserve the actual selected business option.
+test("CEO decision choices persist their labels and only explicit defer pauses the question", () =>
+  fixture((b, o, c) => {
+    const send = (id: string, key: string, options: string[]) =>
+      o.plan(id, b.list(), c.tasks(), now, [], 4, [
+        {
+          id,
+          source: "company-ceo",
+          type: "company.ceo.decision",
+          subject: "owner",
+          detail: JSON.stringify({
+            summary: "请选择",
+            executive: decision({
+              escalations: [
+                { key, business: "app", issues: [], question: "先做哪个渠道？", context: "渠道选择", options },
+              ],
+            }),
+          }),
+        },
+      ]);
+    const q = send("choice-one", "channel-one", ["渠道A", "渠道B", "暂缓"]).ask![0];
+    assert.deepEqual(q.options, ["渠道A", "渠道B", "暂缓"]);
+    o.plan("chosen", b.list(), c.tasks(), now, [{ card: 90, choice: 1, about: q.about }], 4);
+    assert.equal(o.executive().questions.find((v) => `ceo:${v.id}` === q.about)?.answer, "渠道B");
+    assert.ok(o.executive().knowledge.some((k) => k.answer === "渠道B"));
+    const later = send("choice-two", "channel-two", ["渠道A", "渠道B", "暂缓"]).ask![0];
+    o.plan("deferred", b.list(), c.tasks(), now, [{ card: 91, choice: 2, about: later.about }], 4);
+    assert.equal(o.executive().questions.find((v) => `ceo:${v.id}` === later.about)?.state, "deferred");
+    assert.throws(() =>
+      executiveDecision(
+        decision({
+          escalations: [{ key: "bad", business: "app", issues: [], question: "q", context: "c", options: ["only"] }],
+        }),
+      ),
+    );
+  }));

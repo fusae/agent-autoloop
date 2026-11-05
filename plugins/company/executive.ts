@@ -4,7 +4,14 @@ export type ExecutiveDecision = {
   directives: { business: string; action: ActionProposal }[];
   approvals: { business: string; plan: string; approve: boolean; reason: string }[];
   answers: { issue: string; answer: string; evidence: string }[];
-  escalations: { key: string; business?: string; issues: string[]; question: string; context: string }[];
+  escalations: {
+    key: string;
+    business?: string;
+    issues: string[];
+    question: string;
+    context: string;
+    options?: string[];
+  }[];
 };
 export type Issue = {
   id: string;
@@ -18,6 +25,7 @@ export type Issue = {
   at: string;
 };
 export type OwnerQuestion = {
+  options?: string[];
   id: string;
   key: string;
   issues: string[];
@@ -110,6 +118,15 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
         issues: a.issues.map(id),
         question: text(a.question, 800),
         context: text(a.context, 400),
+        ...(a.options !== undefined
+          ? {
+              options: (() => {
+                if (!Array.isArray(a.options) || a.options.length < 2 || a.options.length > 5)
+                  throw new Error("上报选项需要2–5项");
+                return a.options.map((v: unknown) => text(v, 40, "options"));
+              })(),
+            }
+          : {}),
       };
     }),
   };
