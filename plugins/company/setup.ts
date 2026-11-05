@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, renameSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { departments, type Role } from "./company.ts";
@@ -181,8 +182,36 @@ export function ensureBusinessRules(directory: string) {
   if (existsSync(configFile)) {
     const config = JSON.parse(readFileSync(configFile, "utf8"));
     const channel = config.channels?.["company-feishu"];
+    let configChanged = false;
     if (channel?.use === "company" && !channel.inboxFile) {
       channel.inboxFile = configFile;
+      configChanged = true;
+    }
+    if (config.worker?.name) {
+      const name = config.worker.name + "-company-control";
+      config.workers ??= [];
+      if (!config.workers.some((w: any) => w.name === name)) {
+        const key = execFileSync(
+          process.execPath,
+          [join(import.meta.dirname, "../../bin/agent-autoloop.ts"), "key", "new", "worker", name],
+          {
+            env: { ...process.env, AGENT_AUTOLOOP_HOME: join(directory, "hub"), AGENT_AUTOLOOP_RULES: path },
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+            timeout: 10000,
+          },
+        ).trim();
+        config.workers.push({ name, key, capacity: 2 });
+        configChanged = true;
+      }
+      for (const id of ["company-office", "company-business", "company-publisher"]) {
+        if (rules.agents[id] && rules.agents[id].worker !== name) {
+          rules.agents[id].worker = name;
+          changed = true;
+        }
+      }
+    }
+    if (configChanged) {
       writeFileSync(configFile + ".tmp", JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
       renameSync(configFile + ".tmp", configFile);
     }

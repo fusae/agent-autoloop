@@ -272,3 +272,5 @@ Ask the CEO ordinary business questions in Feishu without a card number. Each tu
 In CEO mode, internal deliverables wait for CEO review. Rejected work is revised; approved content goes through a privately configured publisher and platform verification before outcome observation. Missing channel/account access becomes a CEO blocker. See [delivery review and publishing](docs/company.md#成果审核与发布).
 
 Owner replies in ordinary chat, quoted messages or after deferral can be linked to the original question using authenticated evidence, persisted as knowledge and synchronized to its card. QA rejection creates a revision; publication QA retries do not repost. Employee execution failures stay with the CEO for resolution or escalation.
+
+Company coordination and fixed publishing run on a separate worker, so occupied model slots cannot block task intake or feedback. Upgrades preserve running jobs and the existing model concurrency.

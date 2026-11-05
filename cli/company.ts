@@ -53,6 +53,7 @@ export async function companyCLI(args: string[]) {
       owner: key("owner", "owner"),
     };
     writeFileSync(join(directory, "hub/config.json"), JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
+    ensureBusinessRules(directory);
     console.log(`公司已创建：${directory}\n启动：npm run company -- up ${JSON.stringify(directory)}`);
     return;
   }

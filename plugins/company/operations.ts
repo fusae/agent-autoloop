@@ -1158,12 +1158,12 @@ export class Operations {
           p.activity.filter(
             (a) => !tasks.find((t) => t.id === a.task) || tasks.find((t) => t.id === a.task)?.status === "active",
           );
-        const capacity = () =>
+        const capacity = (fixedPublication = false) =>
           depth <= 1 &&
           b.status === "active" &&
           (!chief.enabled || !!chief.briefs[b.id]) &&
           (receipt.events?.length ?? 0) < 50 &&
-          busy().length < p.maxActive;
+          (busy().length < p.maxActive || (fixedPublication && !busy().some((a) => a.kind === "work")));
         const emit = (id: string, role: Role, kind: "check" | "work", request: ReturnType<typeof taskRequest>) => {
           receipt.events ??= [];
           receipt.events.push({
@@ -1179,14 +1179,15 @@ export class Operations {
         for (const a of [...p.plans].sort(
           (a, b) => a.priority - b.priority || a.createdAt.localeCompare(b.createdAt),
         )) {
+          const publishing = a.status === "publishing";
+          // A fixed publisher has its own hub lane; model inspections must not prevent it reporting missing access.
           if (
-            !capacity() ||
-            (a.status !== "planned" && !(a.status === "publishing" && !a.task)) ||
+            !capacity(publishing) ||
+            (a.status !== "planned" && !(publishing && !a.task)) ||
             !p.staff.find((s) => s.role === a.owner)?.enabled ||
-            busy().some((v) => v.role === a.owner)
+            (!publishing && busy().some((v) => v.role === a.owner))
           )
             continue;
-          const publishing = a.status === "publishing";
           const id = publishing
             ? "P-" + hash(a.publicationKey!)
             : "W-" + hash(`${b.id}:${a.id}${a.revision ? `:${a.revision}` : ""}`);

@@ -5,10 +5,12 @@ import path from "node:path";
 import { HOME } from "./home.ts";
 
 export type ChannelConfig = { use?: string; key: string; [option: string]: unknown };
+export type WorkerConfig = { name: string; key: string; capacity?: number; unreachable?: string[] };
 export type Config = {
   url: string;
   hub?: { listen: string; publicUrl?: string };
-  worker?: { name: string; key: string; capacity?: number; unreachable?: string[] };
+  worker?: WorkerConfig;
+  workers?: WorkerConfig[];
   channels?: Record<string, ChannelConfig>;
   source?: { name: string; key: string };
   owner?: string;

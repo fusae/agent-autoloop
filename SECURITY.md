@@ -68,3 +68,5 @@ CEO 普通问答只接受配置本人的文本；固定来源密钥从私有 inb
 Company publishing uses an operator-owned `publishing.json` outside the model workspace. Only a CEO-reviewed, frozen subset of registered deliverable files can reach the fixed command; model text never supplies executable paths or arguments. The adapter must implement stable-key idempotency and authoritative platform lookup. Unknown platform results block execution, and observation requires a verified receipt plus QA. Keep credentials inside the trusted adapter, not in event data or deliverables.
 
 Company owner-reply decisions reference authenticated inbox event IDs, never model-written owner quotations. The coordinator checks source, message completeness and chronology against its read-only hub ledger, records the original text, and answers only the question’s matching card through the authenticated hub API. Duplicate or invalid references cannot partially apply a decision.
+
+Co-located workers persist their worker identity with each execution and must not settle, cancel or count another worker’s entries. Only the original primary worker adopts legacy unnamed entries; extra workers use separate scoped credentials.

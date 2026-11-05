@@ -307,3 +307,30 @@ test("exhausted employee process repairs remain with CEO instead of bypassing CE
       }
     }
   }));
+
+test("three model inspections cannot starve an already-approved fixed publisher", () =>
+  fixture(({ c, o, tick, decide, consume, plan, report, work }) => {
+    report(work.subject);
+    report(work.subject);
+    for (const role of ["product", "engineering", "qa"]) o.configure("app", role, { enabled: true }, now);
+    const inspections = tick().events.filter((e: any) => JSON.parse(e.detail).kind?.startsWith("check-"));
+    assert.equal(inspections.length, 3);
+    for (const e of inspections) consume(e);
+    const approved = decide({
+      deliveries: [
+        {
+          business: "app",
+          plan: plan().id,
+          task: work.subject,
+          verdict: "publish",
+          files: [`tasks/${work.subject}/post.md`],
+          reason: "正文通过",
+        },
+      ],
+    });
+    const publish = approved.events?.find((e: any) => JSON.parse(e.detail).kind === "publish-content");
+    assert.ok(publish, "fixed publishing must run even while model inspection slots are occupied");
+    consume(publish);
+    assert.equal(c.task(publish.subject).status, "active");
+    assert.equal(tick().events?.filter((e: any) => JSON.parse(e.detail).kind === "publish-content").length ?? 0, 0);
+  }));

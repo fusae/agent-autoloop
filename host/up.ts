@@ -53,6 +53,8 @@ async function keepChannelRunning(
 
 export async function up() {
   const config = readConfig();
+  const workers = [...(config.worker ? [config.worker] : []), ...(config.workers ?? [])];
+  if (new Set(workers.map((w) => w.name)).size !== workers.length) throw Error("worker 名称不能重复");
   mkdirSync(HOME, { recursive: true, mode: 0o700 });
   const unlock = lock();
   const stop = new AbortController();
@@ -75,9 +77,16 @@ export async function up() {
       server.closeAllConnections();
     };
   }
-  if (config.worker) {
-    const { key, name, capacity, unreachable } = config.worker;
-    const worker = createWorker({ hub: hubClient(config.url, key), name, capacity, unreachable, log: log("worker") });
+  for (const configured of workers) {
+    const { key, name, capacity, unreachable } = configured;
+    const worker = createWorker({
+      hub: hubClient(config.url, key),
+      name,
+      capacity,
+      unreachable,
+      recoverLegacy: configured === config.worker,
+      log: log("worker:" + name),
+    });
     jobs.push(worker.run(stop.signal));
   }
   for (const [id, channel] of Object.entries(config.channels ?? {})) {

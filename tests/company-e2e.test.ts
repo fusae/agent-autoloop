@@ -466,3 +466,92 @@ console.log('\`\`\`agent-autoloop\\n'+JSON.stringify({events:[{id:brief.task+':'
       }
     },
   );
+
+// Slow models previously occupied both global slots and prevented the coordinator receiving new work.
+test("company dispatch and feedback stay live while both model slots are occupied", { timeout: 45_000 }, async () => {
+  const scratch = mkdtempSync(join(tmpdir(), "company-control-e2e-")),
+    directory = join(scratch, "office"),
+    port = await freePort();
+  const env = Object.fromEntries(Object.entries(process.env).filter(([n]) => !n.startsWith("AGENT_AUTOLOOP_")));
+  let up: ReturnType<typeof spawn> | undefined, office: Company | undefined;
+  const release = join(scratch, "release");
+  try {
+    const init = spawnSync(process.execPath, [cli, "init", directory, "codex", String(port)], {
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(init.status, 0, init.stderr);
+    const fixture = join(scratch, "hold.mjs");
+    writeFileSync(
+      fixture,
+      `import fs from 'node:fs'; const ctx=JSON.parse(fs.readFileSync(process.env.AGENT_AUTOLOOP_CONTEXT)); const b=JSON.parse(ctx.events[0].detail); fs.writeFileSync(${JSON.stringify(scratch)}+'/started-'+b.task,'yes'); while(!fs.existsSync(${JSON.stringify(release)}))await new Promise(r=>setTimeout(r,30));console.log('隔离测试完成');`,
+    );
+    const rf = join(directory, "hub/rules.json"),
+      rules = JSON.parse(readFileSync(rf, "utf8"));
+    for (const [id, a] of Object.entries(rules.agents) as [string, any][])
+      if (!["company-office", "company-business", "company-publisher"].includes(id)) {
+        a.use = "command";
+        a.command = [process.execPath, fixture];
+      }
+    writeFileSync(rf, JSON.stringify(rules));
+    // Also exercise an old single-worker install being upgraded, without regenerating the existing model key.
+    const cf = join(directory, "hub/config.json"),
+      old = JSON.parse(readFileSync(cf, "utf8"));
+    delete old.workers;
+    writeFileSync(cf, JSON.stringify(old));
+    for (const id of ["company-office", "company-business", "company-publisher"])
+      rules.agents[id].worker = old.worker.name;
+    writeFileSync(rf, JSON.stringify(rules));
+    const modelKey = old.worker.key;
+    up = spawn(process.execPath, [cli, "up", directory], { env, stdio: "ignore" });
+    await until(
+      () =>
+        fetch(`http://127.0.0.1:${port}/healthz`)
+          .then((r) => r.ok)
+          .catch(() => false),
+      10000,
+    );
+    const cfg = JSON.parse(readFileSync(cf, "utf8"));
+    assert.equal(cfg.worker.key, modelKey);
+    const source = hubClient(cfg.url, cfg.source.key);
+    office = new Company(JSON.parse(readFileSync(join(directory, "company.json"), "utf8")));
+    for (const [id, kind] of [
+      ["hold-ceo", "ceo"],
+      ["hold-growth", "internal-content"],
+    ])
+      await source.event({
+        id,
+        type: "company.task.create",
+        subject: id,
+        detail: JSON.stringify({ title: id, kind, goal: "测试并发", acceptance: ["隔离测试"] }),
+      });
+    const { existsSync } = await import("node:fs");
+    await until(
+      () => existsSync(join(scratch, "started-hold-ceo")) && existsSync(join(scratch, "started-hold-growth")),
+      12000,
+    );
+    await source.event({
+      id: "queued-work",
+      type: "company.task.create",
+      subject: "queued-work",
+      detail: JSON.stringify({
+        title: "新工作",
+        kind: "software",
+        goal: "模型忙时仍能接收工作",
+        acceptance: ["实际派工"],
+      }),
+    });
+    await until(() => office!.task("queued-work")?.status === "active", 8000);
+    assert.ok(!existsSync(join(scratch, "started-queued-work")), "model concurrency still remains bounded");
+    assert.equal(cfg.workers.length, 1);
+  } finally {
+    writeFileSync(release, "done");
+    await new Promise((r) => setTimeout(r, 1200));
+    if (up && up.exitCode === null) {
+      up.kill("SIGTERM");
+      await new Promise((r) => up!.once("exit", r));
+    }
+    office?.close();
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});

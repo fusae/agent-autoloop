@@ -594,3 +594,40 @@ test("the hub gone for ten minutes is told once, tried a few times if telling fa
   for (let i = 0; i < 8; i++) await f.tick();
   assert.equal(readFileSync(attempts, "utf8").trim().split("\n").length, 5);
 });
+
+// Two workers on one host must never settle, cancel or count each other's persisted jobs.
+for (const legacy of [false, true])
+  test(`co-located workers isolate capacity and recover ${legacy ? "legacy" : "named"} running processes`, async () => {
+    const firstHub = fakeHub(),
+      secondHub = fakeHub();
+    const a = createWorker({ hub: firstHub as any, name: "model", wait: 0, capacity: 1 });
+    const b = createWorker({ hub: secondHub as any, name: "control", wait: 0, capacity: 1, recoverLegacy: false });
+    const marker = join(folder, `worker-launch-${legacy}.txt`);
+    firstHub.jobs.push(
+      job({
+        command: [
+          process.execPath,
+          "-e",
+          "require('node:fs').appendFileSync(process.argv[1],'start');setTimeout(()=>console.log('model'),1000)",
+          marker,
+        ],
+      }),
+    );
+    secondHub.jobs.push(job({ command: ["/bin/sh", "-c", "echo control"] }));
+    await a.tick();
+    if (legacy) {
+      const entry = a.entries()[0];
+      delete entry.worker;
+      writeFileSync(join(entry.dir, "entry.json"), JSON.stringify(entry));
+    }
+    await b.tick();
+    assert.equal(a.entries().length, 1);
+    assert.equal(b.entries().length, 1);
+    assert.notEqual(a.entries()[0].run, b.entries()[0].run);
+    await until(b, () => secondHub.results.length === 1);
+    assert.equal(firstHub.results.length, 0);
+    const restarted = createWorker({ hub: firstHub as any, name: "model", wait: 0, capacity: 1 });
+    await until(restarted, () => firstHub.results.length === 1);
+    assert.equal(secondHub.results.length, 1);
+    assert.equal(readFileSync(marker, "utf8"), "start");
+  });

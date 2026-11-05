@@ -44,6 +44,7 @@ const HEAD = 64 * 1024;
 const TAIL = 1024 * 1024;
 
 type Entry = {
+  worker?: string;
   run: number;
   token: string;
   attempt: number;
@@ -69,6 +70,8 @@ export type WorkerOptions = {
   hub: WorkerHub;
   name: string;
   capacity?: number;
+  /** Only the original primary worker may adopt pre-isolation entries without a worker name. */
+  recoverLegacy?: boolean;
   log?: (line: string) => void;
   /** Run when the hub can't be reached for ten minutes, with {text} in it: nothing else can tell the owner then. */
   unreachable?: string[];
@@ -151,6 +154,7 @@ export function createWorker({
   hub,
   name,
   capacity = 2,
+  recoverLegacy = true,
   log = () => {},
   unreachable,
   wait = WAIT,
@@ -165,7 +169,8 @@ export function createWorker({
   const entries = () =>
     readdirSync(RUNS).flatMap((id) => {
       try {
-        return [JSON.parse(readFileSync(path.join(RUNS, id, "entry.json"), "utf8")) as Entry];
+        const entry = JSON.parse(readFileSync(path.join(RUNS, id, "entry.json"), "utf8")) as Entry;
+        return (entry.worker ? entry.worker === name : recoverLegacy) ? [entry] : [];
       } catch {
         return [];
       }
@@ -234,6 +239,7 @@ export function createWorker({
     const dir = path.join(RUNS, `${job.run}-${job.attempt}`);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const entry: Entry = {
+      worker: name,
       run: job.run,
       token: job.token,
       attempt: job.attempt,
