@@ -424,7 +424,7 @@ test("channel drains durable callback files and stops its sole listener", async 
       `#!${process.execPath}
 const fs=require('node:fs'); const a=process.argv.slice(2);
 if(a[0]==='event') {
-  if(a.includes('--force')||a.includes('--mode')||!a.includes('card.action.trigger')) process.exit(2);
+  if(a.includes('--force')||a.includes('--mode')||!a.includes('card.action.trigger')||a[a.indexOf('--output-dir')+1]!=='.') process.exit(2);
   fs.writeFileSync(${JSON.stringify(join(dir, "pid"))},String(process.pid));
   process.on('SIGTERM',()=>{fs.writeFileSync(${JSON.stringify(join(dir, "stopped"))},'yes');process.exit(0);});
   setInterval(()=>{},1000);

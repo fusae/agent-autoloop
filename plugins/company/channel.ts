@@ -378,11 +378,32 @@ export default async function companyChannel({ hub, options, signal, log }: Chan
         await new Promise<void>((resolve) => {
           const child = spawn(
             program,
-            ["event", "+subscribe", "--event-types", "card.action.trigger", "--output-dir", spool, "--quiet"],
-            { signal, stdio: "ignore" },
+            ["event", "+subscribe", "--event-types", "card.action.trigger", "--output-dir", ".", "--quiet"],
+            { signal, cwd: spool, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] },
           );
-          child.on("error", () => {});
-          child.on("close", () => resolve());
+          // npm's CLI shim spawns the Go binary; terminate the owned process group on shutdown.
+          const stopListener = () => {
+            if (child.pid && process.platform !== "win32")
+              try {
+                process.kill(-child.pid, "SIGTERM");
+              } catch {}
+          };
+          signal.addEventListener("abort", stopListener, { once: true });
+          if (signal.aborted) stopListener();
+          let diagnostic = "";
+          const capture = (chunk: Buffer) => {
+            diagnostic = (diagnostic + chunk.toString()).slice(-8192);
+          };
+          child.stdout?.on("data", capture);
+          child.stderr?.on("data", capture);
+          child.on("error", (error) => {
+            diagnostic = error.message;
+          });
+          child.on("close", () => {
+            signal.removeEventListener("abort", stopListener);
+            if (!signal.aborted) writeFileSync(join(spool, "connection.log"), diagnostic, { mode: 0o600 });
+            resolve();
+          });
         });
         if (!signal.aborted) {
           log("飞书卡片连接中断，正在重连");
