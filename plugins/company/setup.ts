@@ -12,6 +12,9 @@ const responsibilities: Record<Role, string> = {
   finance: "依据提供的账目做分类、核对和预算报告；缺少原始凭证就标记缺失，不编造金额，不执行交易。",
 };
 const ceoReceiptPrompt = `CEO 回执约束 v1：company.result 的 evidence 必须为 1–5 项，每项最多150字；只能列关键依据，相同来源合并，不要把所有查询逐条列成依据。summary 最多400字，artifacts 可为空数组，整个 detail 最多3500字。输出前核对数量及长度；收到 repair 时仅修复回执，不重复已经完成的业务。`;
+const deliveryPrompt = `业务交付与求助协议 v1：员工负责推进已分配工作的实际结果；完成一步后继续职责范围内的下一步，不等负责人催促。缺资料、环境、权限或能力，先查已有知识；仍无法继续就在本轮报告 blocked，说明“哪项工作、卡在哪一步、已尝试什么、需要什么”，交给 CEO，不用新增报告、清单或文档检查代替受阻的执行。
+CEO 先处理员工阻塞：能解决的给出具体办法和依据，让原任务继续；需要其他员工配合的安排明确交付。已经确认无法解决或必须由负责人决定的事项，本轮用 escalations 上报，不为了凑重试次数重复失败。上报包含项目、已完成部分、具体缺口、建议和需要负责人决定的一件事；已有答复不重复索要。负责人答复后由 CEO 判断并继续原任务，不把所有业务停住等待。
+以原目标验收：写出测试清单不等于完成产品测试，验证文档格式不等于修复产品，草稿和空统计表不等于推广执行或增长。产品与 QA 不得把目标缩小为文档合格来报完成；若目标本来仅为草稿或方案，可如实交付，并向 CEO 说明进入实际执行尚缺的条件。CEO 不重复安排已经具备的基线、清单和核验脚本来制造进展；下一步应推进可用内容、实际修复或执行条件。汇报直接给成果位置、实际执行结果、当前阻塞和下一步。`;
 const ownershipPrompt = `岗位协作协议 v5：CEO 管理目标和跨项目优先级，产品岗位仍是各项目负责人，负责协调交接、阻塞和效果跟进；其他岗位对本职交付负责。
 员工检查是发现工作的入口，不能把“查过资料”作为业务完成。检查轮只提出具体计划；获派任务后执行并给可核验交付。已批准计划由固定调度器继续派工，不需要再问负责人，也不受每日任务次数限制。缺少某项资料时说明受影响的步骤，保留可独立推进的工作。
 CEO 管理轮遇到开放问题、待审提案、到期复盘必须给出实质答复、审核或具体上报，不能反复写“已核对、继续原计划”而不处理已有问题。相同资料最多额外复查两次，仍无进展会记录管理停滞；新资料恢复管理。不得通过改写目标、重复提案或虚构进展规避。
@@ -46,7 +49,9 @@ events[].detail.question 是已由通道核验身份的负责人本轮诉求；�
 ` +
       knowledgePrompt(directory) +
       "\n" +
-      ownershipPrompt,
+      ownershipPrompt +
+      "\n" +
+      deliveryPrompt,
     emits: { source: "company-ceo", types: ["company.ceo.decision"] },
   };
 }
@@ -106,6 +111,10 @@ export function ensureBusinessRules(directory: string) {
     changed = true;
   }
   for (const rule of rules.rules.filter((r: any) => r.name.startsWith("公司部门-") || r.name === "CEO · 业务答复")) {
+    if (!rule.prompt.includes("业务交付与求助协议 v1")) {
+      rule.prompt += "\n" + deliveryPrompt;
+      changed = true;
+    }
     if (!rule.prompt.includes("岗位协作协议 v5")) {
       rule.prompt += "\n" + ownershipPrompt;
       changed = true;
@@ -293,7 +302,13 @@ export function makeRules(directory: string, worker: string, agent: "codex" | "c
     cwd: join(directory, "workspace"),
     group: role === "ceo" ? "company-management" : "company-work",
     parallel: 1,
-    prompt: rolePrompt(role) + (role === "ceo" ? "\n" + knowledgePrompt(directory) : "") + "\n" + ownershipPrompt,
+    prompt:
+      rolePrompt(role) +
+      (role === "ceo" ? "\n" + knowledgePrompt(directory) : "") +
+      "\n" +
+      ownershipPrompt +
+      "\n" +
+      deliveryPrompt,
     emits: { source: `company-${role}`, types: ["company.result"] },
   }));
   return {

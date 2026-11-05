@@ -1,5 +1,5 @@
 // Failure modes: employees bypass the CEO, CEO decisions execute twice, owner answers are lost,
-// cross-project instructions leak, or a question blocks unrelated employee work.
+// cross-project instructions leak, unanswered blockers stop silently, or owner answers cannot resume work.
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -123,8 +123,11 @@ test("CEO handles new information beyond the old daily cap, bounds unchanged rev
     const later = new Date(now.getTime() + 125 * 60000);
     const paused = o.plan("unchanged-stop", b.list(), c.tasks(), later);
     assert.equal(paused.events, undefined);
-    assert.equal(paused.notice?.length, 1);
+    assert.equal(paused.notice, undefined, "an actionable question replaces the status-only notice");
     assert.ok(o.executive().stalled);
+    assert.equal(paused.ask?.length, 1, "unresolved CEO blockers must reach the owner as an answerable question");
+    assert.match(paused.ask![0].text, /APP/);
+    assert.doesNotThrow(() => parseResult({ outcome: "done", ...paused }));
     assert.deepEqual(o.plan("unchanged-again", b.list(), c.tasks(), new Date(later.getTime() + 60000)), {});
     o.signal("app", { title: "新进展", detail: "补充了所需来源", source: "测试" }, later);
     assert.ok(
@@ -476,4 +479,78 @@ test("reconciliation ignores live retries, stale assignments and reports still i
     assert.equal(failedWork(c, [{ ...run, state: "claimed" }], later).length, 0);
     assert.equal(failedWork(c, [{ ...run, createdAt: new Date(at - 5000).toISOString() }], later).length, 0);
     assert.equal(failedWork(c, [run, { ...run, id: 11, state: "queued" }], later).length, 0);
+  }));
+
+// Exhausting unchanged retries must not discard new owner information or bypass CEO review.
+test("owner answers reopen a blocked task retry allowance once and CEO resumes the existing task", () =>
+  fixture((b, o, c, send) => {
+    const chat = (id: string, executive: unknown) =>
+      o.plan(id, b.list(), c.tasks(), now, [], 0, [
+        {
+          id,
+          source: "company-ceo",
+          type: "company.ceo.decision",
+          subject: "owner",
+          detail: JSON.stringify({ summary: "处理阻塞", executive }),
+        },
+      ]);
+    const first = chat(
+      "assign",
+      decision({
+        briefs: [{ business: "app", objective: "完善内容" }],
+        directives: [{ business: "app", action }],
+      }),
+    ).events!.find((e) => JSON.parse(e.detail).kind === "internal-content")!;
+    send("company-inbox", first.type, first.subject, JSON.parse(first.detail));
+    const block = (n: number) => {
+      send("company-growth", "company.result", first.subject, {
+        assignment: n,
+        verdict: "blocked",
+        summary: "缺少发布渠道入口",
+        artifacts: [],
+        evidence: ["已有资料无入口"],
+      });
+      o.plan("collect-" + n, b.list(), c.tasks(), now, [], 4);
+      return o.executive().issues.find((i) => i.task === first.subject && i.state === "open")!;
+    };
+    for (let n = 1; n <= 2; n++) {
+      const issue = block(n);
+      const r = chat(
+        "answer-" + n,
+        decision({ answers: [{ issue: issue.id, answer: "核对已有渠道配置", evidence: "资料" }] }),
+      );
+      const retry = r.events!.find((e) => e.type === "company.task.retry")!;
+      assert.ok(retry);
+      send("company-inbox", retry.type, retry.subject, {});
+    }
+    const issue = block(3);
+    assert.equal(o.executive().retries[first.subject], 2);
+    const q = chat(
+      "escalate",
+      decision({
+        escalations: [
+          {
+            key: "channel",
+            issues: [issue.id],
+            question: "请提供发布渠道入口",
+            context: "已有配置无法使用",
+          },
+        ],
+      }),
+    ).ask![0];
+    const answer = { card: 77, choice: null, text: "入口已补充到项目资料", about: q.about };
+    const received = o.plan("owner-answer", b.list(), c.tasks(), now, [answer], 4);
+    assert.equal(received.events, undefined, "owner input must still be evaluated by CEO");
+    assert.equal(o.executive().retries[first.subject], 0);
+    const resumed = chat(
+      "resume",
+      decision({ answers: [{ issue: issue.id, answer: "按新入口继续现有任务", evidence: "负责人补充" }] }),
+    );
+    assert.equal(
+      resumed.events?.filter((e) => e.type === "company.task.retry" && e.subject === first.subject).length,
+      1,
+    );
+    assert.equal(o.executive().retries[first.subject], 1);
+    o.plan("owner-replay", b.list(), c.tasks(), now, [answer], 4);
+    assert.equal(o.executive().retries[first.subject], 1, "replayed owner answer cannot reset the allowance again");
   }));

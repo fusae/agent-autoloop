@@ -62,6 +62,8 @@ test("new and upgraded rules allow bounded CEO decisions and refresh knowledge w
     const rules = initialize(dir);
     const chat = rules.rules.find((r) => r.name === "CEO · 业务答复")!;
     assert.ok(chat);
+    for (const r of rules.rules.filter((r) => r.name.startsWith("公司部门-") || r.name === chat.name))
+      assert.match(r.prompt, /业务交付与求助协议 v1/);
     assert.equal(chat.to, "company-ceo");
     assert.deepEqual(chat.emits, { source: "company-ceo", types: ["company.ceo.decision"] });
     assert.doesNotMatch(chat.prompt, /这是只读业务问答/);
@@ -84,6 +86,8 @@ test("new and upgraded rules allow bounded CEO decisions and refresh knowledge w
     assert.equal(readFileSync(join(dir, "hub/rules.json"), "utf8"), first);
     assert.equal(JSON.parse(first).rules.filter((r: any) => r.name === chat.name).length, 1);
     assert.doesNotMatch(first, /这是只读业务问答/);
+    for (const r of JSON.parse(first).rules.filter((r: any) => r.name.startsWith("公司部门-") || r.name === chat.name))
+      assert.match(r.prompt, /业务交付与求助协议 v1/);
     assert.match(JSON.parse(first).rules.find((r: any) => r.name === "公司部门-ceo").prompt, /evidence 必须为 1–5 项/);
     assert.equal(JSON.parse(first).rules.filter((r: any) => r.name === "公司经营-对话").length, 1);
     const channel = JSON.parse(readFileSync(join(dir, "hub/config.json"), "utf8")).channels["company-feishu"];

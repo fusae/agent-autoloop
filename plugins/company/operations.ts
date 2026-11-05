@@ -427,6 +427,8 @@ export class Operations {
       q.answer = (answer.text?.trim() || "负责人确认已处理，请核对更新后的资料").slice(0, 4000);
       for (const issue of c.issues.filter((i) => q.issues.includes(i.id))) {
         issue.state = "open";
+        // New owner evidence permits another CEO-led attempt; replayed cards never reach here.
+        if (issue.task) c.retries[issue.task] = 0;
         c.knowledge.push({
           id: hash(`${answer.card}:${issue.id}`),
           business: issue.business,
@@ -760,12 +762,55 @@ export class Operations {
             at: now.toISOString(),
             reason: `相同资料已复查两次，仍无处理结果：${pending.slice(0, 3).join("；")}`,
           };
-          receipt.notice ??= [];
-          receipt.notice.push({
-            key: `ceo-stalled-${fingerprint}`,
-            title: "CEO · 管理停滞",
-            text: c.stalled.reason + "。已停止重复复查，现有工作继续；新资料或任务结果到达后自动恢复。",
-          });
+          // An unanswered management blocker needs a reply path, not a terminal status notice.
+          for (const b of active) {
+            for (const p of this.get(b.id, now).plans.filter((p) => p.status === "proposed" || p.status === "review")) {
+              const id = hash(`stalled-plan:${p.id}:${p.status}`);
+              if (!c.issues.some((i) => i.context.startsWith(`计划 ${p.id}：`) && i.state !== "answered"))
+                c.issues.push({
+                  id: hash(`${id}:${fingerprint}`),
+                  business: b.id,
+                  role: "ceo",
+                  task: null,
+                  question: `${b.name} · ${p.title}：${p.status === "proposed" ? "CEO 未决定是否执行" : "CEO 未处理效果复盘"}`,
+                  context: `计划 ${p.id}：${p.result}`,
+                  state: "open",
+                  answer: null,
+                  at: now.toISOString(),
+                });
+            }
+          }
+          const issues = c.issues.filter((i) => i.state === "open").slice(0, 8);
+          if (issues.length) {
+            const question = issues
+              .map((i) => `${active.find((b) => b.id === i.business)?.name ?? i.business}：${i.question.slice(0, 180)}`)
+              .join("；");
+            this.applyDecision(
+              c,
+              businesses,
+              tasks,
+              {
+                briefs: [],
+                directives: [],
+                approvals: [],
+                answers: [],
+                escalations: [
+                  {
+                    key: `stalled-${fingerprint}`,
+                    issues: issues.map((i) => i.id),
+                    question: `CEO 未能解决以下事项，请决定处理方式或补充所缺信息：${question}`.slice(0, 800),
+                    context: "CEO 已连续复查两次，仍未给出处理结果。回复后由 CEO 继续处理原任务，其他工作继续。",
+                  },
+                ],
+              },
+              `stalled-${fingerprint}`,
+              c.stalled.reason,
+              receipt,
+              now,
+            );
+            c.fingerprint = this.ceoInputs(c, businesses, tasks, now);
+            c.stalled.fingerprint = c.fingerprint;
+          }
         }
         return;
       }
