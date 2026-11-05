@@ -12,6 +12,8 @@ type Message = {
   sender?: { id?: string; sender_type?: string };
   content?: string;
   deleted?: boolean;
+  reply_to?: string;
+  thread_id?: string;
 };
 type Saved = {
   version: number;
@@ -283,6 +285,42 @@ export class CompanyFeishu {
     this.save();
     return true;
   }
+  private async quotedContext(m: Message) {
+    let parent = m.reply_to;
+    if (!parent && m.thread_id) {
+      // The CLI's compact formatter omits parent_id whenever thread_id exists.
+      if (!/^om_[A-Za-z0-9]+$/.test(m.message_id)) return { unavailable: "引用消息编号无效" };
+      const raw = await this.lark(["api", "GET", `/open-apis/im/v1/messages/${m.message_id}`, "--as", "bot"]);
+      if (!Array.isArray(raw.data?.items)) throw Error("飞书未返回引用消息信息");
+      const original = raw.data.items.find((v: any) => v.message_id === m.message_id);
+      parent = original?.parent_id || original?.root_id;
+      if (!parent) return { unavailable: "无法确认话题中被引用的消息" };
+    }
+    if (!parent) return undefined;
+    if (!/^om_[A-Za-z0-9]+$/.test(parent) || parent === m.message_id) return { unavailable: "引用消息编号无效" };
+    const response = await this.lark([
+      "im",
+      "+messages-mget",
+      "--as",
+      "bot",
+      "--message-ids",
+      parent,
+      "--format",
+      "json",
+    ]);
+    if (!Array.isArray(response.data?.messages)) throw Error("飞书未返回引用消息内容");
+    const quoted = response.data.messages.find((v: Message) => v.message_id === parent);
+    if (!quoted || quoted.deleted) return { message: parent, unavailable: "原消息已撤回或不可读取" };
+    const matched = Object.entries(this.state.cards).find(([, s]) => s.cardRef === parent || s.ref === parent);
+    const text = typeof quoted.content === "string" ? quoted.content : "";
+    return {
+      message: parent,
+      ...(matched ? { card: Number(matched[0]) } : {}),
+      type: quoted.msg_type,
+      text: text.slice(0, 2200),
+      truncated: text.length > 2200,
+    };
+  }
   async receive(messages: Message[]) {
     for (const m of messages) {
       if (
@@ -298,8 +336,22 @@ export class CompanyFeishu {
         const question = m.content?.trim();
         // Numbered replies never fall through to conversation, including incomplete/invalid replies.
         if (!this.onQuestion || !question || question.length > 4000 || /^(?:#C?|C)\d+\b/i.test(question)) continue;
-        const detail = JSON.stringify({ question, message: m.message_id });
-        if (detail.length > 4000) continue;
+        const payload = { question, message: m.message_id, quoted: await this.quotedContext(m), truncated: false };
+        let detail = JSON.stringify(payload);
+        // Keep the owner's words ahead of quoted background within the hub's detail limit.
+        while (detail.length > 4000) {
+          if (payload.quoted && "text" in payload.quoted && payload.quoted.text) {
+            payload.quoted.text = payload.quoted.text.slice(
+              0,
+              Math.max(0, payload.quoted.text.length - (detail.length - 3900)),
+            );
+            payload.quoted.truncated = true;
+          } else {
+            payload.question = payload.question.slice(0, Math.max(0, payload.question.length - (detail.length - 3900)));
+            payload.truncated = true;
+          }
+          detail = JSON.stringify(payload);
+        }
         await this.onQuestion({
           id: "owner-question:" + createHash("sha256").update(m.message_id).digest("hex"),
           type: "company.owner.question",

@@ -586,3 +586,143 @@ test("deferred cards show paused status and put background in a collapsed panel"
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Quoted replies must carry the actual referenced content, including closed cards, without approving them again.
+test("quoted owner replies include the closed card and retry context lookup before marking seen", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-feishu-quote-")),
+    file = join(dir, "state.json"),
+    events: any[] = [];
+  const message = {
+    message_id: "om_reply",
+    msg_type: "text",
+    sender: { id: "ou_owner", sender_type: "user" },
+    content: "这两项都可以",
+    reply_to: "om_card42",
+  };
+  let offline = true,
+    answers = 0,
+    lookups = 0;
+  const hub = {
+    delivered: async () => {},
+    answer: async () => {
+      answers++;
+    },
+  } as any;
+  const lark = async (args: string[]) => {
+    if (args.includes("+messages-mget")) {
+      lookups++;
+      if (offline) throw Error("offline");
+      return {
+        data: {
+          messages: [
+            {
+              message_id: "om_card42",
+              msg_type: "interactive",
+              content: "记住 APP：记事保存、提醒到达",
+              sender: { sender_type: "app" },
+            },
+          ],
+        },
+      };
+    }
+    return { data: { message_id: "om_card42" } };
+  };
+  try {
+    let bridge = new CompanyFeishu(file, "ou_owner", hub, lark, async (e) => events.push(e), true);
+    await bridge.deliver(card);
+    await bridge.deliver({ ...card, version: 3, state: "done", choice: 1 });
+    await bridge.receive([{ ...message, sender: { id: "ou_other", sender_type: "user" } }]);
+    assert.equal(lookups, 0);
+    await assert.rejects(bridge.receive([message]), /offline/);
+    assert.equal(events.length, 0);
+    offline = false;
+    await bridge.receive([message]);
+    bridge = new CompanyFeishu(file, "ou_owner", hub, lark, async (e) => events.push(e), true);
+    await bridge.receive([message]);
+    assert.equal(events.length, 1);
+    assert.equal(answers, 0);
+    const detail = JSON.parse(events[0].detail);
+    assert.equal(detail.question, message.content);
+    assert.equal(detail.quoted.message, "om_card42");
+    assert.equal(detail.quoted.card, 42);
+    assert.match(detail.quoted.text, /记事保存、提醒到达/);
+    assert.equal(events[0].summary, "负责人向 CEO 提问");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The CLI hides parent_id behind thread_id; retrieve the immediate parent, not an unrelated thread root.
+test("thread replies resolve the exact parent and bound quoted text without dropping the owner message", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-feishu-thread-")),
+    events: any[] = [],
+    calls: string[][] = [];
+  const lark = async (args: string[]) => {
+    calls.push(args);
+    if (args[0] === "api")
+      return { data: { items: [{ message_id: "om_reply", parent_id: "om_parent", root_id: "om_root" }] } };
+    return {
+      data: {
+        messages: [
+          {
+            message_id: "om_parent",
+            msg_type: "text",
+            content: "原始说明".repeat(2000),
+            sender: { sender_type: "app" },
+          },
+        ],
+      },
+    };
+  };
+  try {
+    const bridge = new CompanyFeishu(join(dir, "state.json"), "ou_owner", {} as any, lark, async (e) => events.push(e));
+    await bridge.receive([
+      {
+        message_id: "om_reply",
+        msg_type: "text",
+        sender: { id: "ou_owner", sender_type: "user" },
+        content: "确认上述结果",
+        thread_id: "omt_thread",
+      },
+    ]);
+    assert.equal(calls[0][0], "api");
+    assert.ok(calls[0][2].endsWith("/om_reply"));
+    assert.ok(calls[1].includes("om_parent"));
+    assert.equal(events.length, 1);
+    const detail = JSON.parse(events[0].detail);
+    assert.equal(detail.quoted.message, "om_parent");
+    assert.equal(detail.question, "确认上述结果");
+    assert.equal(detail.quoted.truncated, true);
+    assert.ok(events[0].detail.length <= 4000);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("withdrawn quoted messages are explicitly unavailable rather than guessed", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-feishu-deleted-")),
+    events: any[] = [];
+  try {
+    const bridge = new CompanyFeishu(
+      join(dir, "state.json"),
+      "ou_owner",
+      {} as any,
+      async () => ({ data: { messages: [{ message_id: "om_gone", deleted: true, content: "不要传这个旧内容" }] } }),
+      async (e) => events.push(e),
+    );
+    await bridge.receive([
+      {
+        message_id: "om_reply",
+        msg_type: "text",
+        sender: { id: "ou_owner", sender_type: "user" },
+        content: "这个如何",
+        reply_to: "om_gone",
+      },
+    ]);
+    const detail = JSON.parse(events[0].detail);
+    assert.ok(detail.quoted.unavailable);
+    assert.equal(detail.quoted.text, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
