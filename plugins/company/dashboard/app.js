@@ -378,7 +378,7 @@ function approvalsHTML(d) {
         : "填写你的答复或意见…";
       const disabled = !d.connected ? "disabled" : "";
       return `<article class="approval-card reply-card">
-      <div class="reply-meta"><span>${question ? "CEO" : "审批"}</span><span>C${c.id}</span></div>
+      <div class="reply-meta"><span>${question ? "CEO" : "审批"}</span><span>待办 #${c.id}</span></div>
       <h3>${question ? (baseline ? "业务资料" : "资料补充") : esc(c.title)}</h3>
       <p class="reply-question">${esc(request)}</p>
       ${context.length ? `<details class="reply-context"><summary>补充说明</summary><p>${esc(context.join("\n\n"))}</p></details>` : ""}

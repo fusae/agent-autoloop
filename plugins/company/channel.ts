@@ -13,8 +13,23 @@ type Message = {
   content?: string;
   deleted?: boolean;
 };
-type Saved = { version: number; ref: string; open: boolean; options: string[] };
+type Saved = { version: number; ref: string | null; open: boolean; options: string[]; acknowledged?: boolean };
 type State = { cards: Record<string, Saved>; seen: string[]; cursor: string };
+const bookkeeping = new Set(["经营周期已检查", "公司任务状态已更新", "此事项已处理", "已处理"]);
+function excerpt(text: string, max: number) {
+  const plain = text.replace(/\s+/g, " ").trim();
+  return plain.length > max ? plain.slice(0, max) + "…" : plain;
+}
+function updateText(card: Card, acknowledged: boolean) {
+  const subject = excerpt(card.text.split(/\n\s*\n/)[0] || card.title, 180);
+  const answer = card.answer?.trim() || (card.choice !== null ? card.options[card.choice] : "");
+  const result = card.result?.trim();
+  const meaningful = result && !bookkeeping.has(result.replace(/[。.!！]+$/, ""));
+  if (card.state !== "decided" && meaningful) return `处理结果\n事项：${subject}\n\n${result}`;
+  if (card.kind === "ask" && answer && !acknowledged)
+    return `答复已记录\n事项：${subject}\n你的答复：${excerpt(answer, 240)}`;
+  return null;
+}
 export class CompanyFeishu {
   private file: string;
   private owner: string;
@@ -39,29 +54,41 @@ export class CompanyFeishu {
   async deliver(card: Card) {
     let saved = this.state.cards[card.id];
     if (!saved || saved.version < card.version) {
-      let text: string;
+      // Old closed states have already sent their acknowledgement; do not replay them on upgrade.
+      const acknowledged = saved?.acknowledged ?? (!!saved && saved.version > 1 && !saved.open);
+      let text: string | null;
       if (card.state === "open")
-        text = `${card.title}\n\n${card.text}${card.kind === "ask" ? `\n\n请回复：C${card.id} 你的回答\n也可回复：${card.options.map((o, i) => `C${card.id} ${i + 1}（${o}）`).join("；")}` : ""}`;
-      else
-        text = `CEO · C${card.id}\n${card.state === "decided" ? "已收到你的答复，CEO 将处理并反馈员工。" : card.result || "此事项已处理。"}`;
+        text = `${card.title}\n\n${card.text}${card.kind === "ask" ? `\n\n请回复：#${card.id} 你的回答\n也可回复：${card.options.map((o, i) => `#${card.id} ${i + 1}（${o}）`).join("；")}` : ""}`;
+      else text = updateText(card, acknowledged);
       // Persist the original message reference: owner authentication remains bound to that question.
-      const key =
-        "company-" + createHash("sha256").update(`${this.file}:${card.id}:${card.version}`).digest("hex").slice(0, 32);
-      const sent = await this.lark([
-        "im",
-        "+messages-send",
-        "--as",
-        "bot",
-        "--user-id",
-        this.owner,
-        "--text",
-        text,
-        "--idempotency-key",
-        key,
-      ]);
-      const ref = saved?.ref ?? card.ref ?? sent.data?.message_id;
-      if (typeof ref !== "string" || !ref.startsWith("om_")) throw new Error("飞书未返回有效消息编号");
-      saved = { ref, version: card.version, open: card.kind === "ask" && card.state === "open", options: card.options };
+      let ref = saved?.ref ?? card.ref;
+      if (text) {
+        const version = card.state !== "open" && text.startsWith("答复已记录\n") ? "answer" : card.version;
+        const key =
+          "company-" + createHash("sha256").update(`${this.file}:${card.id}:${version}`).digest("hex").slice(0, 32);
+        const sent = await this.lark([
+          "im",
+          "+messages-send",
+          "--as",
+          "bot",
+          "--user-id",
+          this.owner,
+          "--text",
+          text,
+          "--idempotency-key",
+          key,
+        ]);
+        if (typeof sent.data?.message_id !== "string" || !sent.data.message_id.startsWith("om_"))
+          throw new Error("飞书未返回有效消息编号");
+        ref ??= sent.data.message_id;
+      }
+      saved = {
+        ref,
+        version: card.version,
+        open: card.kind === "ask" && card.state === "open",
+        options: card.options,
+        acknowledged: acknowledged || (card.kind === "ask" && card.state !== "open" && !!text),
+      };
       this.state.cards[card.id] = saved;
       this.save();
     }
@@ -77,12 +104,12 @@ export class CompanyFeishu {
         m.msg_type !== "text"
       )
         continue;
-      const match = /^\s*#?C(\d+)\s+([\s\S]+)$/i.exec(m.content ?? "");
+      const match = /^\s*(?:#C?|C)(\d+)\s+([\s\S]+)$/i.exec(m.content ?? "");
       if (!match) continue;
       const card = Number(match[1]),
         saved = this.state.cards[card],
         text = match[2].trim();
-      if (!saved?.open || !text || text.length > 4000) continue;
+      if (!saved?.open || !saved.ref || !text || text.length > 4000) continue;
       const choice = /^[1-5]$/.test(text) ? Number(text) - 1 : null;
       if (choice !== null && choice >= saved.options.length) continue;
       try {

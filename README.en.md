@@ -264,3 +264,5 @@ Start reading at `bin/agent-autoloop.ts` → `cli/main.ts`, then follow the feat
 [MIT License](LICENSE)
 
 The company dashboard also supports an authenticated HTTPS reverse proxy and a subpath such as `/company/`. Set the exact trusted `AGENT_COMPANY_PUBLIC_ORIGIN`, keep both backend ports on loopback, and preserve Origin and CSRF checks. Stop the original instance before moving its private ledger to Linux. See [server deployment](docs/company.md#服务器部署).
+
+Company Feishu updates name the question, acknowledge each answer once, and suppress internal bookkeeping messages. Reply with `#number answer`; legacy `Cnumber` replies remain supported.
