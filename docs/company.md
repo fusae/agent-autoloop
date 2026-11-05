@@ -289,7 +289,7 @@ CEO 模式的内部交付完成后进入 `delivered`，不开始效果计时。C
 {"projects":{"app":{"channel":"已授权的内容平台账号","command":["/absolute/trusted-publisher"]}}}
 ```
 
-适配程序从 stdin 读 JSON：`action` 为 `lookup` 或 `publish`，另含稳定 `key`、项目 `business`、计划 `plan`、交付任务 `task`、配置 `channel` 和冻结正文 `artifacts[{path,sha256,content}]`。通过 stdout 只返回 JSON，不输出凭据。发布程序必须以 `key` 实现平台幂等；`lookup` 必须查询真实平台，明确不存在时返回 `{"state":"absent"}`，无法判断返回 `{"state":"unknown"}`。确认发布返回 `{"state":"published","key":"原key","channel":"原channel","remoteId":"平台内容编号","url":"https://实际发布链接","publishedAt":"ISO时间"}`。固定程序先 lookup，只有明确 absent 才 publish，随后再次 lookup 核验；未知或失败不视为成功。重启及丢失本地回执时仍先向平台查同一 key，不能盲目重发。命令参数只来自私有配置，不执行草稿或模型提供的命令；每次调用最长30秒。
+适配程序从 stdin 读 JSON：`action` 为 `lookup` 或 `publish`，另含稳定 `key`、项目 `business`、计划 `plan`、交付任务 `task`、配置 `channel` 和冻结正文 `artifacts[{path,sha256,content}]`。通过 stdout 只返回 JSON，不输出凭据。发布程序必须以 `key` 实现平台幂等；`lookup` 必须查询真实平台，明确不存在时返回 `{"state":"absent"}`，无法判断返回 `{"state":"unknown"}`。确认发布返回 `{"state":"published","key":"原key","channel":"原channel","remoteId":"平台内容编号","url":"https://实际发布链接","publishedAt":"ISO时间"}`。固定程序先 lookup，只有明确 absent 才 publish，随后再次 lookup 核验；未知或失败不视为成功。重启及丢失本地回执时仍先向平台查同一 key，不能盲目重发。命令参数只来自私有配置，不执行草稿或模型提供的命令；每次调用默认最长30秒；可信配置可用 `timeoutMs` 设置1000–600000毫秒，供浏览器发布使用。
 
 凭据由固定适配程序独立读取，不能放入正文、事件或代码仓库。尚未提供任一内容平台的账号与适配程序时，真实发布仍无法执行，CEO 应明确请求完成该渠道接入。此入口不开放付款、广告投放、客户私信或生产变更。
 
@@ -306,3 +306,5 @@ QA 驳回的当前 `blocked` 交付同样可以 `deliveries.verdict=revise`，�
 
 
 调度程序、经营协调和固定发布使用独立的 `*-company-control` worker，容量为2；模型仍使用原 worker 及原容量。两名模型员工忙碌时，任务接收、结果入账、异常核对与发布不会再一起排队。宿主配置新增可选 `workers` 数组，原单一 `worker` 配置继续兼容。运行记录保存领取者名称；重启后各 worker 只接管自己的进程，升级前未标名称的旧运行仅由原主 worker 接管。升级与新建公司自动配置专用 worker，不新增事件监听。
+
+小红书专用接入、扫码登录和图文审核格式见 [小红书发布](xiaohongshu.md)。未登录及未实测不能视为已接通。

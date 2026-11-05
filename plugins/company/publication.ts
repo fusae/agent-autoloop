@@ -86,12 +86,15 @@ export function executePublication(directory: string, key: string): Publication 
     !isAbsolute(target.command[0])
   )
     throw Error("发布入口配置不完整，需要修复渠道及固定执行程序");
+  const timeout = target.timeoutMs ?? 30_000;
+  if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 600_000)
+    throw Error("发布入口超时必须为1000–600000毫秒");
   const call = (action: "lookup" | "publish"): any => {
     // Commands come only from private operator configuration, never from CEO text or draft files.
     const result = spawnSync(target.command[0], target.command.slice(1), {
       input: JSON.stringify({ ...request, channel: target.channel, action }),
       encoding: "utf8",
-      timeout: 30_000,
+      timeout,
       maxBuffer: 100_000,
       cwd: directory,
       shell: false,
@@ -109,7 +112,12 @@ export function executePublication(directory: string, key: string): Publication 
     call("publish");
     result = call("lookup");
   }
-  if (result.state !== "published") throw Error("平台尚未确认发布成功，需要检查账号、审核状态或发布入口");
+  if (result.state !== "published")
+    throw Error(
+      typeof result.reason === "string" && result.reason.trim()
+        ? result.reason.slice(0, 400)
+        : "平台尚未确认发布成功，需要检查账号、审核状态或发布入口",
+    );
   const proof = publication(result);
   if (proof.key !== key || proof.channel !== target.channel) throw Error("平台发布结果与本次审核或配置渠道不匹配");
   save(file(directory, key, "-result"), proof);

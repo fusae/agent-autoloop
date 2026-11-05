@@ -58,3 +58,26 @@ test("publishing uses frozen approved content, checks the platform and does not 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("publisher blockers reach CEO and unbounded timeouts are rejected", () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-publish-"));
+  try {
+    mkdirSync(join(dir, "workspace"));
+    writeFileSync(join(dir, "workspace/post.md"), "正文");
+    const key = freezePublication(dir, "app", "plan", {
+      id: "draft",
+      assignment: 1,
+      reports: [{ artifacts: ["post.md"] }],
+    } as Task);
+    const script = join(dir, "blocked.mjs");
+    writeFileSync(script, 'console.log(JSON.stringify({state:"unknown",reason:"小红书登录已失效，请扫码"}))');
+    const config = { projects: { app: { channel: "小红书", command: [process.execPath, script], timeoutMs: 600000 } } };
+    writeFileSync(join(dir, "publishing.json"), JSON.stringify(config));
+    assert.throws(() => executePublication(dir, key), /小红书登录已失效/);
+    config.projects.app.timeoutMs = 999999999;
+    writeFileSync(join(dir, "publishing.json"), JSON.stringify(config));
+    assert.throws(() => executePublication(dir, key), /超时/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
