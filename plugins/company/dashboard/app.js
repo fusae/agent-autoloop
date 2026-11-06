@@ -75,6 +75,7 @@ let live = null,
   refreshing = false,
   renderedState = "";
 const data = () => (isDemo ? demo : live);
+const taskFlow = (task) => data()?.contentReview === "ceo" && task.kind === "internal-content" && task.stage === 0 ? ["growth"] : routes[task.kind] ?? [];
 const signature = ({ at, ...state }) => JSON.stringify(state);
 const badge = (status) => `<span class="badge ${esc(status)}">${esc(names[status] ?? status)}</span>`;
 const time = (value) =>
@@ -316,7 +317,7 @@ function departmentHTML(d) {
     .map(([role, name]) => {
       const agent = d.agents.find((a) => a.id === `company-${role}`),
         running = d.runs.some((r) => r.agent === `company-${role}` && r.state === "claimed");
-      const tasks = d.tasks.filter((t) => t.status === "active" && routes[t.kind]?.[t.stage] === role);
+      const tasks = d.tasks.filter((t) => t.status === "active" && taskFlow(t)[t.stage] === role);
       const status =
         !d.connected || !agent?.online ? "未连接" : running ? "执行中" : tasks.length ? "待接单" : "空闲中";
       return `<button class="dept-card" data-department="${role}"><div class="dept-top"><span class="dept-icon">${roleInfo[role][0]}</span><span class="dept-status ${running ? "busy" : ""}">${status}</span></div><h3 class="dept-name">${name}${role === "ceo" ? "" : "部"}</h3><div class="dept-desc">${roleInfo[role][1]}</div><div class="dept-bottom"><span>${esc(agent?.use === "claude" ? "Claude Code" : agent?.use === "codex" ? "Codex" : (agent?.use ?? "待接入"))}</span><b>${tasks.length ? `${tasks.length} 项在途任务` : "等待新任务"}</b></div></button>`;
@@ -328,7 +329,7 @@ function taskRows(d) {
     (t) =>
       (filter === "all" ||
         filter === t.status ||
-        (filter.startsWith("dept:") && routes[t.kind]?.[t.stage] === filter.slice(5))) &&
+        (filter.startsWith("dept:") && taskFlow(t)[t.stage] === filter.slice(5))) &&
       (!search || `${t.title} ${t.id}`.toLowerCase().includes(search.toLowerCase())),
   );
   if (view === "overview")
@@ -340,7 +341,7 @@ function taskRows(d) {
     return `<tr><td colspan="4"><div class="empty"><span class="empty-symbol">▧</span><strong>${d.tasks.length ? "没有匹配的任务" : "暂无任务"}</strong>${d.tasks.length ? "" : ""}</div></td></tr>`;
   return tasks
     .map((t) => {
-      const flow = routes[t.kind] ?? [];
+      const flow = taskFlow(t);
       return `<tr><td><button class="task-title" data-task="${esc(t.id)}">${esc(t.title)}</button><span class="task-code">${esc(t.id)}</span></td><td>${badge(t.status)}</td><td><span class="stage">${flow.map((r, i) => `<i class="${i <= t.stage ? "done" : ""}" title="${roleNames[r]}"></i>`).join("")} ${t.status === "completed" ? "已归档" : t.status === "awaiting_approval" ? "负责人" : esc(roleNames[flow[t.stage]] ?? "等待派工")}</span></td><td><button class="text-link" data-task="${esc(t.id)}">查看 ↗</button></td></tr>`;
     })
     .join("");
@@ -528,7 +529,7 @@ async function showTask(id) {
       : await api(`/api/tasks/${encodeURIComponent(id)}`);
     const t = result.task;
     if (!t) throw new Error("任务不存在");
-    const flow = routes[t.kind] ?? [];
+    const flow = taskFlow(t);
     $("#detail-content").innerHTML =
       `<div class="dialog-heading"><div><p class="eyebrow">${esc(t.id)} / ${esc(kindNames[t.kind])}</p><h2>${esc(t.title)}</h2></div><button class="close" data-close="detail-dialog" aria-label="关闭">×</button></div>${badge(t.status)}<p class="detail-goal">${esc(t.goal)}</p><div class="detail-section"><h3>验收标准</h3><ul>${t.acceptance.map((a) => `<li>${esc(a)}</li>`).join("")}</ul></div><div class="detail-section"><h3>部门流转 · 已派工 ${t.assignment} / ${d.maxAssignments} 次</h3><p class="muted">${flow.map((r, i) => `${i < t.stage || t.status === "completed" ? "✓ " : i === t.stage ? "● " : ""}${roleNames[r]}`).join("　→　")}${t.kind.startsWith("check-") || t.kind.startsWith("internal-") ? "" : "　→　负责人审批"}</p>${t.reason ? `<p class="muted">${esc(t.reason)}</p>` : ""}${["blocked", "rejected"].includes(t.status) ? `<button class="secondary" data-retry="${esc(t.id)}" ${!d.connected ? "disabled" : ""}>重新派工 →</button><p class="note">请先补充缺失资料或修改意见；返工仍计入派工额度。</p>` : ""}</div><div class="detail-section"><h3>部门交付与核验依据</h3>${t.reports.length ? t.reports.map((r) => `<article class="report"><h4>${esc(roleNames[r.role])}部 · ${r.verdict === "pass" ? "通过" : r.verdict === "blocked" ? "受阻" : "未通过"}</h4><p>${esc(r.summary)}</p><ul>${r.evidence.map((e) => `<li>${esc(e)}</li>`).join("")}</ul>${r.artifacts.map((path) => `<button class="artifact" data-artifact="${esc(path)}" data-artifact-task="${esc(t.id)}">↗ ${esc(path)}</button>`).join("")}</article>`).join("") : '<p class="muted">暂无交付物</p>'}</div><div class="detail-section"><h3>操作记录</h3>${result.history.length ? result.history.map((h) => `<div class="history-row"><time>${time(h.at)}</time><span>${esc(h.kind === "created" ? "任务已创建" : h.kind === "retried" ? "已重新派工" : h.kind === "completed" ? "负责人已接受" : h.kind === "rejected" ? "负责人已退回" : h.kind === "invalid-report" ? "交付报告不合格" : `${roleNames[h.kind.split(":")[1]] ?? "部门"}已提交报告`)}</span></div>`).join("") : '<p class="muted">暂无操作记录</p>'}</div>`;
     $("#detail-dialog").showModal();
@@ -977,7 +978,7 @@ function employeesHTML(d) {
                         : s.lastTask && !current
                           ? "待接单"
                           : "待检查");
-                return `<article class="panel employee-card"><div class="panel-heading"><h3>${roleNames[s.role]}${s.role === p.owner ? " · 项目负责人" : ""}</h3><span class="badge ${waiting && current.status === "blocked" ? "blocked" : ""}">${esc(status)}</span></div><p>${esc(s.duty)}</p><details><summary>检查事项</summary><ul>${s.checks.map((c) => `<li>${esc(c)}</li>`).join("")}</ul></details><dl class="employee-facts"><div><dt>检查周期</dt><dd>${s.cadence === "daily" ? "每天" : "每周"}</dd></div><div><dt>最近检查</dt><dd>${s.lastChecked ? time(s.lastChecked) : "尚未检查"}</dd></div><div><dt>下次检查</dt><dd>${!s.enabled || !p.enabled || p.status !== "active" ? "—" : waiting ? "当前任务结束后" : time(s.nextAt)}</dd></div></dl><p class="employee-finding">${esc(s.nextAction ?? (waiting ? current.reason || "执行中" : s.finding))}</p><div class="business-actions"><button class="secondary" data-employee="${s.role}" data-project="${esc(p.business)}">责任档案</button>${current ? `<button class="text-button" data-task="${esc(current.id)}">${waiting ? "当前任务" : "最近任务"}</button>` : ""}</div></article>`;
+                return `<article class="panel employee-card"><div class="panel-heading"><h3>${roleNames[s.role]}${s.role === p.owner ? " · 项目负责人" : ""}</h3><span class="badge ${waiting && current.status === "blocked" ? "blocked" : ""}">${esc(status)}</span></div><p>${esc(s.daily?.goal ?? s.duty)}</p>${s.daily ? `<dl class="employee-facts"><div><dt>计划日期</dt><dd>${esc(s.daily.date)}</dd></div><div><dt>今日工作</dt><dd>${esc(s.daily.focus)}</dd></div><div><dt>完成标准</dt><dd>${esc(s.daily.doneWhen)}</dd></div><div><dt>复查时间</dt><dd>${time(s.daily.reviewAt)}</dd></div></dl>` : `<p class="note">今日安排：待 CEO 制定</p>`}<details><summary>岗位职责与检查事项</summary><p>${esc(s.duty)}</p><ul>${s.checks.map((c) => `<li>${esc(c)}</li>`).join("")}</ul><dl class="employee-facts"><div><dt>检查周期</dt><dd>${s.cadence === "daily" ? "每天" : "每周"}</dd></div><div><dt>最近检查</dt><dd>${s.lastChecked ? time(s.lastChecked) : "尚未检查"}</dd></div><div><dt>下次检查</dt><dd>${!s.enabled || !p.enabled || p.status !== "active" ? "—" : waiting ? "当前任务结束后" : time(s.nextAt)}</dd></div></dl></details>${!s.daily || waiting ? `<p class="employee-finding">${esc(s.nextAction ?? (waiting ? current.reason || "执行中" : s.finding))}</p>` : ""}<div class="business-actions"><button class="secondary" data-employee="${s.role}" data-project="${esc(p.business)}">责任档案</button>${current ? `<button class="text-button" data-task="${esc(current.id)}">${waiting ? "当前任务" : "最近任务"}</button>` : ""}</div></article>`;
               })
               .join("")}</div></section>`,
         )

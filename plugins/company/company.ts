@@ -32,6 +32,7 @@ export type CompanyConfig = {
   maxAssignments: number;
   ceoMode?: boolean;
   contentReview?: "qa" | "ceo";
+  dailyPlanning?: boolean;
 };
 export type Context = {
   events: { id: string | number; source: string; type: string; subject: string; detail: string; hops?: number }[];

@@ -55,8 +55,9 @@ export function arrangementText(
     for (const a of (d.deliveries ?? []).filter((a) => a.business === project.id))
       add(a.plan, { revise: "修改交付", accept: "已验收", publish: "进入发布" }[a.verdict], a.reason);
     const goals = d.briefs.filter((b) => b.business === project.id);
+    const daily = (d.staffPlans ?? []).filter((a) => a.business === project.id);
     const answers = d.answers.filter((a) => issues.find((i) => i.id === a.issue)?.business === project.id);
-    if (!selected.size && !goals.length && !answers.length) continue;
+    if (!selected.size && !goals.length && !answers.length && !daily.length) continue;
     const lines = [short(project.name, 40)];
     for (const { plan: p, state, reason } of selected.values()) {
       const task = `任务：${short(p.title, 48)}\n${state} · ${departments[p.owner]}负责 · 截止 ${date(p.dueAt)}`;
@@ -66,6 +67,18 @@ export function arrangementText(
       details.push(`${project.name} · ${p.title}\n${reason}`);
     }
     if (!selected.size && goals.length) lines.push(`目标：${short(goals[0].objective, 72)}`);
+    const activeDaily = daily.filter((a) => a.mode !== "standby");
+    for (const a of activeDaily) {
+      const text = `${departments[a.role]}：${short(a.focus, 50)} · ${date(a.reviewAt)}复查`;
+      if (lines.length < 4 && sections.join("\n\n").length + lines.join("\n").length + text.length < 650)
+        lines.push(text);
+      else hidden++;
+    }
+    if (daily.length && !activeDaily.length && !selected.size && !goals.length) lines.push("今日安排：待命，按时复查");
+    for (const a of daily)
+      details.push(
+        `${project.name} · ${departments[a.role]} · ${a.date}\n目标：${a.goal}\n今日：${a.focus}\n完成标准：${a.doneWhen}\n复查：${date(a.reviewAt)}`,
+      );
     if (answers.length) lines.push(`已答复 ${answers.length} 项员工问题`);
     for (const a of answers) {
       const issue = issues.find((i) => i.id === a.issue)!;

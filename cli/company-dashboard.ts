@@ -113,6 +113,8 @@ export async function startDashboard(directory: string, port = 3361, options: { 
           return send(200, {
             name: companyConfig.name,
             maxAssignments: companyConfig.maxAssignments,
+            contentReview: companyConfig.ceoMode ? (companyConfig.contentReview ?? "qa") : "qa",
+            dailyPlanning: !!companyConfig.dailyPlanning && !!companyConfig.ceoMode,
             connected: !!state,
             connectionError,
             at: new Date().toISOString(),

@@ -3,17 +3,18 @@ import { ownerReplyEvidence } from "./owner-replies.ts";
 import { freezePublication } from "./publication.ts";
 import { sourceSnapshots } from "./sources.ts";
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { departments, taskId, taskRequest, workflows, type Role, type Task, type Receipt } from "./company.ts";
-import { executiveDecision, type Leadership, type ExecutiveDecision, type Issue } from "./executive.ts";
+import { executiveDecision, type Leadership, type ExecutiveDecision, type Issue, type StaffPlan } from "./executive.ts";
 import type { Context } from "./company.ts";
 import type { Business, Metric } from "./business.ts";
 import type { ActionProposal, Inspection } from "./inspection.ts";
 
 type Portfolio = (Business & { metrics: Metric[] })[];
 export type Employee = {
+  daily?: Omit<StaffPlan, "business" | "role"> & { issuedAt: string; checkedAt?: string; checkTask?: string };
   role: Role;
   duty: string;
   checks: string[];
@@ -79,8 +80,11 @@ const words = (v: unknown, max: number) => {
 export class Operations {
   private db: DatabaseSync;
   private directory: string;
+  private dailyPlanning: boolean;
   constructor(directory: string) {
     this.directory = directory;
+    const configFile = join(directory, "company.json");
+    this.dailyPlanning = existsSync(configFile) && JSON.parse(readFileSync(configFile, "utf8")).dailyPlanning === true;
     mkdirSync(join(directory, "workspace/knowledge/operations"), { recursive: true, mode: 0o700 });
     const file = join(directory, "operations.db");
     this.db = new DatabaseSync(file);
@@ -233,6 +237,7 @@ export class Operations {
             .find(
               (t) =>
                 t &&
+                this.currentTask(p, t.id) &&
                 ["active", "blocked", "awaiting_approval"].includes(t.status) &&
                 workflows[t.kind]?.[t.stage] === s.role,
             );
@@ -285,6 +290,12 @@ export class Operations {
             workStatus = issue.state === "owner" ? "待负责人答复" : "待 CEO 处理";
             nextAction = issue.question;
           }
+          const daily = s.daily;
+          if (!assigned && !work && !issue && s.enabled && b.autonomy && b.status === "active" && this.dailyPlanning) {
+            workStatus =
+              !daily || daily.date !== day(now) ? "待 CEO 今日安排" : daily.mode === "standby" ? "待命" : "待复查";
+            nextAction = !daily || daily.date !== day(now) ? "CEO更新今日目标和工作" : daily.focus;
+          }
           return { ...s, currentTask, workStatus, nextAction };
         }),
         alerts: p.plans
@@ -322,6 +333,7 @@ export class Operations {
           owner: p.owner,
           manager: this.executive().enabled ? "ceo" : null,
           ceoGoal: this.executive().briefs[b.id] ?? null,
+          dailyPlanning: this.dailyPlanning,
           knowledge: this.executive().knowledge.filter((k) => k.business === b.id),
           staff: p.staff,
           plans: p.plans,
@@ -367,6 +379,19 @@ export class Operations {
             ...b,
             plans: project.plans.map((a) => [a.id, a.status, a.priority, a.result]),
             signals: project.signals,
+            ...(this.dailyPlanning
+              ? {
+                  staffPlans: project.staff
+                    .filter((s) => s.enabled)
+                    .map((s) => [
+                      s.role,
+                      s.daily ?? null,
+                      !!s.daily &&
+                        Date.parse(s.daily.reviewAt) <= now.getTime() &&
+                        (!s.daily.checkedAt || s.daily.checkedAt < s.daily.reviewAt),
+                    ]),
+                }
+              : {}),
             work: project.activity.map((a) => {
               const t = tasks.find((t) => t.id === a.task);
               return [a.task, t?.status, t?.assignment, t?.reason];
@@ -515,6 +540,32 @@ export class Operations {
           a.issues.every((id) => c.issues.some((i) => i.id === id && (!a.business || i.business === a.business))),
       );
     if (!valid) return "CEO 决策引用了不存在或暂停的项目、计划或问题，请重新核对编号。";
+    const staffPlans = d.staffPlans ?? [];
+    if (staffPlans.length && !this.dailyPlanning) return "每日规划尚未启用";
+    if (new Set(staffPlans.map((a) => `${a.business}:${a.role}`)).size !== staffPlans.length)
+      return "同一员工不能重复安排";
+    const resolved = new Map<StaffPlan, string>();
+    for (const a of staffPlans) {
+      const p = known(a.business) ? this.get(a.business, now) : undefined;
+      if (!p?.staff.some((s) => s.role === a.role && s.enabled)) return "每日安排引用了未知、暂停项目或停用员工";
+      if (
+        a.date !== day(now) ||
+        Date.parse(a.reviewAt) <= now.getTime() ||
+        Date.parse(a.reviewAt) > now.getTime() + 7 * 86400_000
+      )
+        return "每日安排必须属于今天，复查时间在未来7天以内";
+      if (a.plan) {
+        const fresh = d.directives.find((d) => d.business === a.business && d.action.key === a.plan);
+        const existing = p.plans.find(
+          (p) => p.id === a.plan || (fresh && p.id === hash(`${a.business}:ceo:${fresh.action.key}`)),
+        );
+        const target = existing ?? fresh?.action;
+        if (!target || workflows[target.kind][0] !== a.role) return "每日安排必须关联本员工负责的真实计划或本轮指令key";
+        if (a.mode === "work" && existing?.status === "closed")
+          return "已关闭计划不能重新当作执行任务，请安排跟进或新的实际工作";
+        resolved.set(a, existing?.id ?? hash(`${a.business}:ceo:${fresh!.action.key}`));
+      }
+    }
     if (d.escalations.some((a) => a.issues.some((id) => c.issues.find((i) => i.id === id)?.state === "answered")))
       return "上报引用了已答复的问题，不能作为新的待决事项。请先使用已有答案；确有新缺口时提供 business 项目编号和 issues:[]，不要借用历史问题编号。";
     if (new Set((d.ownerReplies ?? []).map((r) => r.question)).size !== (d.ownerReplies ?? []).length)
@@ -599,6 +650,22 @@ export class Operations {
       });
       this.save(p, "ceo-directive", now);
     }
+    for (const a of staffPlans) {
+      const p = this.get(a.business, now),
+        s = p.staff.find((s) => s.role === a.role)!;
+      const { business: _business, role: _role, ...daily } = a;
+      if (a.plan) daily.plan = resolved.get(a)!;
+      const { issuedAt: _issued, checkedAt: _checked, checkTask: _checkTask, ...previous } = s.daily ?? {};
+      if (JSON.stringify(previous) === JSON.stringify(daily)) continue;
+      s.daily = { ...daily, issuedAt: now.toISOString() };
+      s.nextAt = a.reviewAt;
+      this.save(p, "ceo-daily-plan", now);
+    }
+    if (
+      staffPlans.length &&
+      active.some((b) => this.get(b.id, now).staff.some((s) => s.enabled && s.daily?.date !== day(now)))
+    )
+      c.nextReviewAt = now.toISOString();
     for (const a of d.approvals) {
       const p = this.get(a.business, now),
         plan = p.plans.find((p) => p.id === a.plan)!;
@@ -865,6 +932,16 @@ export class Operations {
           sources: sourceSnapshots(this.directory),
           questions: c.questions,
           briefs: c.briefs,
+          ...(this.dailyPlanning
+            ? {
+                planningDate: day(now),
+                missingDailyPlans: active.flatMap((b) =>
+                  this.get(b.id, now)
+                    .staff.filter((s) => s.enabled && s.daily?.date !== day(now))
+                    .map((s) => ({ business: b.id, role: s.role })),
+                ),
+              }
+            : {}),
           decisions: c.decisions.slice(-10),
           retryCounts: c.retries,
           repairs: c.repairs,
@@ -885,6 +962,8 @@ export class Operations {
     if (c.lastTask && latest?.status !== "completed") return;
     const fingerprint = this.ceoInputs(c, businesses, tasks, now);
     const agenda =
+      (this.dailyPlanning &&
+        active.some((b) => this.get(b.id, now).staff.some((s) => s.enabled && s.daily?.date !== day(now)))) ||
       c.issues.some((i) => i.state === "open") ||
       active.some((b) =>
         this.get(b.id, now).plans.some(
@@ -980,7 +1059,7 @@ export class Operations {
     const request = taskRequest({
       title: "CEO · 经营管理",
       kind: "ceo",
-      goal: "读取 knowledge/ceo.json 及项目资料。先查已知事实，给员工明确目标；审核提案和已交付成果，解答员工问题，处理受阻工作。只有确实无法判断的事项才汇总提问负责人，并引用问题编号。用结构化决策反馈，不直接操作配置或外部系统。",
+      goal: "读取 knowledge/ceo.json 及项目资料。先查已知事实，给员工明确目标；启用每日规划时提交staffPlans，写明今天做什么、完成标准和复查时间，复用已有任务，不让员工反复空查。审核成果、解决阻塞，完成后接续下一步；无法处理才提问负责人。用结构化决策反馈。",
       acceptance: [
         "先处理员工问题与已有计划，不重复派工或重复提问",
         "未知数据不得编造；汇报区分交付、实际执行和业务效果",
@@ -1064,6 +1143,8 @@ export class Operations {
           s.processed = `${t.id}:${t.assignment}`;
           s.lastChecked = now.toISOString();
           s.finding = report!.summary;
+          if (s.daily && s.daily.checkTask === t.id && Date.parse(s.daily.reviewAt) <= now.getTime())
+            s.daily.checkedAt = now.toISOString();
           if (decision.state === "blocked" && !chief.enabled) s.fingerprint = null;
           for (const a of decision.actions) {
             const id = hash(`${b.id}:${s.role}:${a.key}`);
@@ -1151,8 +1232,16 @@ export class Operations {
           p.activity.push({ task: id, role, kind, at: now.toISOString() });
         };
         // Plans take priority over further inspections, and all work is routed through the existing company workflow.
+        const todayPriority = (a: Plan) =>
+          this.dailyPlanning &&
+          p.staff.some(
+            (s) => s.enabled && s.daily?.date === day(now) && s.daily.mode === "work" && s.daily.plan === a.id,
+          )
+            ? 0
+            : 1;
         for (const a of [...p.plans].sort(
-          (a, b) => a.priority - b.priority || a.createdAt.localeCompare(b.createdAt),
+          (a, b) =>
+            todayPriority(a) - todayPriority(b) || a.priority - b.priority || a.createdAt.localeCompare(b.createdAt),
         )) {
           const publishing = a.status === "publishing";
           // A fixed publisher has its own hub lane; model inspections must not prevent it reporting missing access.
@@ -1190,6 +1279,13 @@ export class Operations {
         }
         for (const s of p.staff) {
           if (!capacity() || !s.enabled) continue;
+          const daily = this.dailyPlanning && chief.enabled ? s.daily : undefined;
+          const dailyDue =
+            !!daily &&
+            Date.parse(daily.reviewAt) <= now.getTime() &&
+            (!daily.checkedAt || daily.checkedAt < daily.reviewAt);
+          if (this.dailyPlanning && chief.enabled && (!daily || (daily.date !== day(now) && !dailyDue))) continue;
+          if (daily && !dailyDue) continue;
           const previous = tasks.find((t) => t.id === s.lastTask);
           if (s.lastTask && previous?.status !== "completed") continue;
           if (
@@ -1209,6 +1305,7 @@ export class Operations {
           const fingerprint = hash(
             JSON.stringify({
               ceoGoal: chief.briefs[b.id],
+              ...(daily ? { daily } : {}),
               knowledge: chief.knowledge.filter((k) => k.business === b.id),
               facts: [b.name, b.description, b.audience, b.objective, b.channels, b.url],
               metrics: b.metrics,
@@ -1232,6 +1329,7 @@ export class Operations {
           const changed = fingerprint !== s.fingerprint;
           const newReviews = reviews.some((key) => !(s.reviewKeys ?? []).includes(key));
           if (
+            !dailyDue &&
             !changed &&
             !newReviews &&
             chief.enabled &&
@@ -1247,8 +1345,8 @@ export class Operations {
             )
           )
             continue;
-          if (!changed && !newReviews && Date.parse(s.nextAt) > now.getTime()) continue;
-          if (!changed && !reviews.length && s.cadence === "daily") {
+          if (!dailyDue && !changed && !newReviews && Date.parse(s.nextAt) > now.getTime()) continue;
+          if (!dailyDue && !changed && !reviews.length && s.cadence === "daily") {
             s.nextAt = after(now, 1);
             s.lastChecked = now.toISOString();
             s.finding = "无新增资料或到期跟进，未调用模型";
@@ -1262,9 +1360,14 @@ export class Operations {
             s.role,
             "check",
             taskRequest({
-              title: `${b.name} · ${departments[s.role]}检查`.slice(0, 120),
+              title: `${b.name} · ${departments[s.role]}${daily ? "今日跟进" : "检查"}`.slice(0, 120),
               kind: `check-${s.role}`,
-              goal: `读取 knowledge/operations/${b.id}.json，按自己的责任档案检查资料、计划和到期跟进，提交结构化检查结果。发现明确问题才提出内部行动；没有变化返回 idle，缺少数据记录未知。项目负责人检查跨部门优先级和阻塞。`,
+              goal: daily
+                ? `读取 knowledge/operations/${b.id}.json。每日安排 ${daily.date}：${daily.focus}。岗位目标：${daily.goal}。完成标准：${daily.doneWhen}。核对真实结果并向CEO报告；需要制作或修改成果则提出具体action，不能以检查完成冒充交付。`.slice(
+                    0,
+                    500,
+                  )
+                : `读取 knowledge/operations/${b.id}.json，按自己的责任档案检查资料、计划和到期跟进，提交结构化检查结果。发现明确问题才提出内部行动；没有变化返回 idle，缺少数据记录未知。项目负责人检查跨部门优先级和阻塞。`,
               acceptance: [
                 "依据真实资料，缺少数据不得虚构问题或增长",
                 "复用历史计划编号，避免重复任务；区分交付与效果",
@@ -1272,6 +1375,7 @@ export class Operations {
             }),
           );
           s.lastTask = id;
+          if (daily) daily.checkTask = id;
           s.nextAt = after(now, s.cadence === "daily" ? 1 : 7);
           s.fingerprint = fingerprint;
           s.reviewKeys = reviews;

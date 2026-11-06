@@ -1,5 +1,17 @@
 import { inspection, type ActionProposal } from "./inspection.ts";
+export type StaffPlan = {
+  business: string;
+  role: "product" | "engineering" | "qa" | "growth" | "support" | "finance";
+  date: string;
+  goal: string;
+  focus: string;
+  doneWhen: string;
+  mode: "work" | "followup" | "standby";
+  plan?: string;
+  reviewAt: string;
+};
 export type ExecutiveDecision = {
+  staffPlans?: StaffPlan[];
   briefs: { business: string; objective: string }[];
   directives: { business: string; action: ActionProposal }[];
   approvals: { business: string; plan: string; approve: boolean; reason: string }[];
@@ -100,6 +112,37 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
     return d[key].map(object);
   };
   return {
+    ...(d.staffPlans !== undefined
+      ? {
+          staffPlans: list("staffPlans", 6).map((a): StaffPlan => {
+            if (!["product", "engineering", "qa", "growth", "support", "finance"].includes(a.role))
+              throw Error("每日安排岗位不正确");
+            if (!["work", "followup", "standby"].includes(a.mode)) throw Error("每日安排类型不正确");
+            const date = text(a.date, 10, "staffPlans.date");
+            if (
+              !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+              !Number.isFinite(Date.parse(date)) ||
+              new Date(date).toISOString().slice(0, 10) !== date
+            )
+              throw Error("每日安排日期不正确");
+            const reviewAt = text(a.reviewAt, 35, "staffPlans.reviewAt");
+            if (!/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(reviewAt) || !Number.isFinite(Date.parse(reviewAt)))
+              throw Error("每日安排复查时间需要带时区的日期时间");
+            if (a.mode === "work" && !a.plan) throw Error("执行安排必须关联已有计划或本轮指令key");
+            return {
+              business: id(a.business),
+              role: a.role,
+              date,
+              goal: text(a.goal, 120, "staffPlans.goal"),
+              focus: text(a.focus, 160, "staffPlans.focus"),
+              doneWhen: text(a.doneWhen, 120, "staffPlans.doneWhen"),
+              mode: a.mode,
+              ...(a.plan ? { plan: id(a.plan) } : {}),
+              reviewAt: new Date(reviewAt).toISOString(),
+            };
+          }),
+        }
+      : {}),
     briefs: list("briefs", 5).map((a) => ({
       business: id(a.business),
       objective: text(a.objective, 300, "briefs.objective"),

@@ -12,6 +12,16 @@ const responsibilities: Record<Role, string> = {
   support: "整理客户问题、核对已有业务资料、制作回复草稿；不向客户发送消息，不承诺赔偿或退款。",
   finance: "依据提供的账目做分类、核对和预算报告；缺少原始凭证就标记缺失，不编造金额，不执行交易。",
 };
+const dailyPlanningPrompt = `员工目标与每日规划 v1：公司已启用真实的每日规划调度。CEO要把项目目标落实到每位启用员工的岗位目标和今日安排，不能只发项目口号或让所有人反复查同一份资料。读取knowledge/ceo.json的planningDate、missingDailyPlans和各员工daily；每天北京时间09:00管理轮更新，白天完成、受阻或到达reviewAt会再次处理。
+CEO在executive增加staffPlans，每轮最多6项：[{"business":"项目id","role":"product|engineering|qa|growth|support|finance","date":"当天YYYY-MM-DD","goal":"岗位长期目标，120字内","focus":"今日具体工作，160字内","doneWhen":"可检查的完成标准，120字内","mode":"work|followup|standby","plan":"已有计划id或本轮directives.action.key；work必填","reviewAt":"带时区的未来复查时间，如2026-11-06T17:00:00+08:00"}]。只关联该计划负责人所属岗位；复查时间不超过未来7天。当天同岗位只保留一项主要安排。补齐全部启用岗位；一轮放不下分批，缺少安排系统会再唤醒CEO，不要让员工等老板派工。整个CEO回执仍遵守3500字限制。
+work必须关联可执行计划；已有工作优先复用id，新工作同时提交directives（每轮最多3项），不能只写安排却不派实际任务。研发和QA按已有软件任务接力，不要为每个岗位再造一份重复计划；没有自己主责的工作可设followup跟进明确依赖。followup用于核对已交接成果、实际发布、数据或依赖，standby用于暂无必要工作；两者可省plan，必须写何时核对什么，系统到点真实唤醒，无变化不提前重复检查。
+CEO审核交付或处理阻塞时同步更新相关staffPlans：完成后安排下一项有价值工作或明确复查，失败先处理原任务，等待老板时继续其他独立工作。宣传图文仍由运营包办、CEO审核、本人发布，禁止加回设计/产品/QA接力。不要为了填日程制造文档和消息；没有新反馈的客服、无新账目的财务可以明确待命。员工按daily.goal/focus/doneWhen推进，遇阻本轮报告CEO；巡检只读，真正制作交付必须走具体work任务。已有成果不重做，未知数据不编造，不把草稿交接当发布或增长。
+持续运营：等待老板发布只阻塞本篇的发布和效果观察，不能自动把运营整岗设为待命。CEO应结合现有素材储备、业务目标和员工能力，安排下一件独立且不重复的具体交付（如另一真实使用场景的完整图文）；用work和directives真正派工。不为填满时间批量堆稿，素材已足够或确实无可推进事项才写明原因与复查条件。客服、财务等没有新输入可以待命。
+跨日更新时保留尚未执行的跟进事项及原reviewAt，不能每天把同一跟进顺延到明天。已到期应先核对并处理结果，再设下一次时间；不以更新日期冒充完成。向老板只汇报重点交付、阻塞和待决事项；当日完整安排保存在员工页。每日安排无需老板逐项批准。`;
+function refreshDailyPrompt(text: string) {
+  const previous = /员工目标与每日规划 v1：[\s\S]*?每日安排无需老板逐项批准。/;
+  return previous.test(text) ? text.replace(previous, dailyPlanningPrompt) : text + "\n" + dailyPlanningPrompt;
+}
 const leanContentPrompt = `精简推广流程 v1：本公司已启用 contentReview=ceo，以下规则覆盖旧规范中推广草稿必须交 QA、产品或设计接力的要求。运营独立负责选题、标题、正文、封面与配图、自查事实及完整文件交付；不将制作图片转交设计，不安排 QA 核对推广草稿。配图必须是可打开的实际文件，不能以配图说明冒充成品；缺少工具或素材就在原任务报告具体阻塞给 CEO。
 运营交付后直接由 CEO 审核完整图文；不通过直接退回运营修改，禁止另建 QA 核对、产品协调或设计子任务。CEO 读取实际交付物，不能只看报告宣称审核通过；旧任务写有 QA 步骤时按本规则调整原计划，不重复立项。其他软件测试仍按原流程。
 已确认的发布分工仍有效：两个 APP 的小红书内容由负责人本人发布，员工只交完整草稿；CEO 可用 deliveries.accept 接受本次内部图文交接，向负责人提供标题、正文和可获取的图片位置，不触发 publish 或旧发布任务。未实际保存进小红书草稿箱就说明是待导入的文件草稿；未取得真实发布记录不开始效果观察。发布后的记录和效果跟进也由运营负责，不再转产品协调或 QA 核对。`;
@@ -331,6 +341,27 @@ export function ensureBusinessRules(directory: string) {
         const content = readFileSync(book, "utf8");
         if (!content.includes("精简推广流程 v1")) writeFileSync(book, content + "\n\n" + leanContentPrompt + "\n");
       }
+    }
+  }
+  if (company.ceoMode && company.dailyPlanning) {
+    let updated = false;
+    for (const rule of rules.rules.filter((r: any) => r.name.startsWith("公司部门-") || r.name === "CEO · 业务答复")) {
+      const prompt = refreshDailyPrompt(rule.prompt);
+      if (rule.prompt !== prompt) {
+        rule.prompt = prompt;
+        updated = true;
+      }
+    }
+    if (updated) {
+      writeFileSync(path + ".tmp", JSON.stringify(rules, null, 2) + "\n", { mode: 0o600 });
+      renameSync(path + ".tmp", path);
+    }
+    for (const role of Object.keys(departments)) {
+      const book = join(directory, "workspace/handbook", role + ".md");
+      if (!existsSync(book)) continue;
+      const content = readFileSync(book, "utf8");
+      const refreshed = refreshDailyPrompt(content);
+      if (refreshed !== content) writeFileSync(book, refreshed);
     }
   }
 }
