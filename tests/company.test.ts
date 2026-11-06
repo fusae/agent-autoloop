@@ -116,6 +116,53 @@ test("generated rules isolate report sources, share the coordinator group and re
   assert.equal(rules.rules.find((r) => r.to === "company-product")?.emits?.source, "company-product");
 });
 
+// Removing content QA must not bypass software QA or strand a previously dispatched content review.
+test("CEO content review preserves software QA and accepts an already dispatched legacy QA result", () =>
+  withCompany((office, cfg) => {
+    cfg.ceoMode = true;
+    office.process(
+      context("company-inbox", "company.task.create", "draft", { ...request, kind: "internal-content" }, 1),
+    );
+    assert.equal(
+      office.process(context("company-growth", "company.result", "draft", report(1), 2)).events?.[0].type,
+      "company.work.qa",
+    );
+    cfg.contentReview = "ceo";
+    office.process(context("company-qa", "company.result", "draft", report(2), 3));
+    assert.equal(office.task("draft")?.status, "completed");
+    office.process(
+      context("company-inbox", "company.task.create", "software", { ...request, kind: "internal-software" }, 4),
+    );
+    office.process(context("company-product", "company.result", "software", report(1), 5));
+    const next = office.process(context("company-engineering", "company.result", "software", report(2), 6));
+    assert.equal(next.events?.[0].type, "company.work.qa");
+    assert.equal(office.task("software")?.status, "active");
+  }, 6));
+
+test("explicit lean content configuration updates CEO and staff rules once while preserving customization", () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-lean-"));
+  try {
+    mkdirSync(join(dir, "hub"));
+    mkdirSync(join(dir, "workspace/handbook"), { recursive: true });
+    writeFileSync(join(dir, "workspace/handbook/growth.md"), "自定义运营职责\n");
+    writeFileSync(join(dir, "company.json"), JSON.stringify({ ceoMode: true, contentReview: "ceo" }));
+    writeFileSync(join(dir, "hub/rules.json"), JSON.stringify(makeRules(dir, "local", "codex")));
+    ensureBusinessRules(dir);
+    const text = readFileSync(join(dir, "hub/rules.json"), "utf8");
+    const rules = JSON.parse(text).rules;
+    for (const name of ["公司部门-growth", "公司部门-ceo", "公司部门-qa", "CEO · 业务答复"])
+      assert.match(rules.find((r: any) => r.name === name).prompt, /精简推广流程 v1/);
+    const book = readFileSync(join(dir, "workspace/handbook/growth.md"), "utf8");
+    assert.ok(book.startsWith("自定义运营职责"));
+    assert.match(book, /负责人本人发布/);
+    ensureBusinessRules(dir);
+    assert.equal(readFileSync(join(dir, "hub/rules.json"), "utf8"), text);
+    assert.equal(readFileSync(join(dir, "workspace/handbook/growth.md"), "utf8"), book);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("invalid current reports pause for repair instead of leaving an active task that cannot retry", () =>
   withCompany((office) => {
     office.process(context("company-inbox", "company.task.create", "T1", request, 1));

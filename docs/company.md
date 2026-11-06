@@ -19,6 +19,10 @@ flowchart LR
 
 ## 任务状态
 
+小团队的推广草稿可在私有 `company.json` 设置 `ceoMode: true`、`contentReview: "ceo"`：运营包办标题、正文、封面和配图，自查后直接交 CEO 审核；CEO 不通过退回运营，不另派设计、产品协调或 QA。`internal-content` 的运营交付完成后进入原计划 `delivered`，仍须 CEO 审核，不自动发布或开始效果观察；软件等其他类型仍保留原验收。升级前已派出的 QA 结果兼容接收，不重复交付。
+
+执行 `up` 更新岗位规范。当前小红书分工是 CEO 审核后交负责人本人发布；真实平台草稿保存未接通时只能交付待导入文件，不得声称已入平台草稿箱。此设置不授予公开发布权限。
+
 `active → awaiting_approval → completed`；部门失败进入 `blocked`，老板退回进入 `rejected`。只有 `company-inbox` 的显式重试能从 `blocked/rejected` 回到 `active`，且累计派工额度不重置。`completed` 是本地交付已接受，不代表已执行发布等外部动作。
 
 任务持有目标、类型、验收条件、当前阶段、累计派工编号、各部门交付报告及一次性审批标识。完整状态快照按操作追加到 `journal`，`tasks` 保存当前状态；同事务写入已处理输入和输出回执缓存。公司数据库是独立业务账本，不修改中台日志或投影。

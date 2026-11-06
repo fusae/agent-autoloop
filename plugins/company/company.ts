@@ -26,7 +26,13 @@ export const workflows: Record<string, Role[]> = {
 };
 for (const role of Object.keys(departments) as Role[]) workflows[`check-${role}`] = [role];
 for (const kind of ["software", "content", "support", "finance"]) workflows[`internal-${kind}`] = [...workflows[kind]];
-export type CompanyConfig = { name: string; database: string; maxAssignments: number; ceoMode?: boolean };
+export type CompanyConfig = {
+  name: string;
+  database: string;
+  maxAssignments: number;
+  ceoMode?: boolean;
+  contentReview?: "qa" | "ceo";
+};
 export type Context = {
   events: { id: string | number; source: string; type: string; subject: string; detail: string; hops?: number }[];
   answers: { card: number; choice: number | null; about: string; text?: string | null }[];
@@ -307,7 +313,10 @@ export class Company {
           id,
           `${departments[role]}未通过：${report.summary}。处理后可显式 retry；不会自动循环返工。`,
         );
-    } else if (task.stage < workflows[task.kind].length - 1) {
+    } else if (
+      task.stage < workflows[task.kind].length - 1 &&
+      !(this.config.ceoMode && this.config.contentReview === "ceo" && task.kind === "internal-content")
+    ) {
       task.stage++;
       this.dispatch(task, receipt);
     } else if (

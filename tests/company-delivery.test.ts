@@ -23,9 +23,15 @@ const action = {
   followUpDays: 3,
   measure: "发布后的新增用户",
 };
-function fixture(fn: (x: any) => void, legacy = false) {
+function fixture(fn: (x: any) => void, legacy = false, directReview = false) {
   const dir = mkdtempSync(join(tmpdir(), "company-delivery-"));
-  const c = new Company({ name: "test", database: join(dir, "company.db"), maxAssignments: 6, ceoMode: true });
+  const c = new Company({
+    name: "test",
+    database: join(dir, "company.db"),
+    maxAssignments: 6,
+    ceoMode: true,
+    ...(directReview ? { contentReview: "ceo" as const } : {}),
+  });
   const b = new Businesses(dir),
     o = new Operations(dir);
   let seq = 0;
@@ -51,7 +57,7 @@ function fixture(fn: (x: any) => void, legacy = false) {
     mkdirSync(join(dir, "workspace/tasks", event.subject), { recursive: true });
     const artifact = `tasks/${event.subject}/post.md`;
     writeFileSync(join(dir, "workspace", artifact), "产品使用说明");
-    for (const [index, role] of ["growth", "qa"].entries())
+    for (const [index, role] of (directReview ? ["growth"] : ["growth", "qa"]).entries())
       send(`company-${role}`, "company.result", event.subject, {
         assignment: index + 1,
         verdict: "pass",
@@ -86,6 +92,39 @@ function fixture(fn: (x: any) => void, legacy = false) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+// A small team's content must reach CEO review without a QA hop, including returned revisions.
+test("direct content review hands growth delivery to CEO and returns revisions to growth without publishing", () =>
+  fixture(
+    ({ c, plan, work, decide, finish, tick }) => {
+      assert.equal(c.task(work.subject).status, "completed");
+      assert.deepEqual(
+        c.task(work.subject).reports.map((r: any) => r.role),
+        ["growth"],
+      );
+      assert.equal(plan().status, "delivered");
+      assert.equal(plan().followUpAt, null);
+      const returned = decide({
+        deliveries: [
+          { business: "app", plan: plan().id, task: work.subject, verdict: "revise", reason: "运营补齐封面和正文配图" },
+        ],
+      });
+      const revision = returned.events?.find((e: any) => JSON.parse(e.detail).kind === "internal-content");
+      assert.ok(revision);
+      assert.ok(!returned.events?.some((e: any) => JSON.parse(e.detail).kind === "publish-content"));
+      finish(revision);
+      tick();
+      assert.equal(plan().status, "delivered");
+      assert.equal(c.task(revision.subject).assignment, 1);
+      assert.deepEqual(
+        c.task(revision.subject).reports.map((r: any) => r.role),
+        ["growth"],
+      );
+      assert.equal(plan().followUpAt, null);
+    },
+    false,
+    true,
+  ));
 
 test("a completed draft waits for CEO review; reject schedules a new revision and stale review cannot approve it", () =>
   fixture(({ c, tick, decide, plan, finish, work }) => {

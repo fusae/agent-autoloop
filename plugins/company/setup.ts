@@ -12,6 +12,9 @@ const responsibilities: Record<Role, string> = {
   support: "整理客户问题、核对已有业务资料、制作回复草稿；不向客户发送消息，不承诺赔偿或退款。",
   finance: "依据提供的账目做分类、核对和预算报告；缺少原始凭证就标记缺失，不编造金额，不执行交易。",
 };
+const leanContentPrompt = `精简推广流程 v1：本公司已启用 contentReview=ceo，以下规则覆盖旧规范中推广草稿必须交 QA、产品或设计接力的要求。运营独立负责选题、标题、正文、封面与配图、自查事实及完整文件交付；不将制作图片转交设计，不安排 QA 核对推广草稿。配图必须是可打开的实际文件，不能以配图说明冒充成品；缺少工具或素材就在原任务报告具体阻塞给 CEO。
+运营交付后直接由 CEO 审核完整图文；不通过直接退回运营修改，禁止另建 QA 核对、产品协调或设计子任务。CEO 读取实际交付物，不能只看报告宣称审核通过；旧任务写有 QA 步骤时按本规则调整原计划，不重复立项。其他软件测试仍按原流程。
+已确认的发布分工仍有效：两个 APP 的小红书内容由负责人本人发布，员工只交完整草稿；CEO 可用 deliveries.accept 接受本次内部图文交接，向负责人提供标题、正文和可获取的图片位置，不触发 publish 或旧发布任务。未实际保存进小红书草稿箱就说明是待导入的文件草稿；未取得真实发布记录不开始效果观察。发布后的记录和效果跟进也由运营负责，不再转产品协调或 QA 核对。`;
 const deliveryReviewPrompt = `成果审核与发布协议 v1：本协议补充并覆盖旧规范中“内部交付后直接观察”的约定。计划 delivered 表示员工及 QA 已交付，必须由 CEO 读取交付正文审核，提交 executive.deliveries:[{"business":"项目编号","plan":"计划id","task":"当前交付任务id","verdict":"revise|accept|publish","reason":"具体意见","files":["发布时必填：本次验收交付中的正文文件路径"]}]。revise 退回原岗位修改并重新验收；accept 仅用于基线、账目、内部参考资料并关闭本项，不宣称产生外部效果；publish 用于可直接发布的运营内容，files 只选择最终正文，不得把事实表、内部报告等一并发布；审核后固定入口执行，不能再仅说“观察效果”。内容不合格要指出修改项，不另建同名计划。内部资料验收后仍需围绕业务目标安排下一项实际工作，不重复制作相同清单。
 发布由固定程序执行，普通模型员工不自行运行发布命令、不修改发布配置；仅允许私有 publishing.json 里已接入的项目渠道和账号。没有渠道或账号、登录失效、发布失败会回到 CEO；CEO 无法自行解除的在本轮 escalations 提出具体问题（哪个项目、哪篇内容、缺哪个发布条件、需要负责人做什么），不要用等待观察或重复检查代替处理，也不要让负责人重新审批已审核正文。不要把对既有测试问题的等待当成禁止上报新发布阻塞。
 publish-content 的 QA 回执须原样带上 previous.publication（key/channel/remoteId/url/publishedAt），核对发布链接及正文；无法核验则 blocked，不能仅复述文件。只有平台发布确认且 QA 通过，系统才开始效果观察。`;
@@ -125,6 +128,8 @@ export function ensureBusinessRules(directory: string) {
   const path = join(directory, "hub/rules.json"),
     rules = JSON.parse(readFileSync(path, "utf8"));
   let changed = false;
+  const companyFile = join(directory, "company.json");
+  const company = existsSync(companyFile) ? JSON.parse(readFileSync(companyFile, "utf8")) : {};
   const chat = rules.rules.find((r: any) => r.name === "CEO · 业务答复");
   if (!chat) {
     rules.rules.push(chatRule(directory));
@@ -307,6 +312,26 @@ export function ensureBusinessRules(directory: string) {
   if (changed) {
     writeFileSync(path + ".tmp", JSON.stringify(rules, null, 2) + "\n", { mode: 0o600 });
     renameSync(path + ".tmp", path);
+  }
+  if (company.ceoMode && company.contentReview === "ceo") {
+    let updated = false;
+    for (const rule of rules.rules.filter((r: any) => r.name.startsWith("公司部门-") || r.name === "CEO · 业务答复")) {
+      if (!rule.prompt.includes("精简推广流程 v1")) {
+        rule.prompt += "\n" + leanContentPrompt;
+        updated = true;
+      }
+    }
+    if (updated) {
+      writeFileSync(path + ".tmp", JSON.stringify(rules, null, 2) + "\n", { mode: 0o600 });
+      renameSync(path + ".tmp", path);
+    }
+    for (const role of ["ceo", "growth", "product", "qa"]) {
+      const book = join(directory, "workspace/handbook", role + ".md");
+      if (existsSync(book)) {
+        const content = readFileSync(book, "utf8");
+        if (!content.includes("精简推广流程 v1")) writeFileSync(book, content + "\n\n" + leanContentPrompt + "\n");
+      }
+    }
   }
 }
 export const inspectionPrompt = `员工检查协议 v1：派工资料 inspection=true 时属于职责检查，以下专用格式替代普通交付要求。
