@@ -99,7 +99,9 @@ export async function xhsPublication(
   try {
     const status = await call("/api/v1/login/status");
     if (status.is_logged_in !== true) throw Error("小红书登录已失效，请重新扫码登录");
-    const profile = await call("/api/v1/user/me");
+    const response = await call("/api/v1/user/me");
+    // The v2.7.2 /user/me handler wraps the profile in data inside the API envelope.
+    const profile = response.data ?? response;
     // Older profile responses omit the account ID. Never infer ownership from a nickname.
     const accountId = status.user_id || profile.userBasicInfo?.userId;
     if (accountId !== config.accountId) throw Error("小红书登录账号与绑定账号不一致，禁止发布");

@@ -37,8 +37,10 @@ function fixture() {
     if (path === "/api/v1/login/status") return { is_logged_in: loggedIn };
     if (path === "/api/v1/user/me")
       return {
-        userBasicInfo: { userId: accountId },
-        feeds: show ? [{ id: "b".repeat(24), xsecToken: "test", noteCard: { displayTitle: "记下一件事" } }] : [],
+        data: {
+          userBasicInfo: { userId: accountId },
+          feeds: show ? [{ id: "b".repeat(24), xsecToken: "test", noteCard: { displayTitle: "记下一件事" } }] : [],
+        },
       };
     if (path === "/api/v1/feeds/detail")
       return {
@@ -218,7 +220,7 @@ test("frozen company delivery runs the real adapter over HTTP and replays withou
   const server=createServer(async(req,res)=>{let text='';for await(const c of req)text+=c;let data;
   if(req.headers.authorization!=='Bearer test'){res.writeHead(401);res.end('{}');return;}
   if(req.url==='/api/v1/login/status')data={is_logged_in:true,user_id:'owner'};
-  else if(req.url==='/api/v1/user/me')data={userBasicInfo:{userId:'owner'},feeds:note?[{id:'bbbbbbbbbbbbbbbbbbbbbbbb',xsecToken:'test',noteCard:{displayTitle:note.title}}]:[]};
+  else if(req.url==='/api/v1/user/me')data={data:{userBasicInfo:{userId:'owner'},feeds:note?[{id:'bbbbbbbbbbbbbbbbbbbbbbbb',xsecToken:'test',noteCard:{displayTitle:note.title}}]:[]}};
   else if(req.url==='/api/v1/publish'){const body=JSON.parse(text);note={noteId:'bbbbbbbbbbbbbbbbbbbbbbbb',title:body.title,desc:body.content,time:Date.now(),user:{userId:'owner'},imageList:body.images.map(()=>({}))};writeFileSync(${JSON.stringify(counter)},String(++count));data={status:'发布完成'};}
   else if(req.url==='/api/v1/feeds/detail')data={data:{note}};
   res.setHeader('content-type','application/json');res.end(JSON.stringify({success:true,data}));
