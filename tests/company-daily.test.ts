@@ -231,6 +231,58 @@ test("today's selected work takes precedence and a closed directive key cannot r
     assert.equal(o.snapshot(b.list(), c.tasks(), now)[0].plans.filter((p: any) => p.key === "today").length, 1);
   }));
 
+test("new daily work preserves an unfinished follow-up and dispatches it once after delivery", () =>
+  fixture(({ o, b, c, dir, decide, tick, send }) => {
+    decide({
+      briefs: [{ business: "app", objective: "持续运营" }],
+      staffPlans: [
+        daily({ mode: "followup", plan: undefined, focus: "核对原稿发布", reviewAt: "2026-11-06T03:00:00Z" }),
+      ],
+    });
+    const r = decide({ directives: [{ business: "app", action }], staffPlans: [daily()] });
+    const work = r.events.find((e: any) => JSON.parse(e.detail).kind === "internal-content");
+    const reopened = new Operations(dir);
+    const preserved = reopened.snapshot(b.list(), c.tasks(), now)[0].staff.find((s: any) => s.role === "growth");
+    assert.ok(preserved?.followups);
+    assert.equal(preserved.followups?.length, 1);
+    assert.equal(preserved.followups[0].reviewAt, "2026-11-06T03:00:00.000Z");
+    reopened.close();
+    send("company-inbox", work.type, work.subject, JSON.parse(work.detail));
+    send("company-growth", "company.result", work.subject, {
+      assignment: 1,
+      verdict: "pass",
+      summary: "图文完成",
+      artifacts: ["tasks/post.md"],
+      evidence: ["完整文件"],
+    });
+    tick(now, 4);
+    const plan = o.snapshot(b.list(), c.tasks(), now)[0].plans[0];
+    decide({
+      deliveries: [{ business: "app", plan: plan.id, task: work.subject, verdict: "accept", reason: "交付合格" }],
+    });
+    const due = tick(new Date("2026-11-06T03:01:00Z")).events.find(
+      (e: any) => JSON.parse(e.detail).kind === "check-growth",
+    );
+    assert.match(JSON.parse(due.detail).goal, /核对原稿发布/);
+    send("company-inbox", due.type, due.subject, JSON.parse(due.detail));
+    send("company-growth", "company.result", due.subject, {
+      assignment: 1,
+      verdict: "pass",
+      summary: "原稿发布未知",
+      artifacts: [],
+      evidence: ["无新增发布记录"],
+      inspection: { state: "idle", actions: [], reviews: [] },
+    });
+    tick(new Date("2026-11-06T03:02:00Z"), 4);
+    assert.equal(
+      o.snapshot(b.list(), c.tasks(), now)[0].staff.find((s: any) => s.role === "growth").followups.length,
+      0,
+    );
+    assert.ok(
+      !tick(new Date("2026-11-06T03:03:00Z")).events?.some((e: any) => JSON.parse(e.detail).kind === "check-growth"),
+    );
+  }));
+
 test("an overdue follow-up still wakes after midnight before CEO renews today's arrangement", () =>
   fixture(({ decide, tick }) => {
     decide({

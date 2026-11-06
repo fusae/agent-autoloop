@@ -13,8 +13,10 @@ import type { Business, Metric } from "./business.ts";
 import type { ActionProposal, Inspection } from "./inspection.ts";
 
 type Portfolio = (Business & { metrics: Metric[] })[];
+type EmployeePlan = Omit<StaffPlan, "business" | "role"> & { issuedAt: string; checkedAt?: string; checkTask?: string };
 export type Employee = {
-  daily?: Omit<StaffPlan, "business" | "role"> & { issuedAt: string; checkedAt?: string; checkTask?: string };
+  daily?: EmployeePlan;
+  followups?: EmployeePlan[];
   role: Role;
   duty: string;
   checks: string[];
@@ -386,6 +388,7 @@ export class Operations {
                     .map((s) => [
                       s.role,
                       s.daily ?? null,
+                      s.followups ?? [],
                       !!s.daily &&
                         Date.parse(s.daily.reviewAt) <= now.getTime() &&
                         (!s.daily.checkedAt || s.daily.checkedAt < s.daily.reviewAt),
@@ -657,6 +660,15 @@ export class Operations {
       if (a.plan) daily.plan = resolved.get(a)!;
       const { issuedAt: _issued, checkedAt: _checked, checkTask: _checkTask, ...previous } = s.daily ?? {};
       if (JSON.stringify(previous) === JSON.stringify(daily)) continue;
+      if (s.daily?.mode === "followup" && !s.daily.checkedAt && daily.mode === "work") {
+        s.followups ??= [];
+        if (
+          !s.followups.some(
+            (f) => f.reviewAt === s.daily!.reviewAt && f.focus === s.daily!.focus && f.plan === s.daily!.plan,
+          )
+        )
+          s.followups.push(s.daily);
+      }
       s.daily = { ...daily, issuedAt: now.toISOString() };
       s.nextAt = a.reviewAt;
       this.save(p, "ceo-daily-plan", now);
@@ -1145,6 +1157,7 @@ export class Operations {
           s.finding = report!.summary;
           if (s.daily && s.daily.checkTask === t.id && Date.parse(s.daily.reviewAt) <= now.getTime())
             s.daily.checkedAt = now.toISOString();
+          if (s.followups) s.followups = s.followups.filter((f) => f.checkTask !== t.id);
           if (decision.state === "blocked" && !chief.enabled) s.fingerprint = null;
           for (const a of decision.actions) {
             const id = hash(`${b.id}:${s.role}:${a.key}`);
@@ -1279,7 +1292,10 @@ export class Operations {
         }
         for (const s of p.staff) {
           if (!capacity() || !s.enabled) continue;
-          const daily = this.dailyPlanning && chief.enabled ? s.daily : undefined;
+          const retained = s.followups
+            ?.filter((f) => Date.parse(f.reviewAt) <= now.getTime())
+            .sort((a, b) => a.reviewAt.localeCompare(b.reviewAt))[0];
+          const daily = this.dailyPlanning && chief.enabled ? (retained ?? s.daily) : undefined;
           const dailyDue =
             !!daily &&
             Date.parse(daily.reviewAt) <= now.getTime() &&
