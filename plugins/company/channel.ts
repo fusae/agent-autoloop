@@ -1,3 +1,4 @@
+import { ARRANGEMENT_DETAILS } from "./arrangement.ts";
 // The company channel owns one CLI callback connection; ordinary chat still uses history polling.
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -52,14 +53,30 @@ function updateText(card: Card, acknowledged: boolean) {
 export function interactiveCard(card: Card) {
   const answer = card.answer || (card.choice !== null ? card.options[card.choice] : "");
   const deferred = card.state !== "open" && answer?.trim() === "暂缓";
-  const paragraphs = card.kind === "ask" ? card.text.split(/\n\s*\n/) : [card.text];
-  const elements: any[] = [{ tag: "div", text: { tag: "plain_text", content: paragraphs[0] } }];
-  if (paragraphs.length > 1)
+  const arrangement = card.kind === "notice" && card.title === "CEO · 工作安排";
+  const [overview, ...extra] = arrangement ? card.text.split(ARRANGEMENT_DETAILS) : [card.text];
+  const paragraphs = card.kind === "ask" ? card.text.split(/\n\s*\n/) : [overview];
+  const elements: any[] = (arrangement ? overview.split(/\n\s*\n/) : [paragraphs[0]]).flatMap((content) => {
+    const lines = content.split("\n");
+    if (!arrangement || lines.length < 2) return [{ tag: "div", text: { tag: "plain_text", content } }];
+    const heading = lines
+      .shift()!
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replace(/([\\`*_{}\[\]()#+.!|])/g, "\\$1");
+    return [
+      { tag: "markdown", content: `**${heading}**` },
+      { tag: "div", text: { tag: "plain_text", content: lines.join("\n") } },
+    ] as any[];
+  });
+  const background = arrangement ? extra.join(ARRANGEMENT_DETAILS) : paragraphs.slice(1).join("\n\n");
+  if (background)
     elements.push({
       tag: "collapsible_panel",
       expanded: false,
-      header: { title: { tag: "plain_text", content: "背景" } },
-      elements: [{ tag: "div", text: { tag: "plain_text", content: paragraphs.slice(1).join("\n\n") } }],
+      header: { title: { tag: "plain_text", content: arrangement ? "安排详情" : "背景" } },
+      elements: [{ tag: "div", text: { tag: "plain_text", content: background } }],
     });
   if (card.kind === "ask" && card.state === "open") {
     elements.push(

@@ -1,3 +1,4 @@
+import { arrangementText } from "./arrangement.ts";
 import { ownerReplyEvidence } from "./owner-replies.ts";
 import { freezePublication } from "./publication.ts";
 import { sourceSnapshots } from "./sources.ts";
@@ -771,43 +772,17 @@ export class Operations {
       }
       if (decision) {
         const d = decision;
+        const priorQuestions = receipt.ask?.length ?? 0;
         const error = this.applyDecision(c, businesses, tasks, d, decisionId, summary, receipt, now);
         if (error) text = `安排未执行：${error}`;
         else {
-          const names = (id: string) => businesses.find((b) => b.id === id)!.name;
-          const changes = [
-            ...(d.ownerReplies ?? []).map(
-              (v) => `答复已记录：${c.questions.find((q) => q.id === v.question)!.question}`,
-            ),
-            ...d.briefs.map((v) => `目标：${names(v.business)} · ${v.objective}`),
-            ...d.directives.map((v) => {
-              const p = this.get(v.business, now).plans.find(
-                (p) => p.id === hash(`${v.business}:ceo:${v.action.key}`),
-              )!;
-              return `工作：${names(v.business)} · ${p.title}，${departments[p.owner]}负责${p.status === "closed" ? "（已有计划已结束）" : "，按现有任务流程执行和验收"}`;
-            }),
-            ...(d.deliveries ?? []).map(
-              (v) =>
-                `成果：${names(v.business)} · ${this.get(v.business, now).plans.find((p) => p.id === v.plan)!.title}，${v.verdict === "revise" ? "退回修改" : v.verdict === "publish" ? "审核通过，进入发布" : "内部成果已验收"}；${v.reason}`,
-            ),
-            ...d.approvals.map((v) => {
-              const p = this.get(v.business, now).plans.find((p) => p.id === v.plan)!;
-              const states = {
-                proposed: "待审核",
-                planned: "待执行",
-                working: "执行中",
-                blocked: "受阻",
-                observing: "跟进效果",
-                delivered: "待成果审核",
-                publishing: "发布中",
-                review: "待复盘",
-                closed: "已结束",
-              };
-              return `计划：${p.title}，${states[p.status]}；${p.result}`;
-            }),
-            ...d.answers.map((v) => `员工问题：${c.issues.find((i) => i.id === v.issue)!.question}；${v.answer}`),
-          ];
-          text = changes.length ? changes.join("\n") : summary;
+          text = arrangementText(
+            summary,
+            d,
+            businesses.map((b) => ({ id: b.id, name: b.name, plans: this.get(b.id, now).plans })),
+            c.issues,
+            (receipt.ask?.length ?? 0) - priorQuestions,
+          );
           c.fingerprint = null;
           delete c.stalled;
         }
