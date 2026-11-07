@@ -1,8 +1,19 @@
+import { parseXhsDraft } from "../xiaohongshu/publisher.ts";
 import { ARRANGEMENT_DETAILS } from "./arrangement.ts";
-// The company channel owns one CLI callback connection; ordinary chat still uses history polling.
+// HTTP callbacks share the spool without owning a CLI connection; chat still uses history polling.
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { HubError, hubClient } from "../../protocol/client.ts";
@@ -25,8 +36,9 @@ type Saved = {
   interactive?: boolean;
   cardRef?: string;
   layout?: number;
+  publicationMedia?: PublicationMedia;
 };
-type State = { cards: Record<string, Saved>; seen: string[]; cursor: string };
+type State = { cards: Record<string, Saved>; seen: string[]; cursor: string; chatId?: string };
 // Execution recovery is bookkeeping, not evidence of a business result.
 const bookkeeping = new Set([
   "经营周期已检查",
@@ -50,12 +62,20 @@ function updateText(card: Card, acknowledged: boolean) {
     return `答复已记录\n事项：${subject}\n你的答复：${excerpt(answer, 240)}`;
   return null;
 }
-export function interactiveCard(card: Card) {
+type PublicationMedia = { version: 2; keys: (string | null)[]; count: number };
+function publicationKey(card: Card) {
+  return card.kind === "ask" && card.title === "发布确认"
+    ? /\n发布稿件：([a-f0-9]{32})$/.exec(card.text)?.[1]
+    : undefined;
+}
+export function interactiveCard(card: Card, media?: PublicationMedia) {
+  const publication = publicationKey(card);
+  const text = publication ? card.text.replace(/\n发布稿件：[a-f0-9]{32}$/, "") : card.text;
   const answer = card.answer || (card.choice !== null ? card.options[card.choice] : "");
   const deferred = card.state !== "open" && answer?.trim() === "暂缓";
   const arrangement = card.kind === "notice" && card.title === "CEO · 工作安排";
-  const [overview, ...extra] = arrangement ? card.text.split(ARRANGEMENT_DETAILS) : [card.text];
-  const paragraphs = card.kind === "ask" ? card.text.split(/\n\s*\n/) : [overview];
+  const [overview, ...extra] = arrangement ? text.split(ARRANGEMENT_DETAILS) : [text];
+  const paragraphs = card.kind === "ask" && !publication ? text.split(/\n\s*\n/) : [overview];
   const elements: any[] = (arrangement ? overview.split(/\n\s*\n/) : [paragraphs[0]]).flatMap((content) => {
     const lines = content.split("\n");
     if (!arrangement || lines.length < 2) return [{ tag: "div", text: { tag: "plain_text", content } }];
@@ -78,6 +98,12 @@ export function interactiveCard(card: Card) {
       header: { title: { tag: "plain_text", content: arrangement ? "安排详情" : "背景" } },
       elements: [{ tag: "div", text: { tag: "plain_text", content: background } }],
     });
+  if (media) {
+    for (const [index, key] of media.keys.entries())
+      if (key) elements.push({ tag: "img", img_key: key, alt: { tag: "plain_text", content: `配图 ${index + 1}` } });
+    if (media.keys.filter(Boolean).length !== media.count)
+      elements.push({ tag: "div", text: { tag: "plain_text", content: `图片未能加载，共 ${media.count} 张` } });
+  }
   if (card.kind === "ask" && card.state === "open") {
     elements.push(
       ...card.options.map((label, choice) => ({
@@ -146,7 +172,7 @@ export class CompanyFeishu {
   private owner: string;
   private state: State;
   private hub: ChannelContext["hub"];
-  private lark: (args: string[]) => Promise<any>;
+  private lark: (args: string[], cwd?: string) => Promise<any>;
   private onQuestion?: (event: {
     id: string;
     type: string;
@@ -158,7 +184,7 @@ export class CompanyFeishu {
     file: string,
     owner: string,
     hub: ChannelContext["hub"],
-    lark: (args: string[]) => Promise<any>,
+    lark: (args: string[], cwd?: string) => Promise<any>,
     onQuestion?: CompanyFeishu["onQuestion"],
     cards = false,
   ) {
@@ -178,10 +204,58 @@ export class CompanyFeishu {
     writeFileSync(this.file + ".tmp", JSON.stringify(this.state), { mode: 0o600 });
     renameSync(this.file + ".tmp", this.file);
   }
+  private async uploadPublication(card: Card): Promise<PublicationMedia | undefined> {
+    const key = publicationKey(card);
+    if (!key) return;
+    const count = Number(/\n图片数：(\d+)\n只发布本次/.exec(card.text)?.[1] ?? 0);
+    const media: PublicationMedia = { version: 2, keys: [], count };
+    let temporary: string | undefined;
+    try {
+      const request = JSON.parse(readFileSync(join(dirname(this.file), "publications", key + ".json"), "utf8"));
+      if (request.key !== key) throw Error("发布审核记录不匹配");
+      const draft = parseXhsDraft({ ...request, action: "lookup" });
+      media.count = draft.images.length;
+      temporary = mkdtempSync(join(dirname(this.file), ".card-images-"));
+      for (const [index, image] of draft.images.entries()) {
+        let imageKey: string | null = null;
+        try {
+          const file = join(temporary, `${index}.${image.mime.split("/")[1]}`);
+          writeFileSync(file, Buffer.from(image.base64, "base64"), { mode: 0o600 });
+          const result = await this.lark(
+            [
+              "im",
+              "images",
+              "create",
+              "--as",
+              "bot",
+              "--data",
+              JSON.stringify({ image_type: "message" }),
+              "--file",
+              "image=" + `${index}.${image.mime.split("/")[1]}`,
+            ],
+            temporary,
+          );
+          if (typeof result.data?.image_key === "string" && /^img_[A-Za-z0-9_-]+$/.test(result.data.image_key))
+            imageKey = result.data.image_key;
+        } catch {
+          // A missing preview must not prevent the owner from returning the draft.
+        }
+        media.keys.push(imageKey);
+      }
+    } catch {
+      // Keep the immutable card text even when its local image snapshot cannot be read.
+    } finally {
+      if (temporary) rmSync(temporary, { recursive: true, force: true });
+    }
+    return media;
+  }
   async deliver(card: Card) {
     let saved = this.state.cards[card.id];
     const promote =
-      this.cards && (!saved?.interactive || saved.layout !== 3) && card.kind === "ask" && card.state === "open";
+      this.cards &&
+      (!saved?.interactive || saved.layout !== 3 || (publicationKey(card) && saved.publicationMedia?.version !== 2)) &&
+      card.kind === "ask" &&
+      card.state === "open";
     if (!saved || saved.version < card.version || promote) {
       // Old closed states have already sent their acknowledgement; do not replay them on upgrade.
       const acknowledged = saved?.acknowledged ?? (!!saved && saved.version > 1 && !saved.open);
@@ -193,6 +267,11 @@ export class CompanyFeishu {
       let ref = saved?.ref ?? card.ref;
       let cardRef = saved?.cardRef;
       const native = this.cards && (card.state === "open" || saved?.interactive);
+      const publicationMedia = native
+        ? saved?.publicationMedia?.version === 2
+          ? saved.publicationMedia
+          : await this.uploadPublication(card)
+        : undefined;
       if (native && saved?.interactive && cardRef) {
         await this.lark([
           "api",
@@ -201,7 +280,7 @@ export class CompanyFeishu {
           "--as",
           "bot",
           "--data",
-          JSON.stringify({ content: JSON.stringify(interactiveCard(card)) }),
+          JSON.stringify({ content: JSON.stringify(interactiveCard(card, publicationMedia)) }),
         ]);
       } else if (text) {
         const version = card.state !== "open" && text.startsWith("答复已记录\n") ? "answer" : card.version;
@@ -219,17 +298,19 @@ export class CompanyFeishu {
           "--user-id",
           this.owner,
           ...(native
-            ? ["--msg-type", "interactive", "--content", JSON.stringify(interactiveCard(card))]
+            ? ["--msg-type", "interactive", "--content", JSON.stringify(interactiveCard(card, publicationMedia))]
             : ["--text", text]),
           "--idempotency-key",
           key,
         ]);
         if (typeof sent.data?.message_id !== "string" || !sent.data.message_id.startsWith("om_"))
           throw new Error("飞书未返回有效消息编号");
+        if (/^oc_[A-Za-z0-9]+$/.test(sent.data.chat_id ?? "")) this.state.chatId = sent.data.chat_id;
         ref ??= sent.data.message_id;
         if (native) cardRef = sent.data.message_id;
       }
       saved = {
+        publicationMedia,
         interactive: native || saved?.interactive,
         layout: native ? 3 : saved?.layout,
         cardRef,
@@ -245,6 +326,26 @@ export class CompanyFeishu {
     await this.hub.delivered(card.id, card.version, saved.ref);
   }
   async receiveAction(raw: any) {
+    // event consume emits flattened fields; retain support for already-spooled raw callbacks.
+    if (raw?.type === "card.action.trigger") {
+      try {
+        raw = {
+          header: { event_id: raw.event_id, event_type: raw.type },
+          event: {
+            operator: { open_id: raw.operator_id },
+            context: { open_message_id: raw.message_id },
+            action: {
+              value: JSON.parse(raw.action_value),
+              form_value: raw.form_value ? JSON.parse(raw.form_value) : undefined,
+              tag: raw.action_tag,
+              name: raw.action_name,
+            },
+          },
+        };
+      } catch {
+        return false;
+      }
+    }
     const event = raw?.event,
       value = event?.action?.value,
       id = raw?.header?.event_id;
@@ -399,6 +500,19 @@ export class CompanyFeishu {
     }
   }
   async poll() {
+    if (!this.state.chatId) {
+      // Bot history requires chat_id. Resolve it from a message we sent to this owner, without sending a probe.
+      const ref = Object.values(this.state.cards)
+        .reverse()
+        .map((card) => card.cardRef ?? card.ref)
+        .find((ref) => ref && /^om_[A-Za-z0-9]+$/.test(ref));
+      if (!ref) return;
+      const response = await this.lark(["api", "GET", `/open-apis/im/v1/messages/${ref}`, "--as", "bot"]);
+      const message = response.data?.items?.find((item: any) => item.message_id === ref);
+      if (!/^oc_[A-Za-z0-9]+$/.test(message?.chat_id ?? "")) throw new Error("飞书未返回本人会话编号");
+      this.state.chatId = message.chat_id;
+      this.save();
+    }
     const end = new Date().toISOString(),
       start = new Date(Date.parse(this.state.cursor) - 120_000).toISOString();
     let page: string | undefined;
@@ -408,11 +522,11 @@ export class CompanyFeishu {
         "+chat-messages-list",
         "--as",
         "bot",
-        "--user-id",
-        this.owner,
+        "--chat-id",
+        this.state.chatId!,
         "--format",
         "json",
-        "--sort",
+        "--order",
         "asc",
         "--page-size",
         "50",
@@ -435,22 +549,37 @@ export class CompanyFeishu {
 }
 export default async function companyChannel({ hub, options, signal, log }: ChannelContext) {
   const program = typeof options.lark === "string" ? options.lark : "lark-cli";
-  const lark = (args: string[]) =>
+  const lark = (args: string[], cwd?: string) =>
     new Promise<any>((resolve, reject) => {
-      execFile(program, args, { encoding: "utf8", timeout: 60_000, maxBuffer: 2_000_000, signal }, (error, out) => {
-        if (error) {
-          reject(new Error("飞书 CLI 请求失败，请检查授权与网络"));
-          return;
-        }
-        try {
-          const result = JSON.parse(out);
-          if (result.ok === false || result.error || (typeof result.code === "number" && result.code !== 0))
-            throw new Error(JSON.stringify(result.error).slice(0, 300));
-          resolve(result);
-        } catch (e) {
-          reject(e);
-        }
-      });
+      execFile(
+        program,
+        args,
+        { encoding: "utf8", timeout: 60_000, maxBuffer: 2_000_000, signal, cwd },
+        (error, out, stderr) => {
+          if (error) {
+            let detail = `退出码 ${error.code ?? "未知"}`;
+            try {
+              const failure = JSON.parse(stderr || out).error;
+              if (typeof failure?.message === "string") detail += `：${failure.message}`;
+            } catch {}
+            // CLI errors can include credentials or callback URLs; never log command arguments or raw output.
+            detail = detail
+              .replace(/https?:\/\/\S+/g, "[链接已隐藏]")
+              .replace(/((?:token|secret|authorization|key)[\w-]*["']?\s*[:=]\s*["']?)([^\s"',;]+)/gi, "$1[已隐藏]")
+              .slice(0, 500);
+            reject(new Error(`飞书 CLI ${args.slice(0, 2).join(" ")} 请求失败，${detail}`));
+            return;
+          }
+          try {
+            const result = JSON.parse(out);
+            if (result.ok === false || result.error || (typeof result.code === "number" && result.code !== 0))
+              throw new Error(JSON.stringify(result.error).slice(0, 300));
+            resolve(result);
+          } catch (e) {
+            reject(e);
+          }
+        },
+      );
     });
   let onQuestion: CompanyFeishu["onQuestion"];
   let openCards: (() => Promise<Card[]>) | undefined;
@@ -509,12 +638,14 @@ export default async function companyChannel({ hub, options, signal, log }: Chan
     const spool = String(options.stateFile) + ".callbacks";
     mkdirSync(spool, { recursive: true, mode: 0o700 });
     const listen = async () => {
+      if (options.cardCallbackListener === false) return;
       while (!signal.aborted) {
         await new Promise<void>((resolve) => {
           const child = spawn(
             program,
-            ["event", "+subscribe", "--event-types", "card.action.trigger", "--output-dir", ".", "--quiet"],
-            { signal, cwd: spool, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] },
+            ["event", "consume", "card.action.trigger", "--as", "bot", "--output-dir", "."],
+            // Unbounded consume exits on stdin EOF; keep the pipe open for the channel's lifetime.
+            { signal, cwd: spool, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"] },
           );
           // npm's CLI shim spawns the Go binary; terminate the owned process group on shutdown.
           const stopListener = () => {
@@ -525,18 +656,23 @@ export default async function companyChannel({ hub, options, signal, log }: Chan
           };
           signal.addEventListener("abort", stopListener, { once: true });
           if (signal.aborted) stopListener();
-          let diagnostic = "";
+          let diagnostic = `${new Date().toISOString()} 启动卡片回调连接\n`;
+          const saveDiagnostic = () => writeFileSync(join(spool, "connection.log"), diagnostic, { mode: 0o600 });
+          saveDiagnostic();
           const capture = (chunk: Buffer) => {
             diagnostic = (diagnostic + chunk.toString()).slice(-8192);
+            saveDiagnostic();
           };
-          child.stdout?.on("data", capture);
+          // Event bodies belong in the private spool, not the connection log.
+          child.stdout?.resume();
           child.stderr?.on("data", capture);
           child.on("error", (error) => {
             diagnostic = error.message;
+            saveDiagnostic();
           });
           child.on("close", () => {
             signal.removeEventListener("abort", stopListener);
-            if (!signal.aborted) writeFileSync(join(spool, "connection.log"), diagnostic, { mode: 0o600 });
+            saveDiagnostic();
             resolve();
           });
         });
