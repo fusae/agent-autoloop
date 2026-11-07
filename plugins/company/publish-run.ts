@@ -1,3 +1,9 @@
+import {
+  validatePublishPolicy,
+  publicationChannel,
+  publicationResults,
+  publicationUsage,
+} from "./publication-policy.ts";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
@@ -20,14 +26,19 @@ for (const event of context.events) {
     try {
       const row = office.prepare("SELECT body FROM tasks WHERE id=?").get(task);
       const current = row ? JSON.parse(row.body as string) : null;
-      const approved = operations
+      validatePublishPolicy(config);
+      const projects = operations
         .prepare("SELECT body FROM projects")
         .all()
-        .some((row) =>
-          JSON.parse(row.body as string).plans.some(
-            (p: any) => p.task === task && p.publicationKey === data.publication && p.deliveryDecision === "publish",
-          ),
-        );
+        .map((row) => JSON.parse(row.body as string));
+      const project = projects.find((p) =>
+        p.plans.some(
+          (p: any) => p.task === task && p.publicationKey === data.publication && p.deliveryDecision === "publish",
+        ),
+      );
+      const approved = project?.plans.find(
+        (p: any) => p.task === task && p.publicationKey === data.publication && p.deliveryDecision === "publish",
+      );
       if (
         !current ||
         current.kind !== "publish-content" ||
@@ -38,6 +49,24 @@ for (const event of context.events) {
         !approved
       )
         throw Error("发布任务不在当前已审核范围内");
+      const channel = publicationChannel(directory, project.business);
+      if (channel && (config.publishDailyLimit !== undefined || config.publishApproval !== undefined)) {
+        const results = publicationResults(directory);
+        const reservations = projects.flatMap((p) => p.publishReservations ?? []);
+        const usage = publicationUsage(results, reservations, channel, new Date());
+        if (
+          (approved.publishApproval || usage.successes < (config.publishApproval?.confirmFirst ?? 0)) &&
+          (approved.publishApproval?.state !== "approved" || approved.publishApproval.key !== data.publication)
+        )
+          throw Error("本篇发布尚未取得负责人确认，禁止执行");
+        if (
+          config.publishDailyLimit !== undefined &&
+          !results.some((p) => p.key === data.publication) &&
+          (!reservations.some((r: any) => r.key === data.publication && r.channel === channel) ||
+            usage.today + usage.pending > config.publishDailyLimit)
+        )
+          throw Error("发布任务缺少同渠道的有效额度预留，禁止执行");
+      }
     } finally {
       office.close();
       operations.close();

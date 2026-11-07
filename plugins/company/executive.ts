@@ -83,6 +83,8 @@ export type Leadership = {
   ownerReplyEvents?: string[];
   retries: Record<string, number>;
   nextReviewAt?: string;
+  eventInputs?: string;
+  eventOutcomes?: Record<string, string>;
   unchangedReviews?: number;
   stalled?: { fingerprint: string; at: string; reason: string };
   pendingRetries?: { task: string; decision: string }[];

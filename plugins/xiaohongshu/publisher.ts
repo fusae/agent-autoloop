@@ -24,6 +24,11 @@ type Draft = { title: string; content: string; images: { mime: string; base64: s
 type Call = (path: string, body?: unknown) => Promise<any>;
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const normalize = (s: string) => s.replace(/\r\n/g, "\n").trim();
+const normalizeContent = (s: string) =>
+  normalize(s)
+    .split("\n")
+    .map((line) => line.trim())
+    .join("\n");
 export function parseXhsDraft(request: Request): Draft {
   if (!/^[a-f0-9]{32}$/.test(request.key) || !["publish", "lookup"].includes(request.action))
     throw Error("小红书发布请求无效");
@@ -129,7 +134,7 @@ export async function xhsPublication(
         n.noteId !== f.id ||
         n.user?.userId !== config.accountId ||
         normalize(n.title) !== normalize(draft.title) ||
-        normalize(n.desc) !== normalize(draft.content) ||
+        normalizeContent(n.desc) !== normalizeContent(draft.content) ||
         !Array.isArray(n.imageList) ||
         n.imageList.length !== draft.images.length ||
         !Number.isFinite(n.time) ||

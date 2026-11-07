@@ -1,3 +1,5 @@
+import { ModelBudget } from "./model-budget.ts";
+import { workflows } from "./company.ts";
 import { syncOwnerReplyCards } from "./owner-replies.ts";
 import { failedWork } from "./recovery.ts";
 import { hubClient } from "../../protocol/client.ts";
@@ -11,7 +13,8 @@ import { Operations } from "./operations.ts";
 import { Businesses } from "./business.ts";
 import { Company, type Context } from "./company.ts";
 const [configFile, contextFile] = process.argv.slice(2);
-const office = new Company(JSON.parse(readFileSync(configFile, "utf8")));
+const config = JSON.parse(readFileSync(configFile, "utf8"));
+const office = new Company(config);
 const businesses = new Businesses(dirname(configFile));
 const operations = new Operations(dirname(configFile));
 try {
@@ -56,7 +59,34 @@ try {
       /* Hub outages are already retried by the worker. */
     }
   }
-  const events = [...(proactive.events ?? []), ...(legacy.events ?? []), ...failures].slice(0, 100);
+  const resume = (task: (typeof tasks)[number]) => ({
+    id: `company:resume:${task.id}:${batch}`,
+    type: "company.task.resume",
+    subject: task.id,
+    summary: "继续排队工作",
+    detail: "{}",
+  });
+  const resumes = config.dailyModelRuns ? [] : tasks.filter((t) => t.status === "queued").map(resume);
+  if (config.dailyModelRuns) {
+    const budget = new ModelBudget(dirname(configFile), config);
+    try {
+      for (const task of tasks.filter((t) => t.status === "queued")) {
+        if (!budget.available(workflows[task.kind][task.stage], now)) continue;
+        resumes.push(resume(task));
+      }
+      const usage = budget.snapshot(now);
+      if (usage.limited && existsSync(hubFile)) {
+        const cfg = JSON.parse(readFileSync(hubFile, "utf8"));
+        await hubClient(cfg.url, cfg.source.key).tell({
+          key: `company-model-limit-${usage.date}`,
+          text: `今天的模型调用已达到上限（已用 ${usage.total} 次）。未完成工作已保留，明天继续；你的飞书消息仍会处理。`,
+        });
+      }
+    } finally {
+      budget.close();
+    }
+  }
+  const events = [...(proactive.events ?? []), ...(legacy.events ?? []), ...failures, ...resumes].slice(0, 100);
   const receipt = { ...proactive, ...(events.length ? { events } : {}) };
   process.stdout.write(`经营周期已检查。\n\n\`\`\`agent-autoloop\n${JSON.stringify(receipt)}\n\`\`\`\n`);
 } finally {

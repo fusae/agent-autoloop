@@ -1,3 +1,13 @@
+import {
+  validatePublishPolicy,
+  publicationChannel,
+  publicationResults,
+  publicationUsage,
+  publicationPreview,
+  nextPublishDay,
+  type PublishApproval,
+  type PublishReservation,
+} from "./publication-policy.ts";
 import { arrangementText } from "./arrangement.ts";
 import { ownerReplyEvidence } from "./owner-replies.ts";
 import { freezePublication } from "./publication.ts";
@@ -6,7 +16,16 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { departments, taskId, taskRequest, workflows, type Role, type Task, type Receipt } from "./company.ts";
+import {
+  departments,
+  taskId,
+  taskRequest,
+  workflows,
+  type Role,
+  type Task,
+  type Receipt,
+  type CompanyConfig,
+} from "./company.ts";
 import { executiveDecision, type Leadership, type ExecutiveDecision, type Issue, type StaffPlan } from "./executive.ts";
 import type { Context } from "./company.ts";
 import type { Business, Metric } from "./business.ts";
@@ -14,6 +33,29 @@ import type { ActionProposal, Inspection } from "./inspection.ts";
 
 type Portfolio = (Business & { metrics: Metric[] })[];
 type EmployeePlan = Omit<StaffPlan, "business" | "role"> & { issuedAt: string; checkedAt?: string; checkTask?: string };
+function sameFollowup(a: EmployeePlan, b: EmployeePlan) {
+  return (
+    a.mode === "followup" &&
+    b.mode === "followup" &&
+    a.plan === b.plan &&
+    Date.parse(a.reviewAt) === Date.parse(b.reviewAt)
+  );
+}
+function mergeFollowups(s: Employee) {
+  if (!s.followups?.length) return;
+  const kept: EmployeePlan[] = [];
+  for (const f of s.followups) {
+    const current = s.daily && sameFollowup(s.daily, f) ? s.daily : kept.find((k) => sameFollowup(k, f));
+    if (!current) {
+      kept.push(f);
+      continue;
+    }
+    // Keep the receipt link if either copy was already dispatched; merging must not run it again.
+    current.checkTask ??= f.checkTask;
+    current.checkedAt ??= f.checkedAt;
+  }
+  s.followups = kept;
+}
 export type Employee = {
   daily?: EmployeePlan;
   followups?: EmployeePlan[];
@@ -42,6 +84,8 @@ export type Plan = ActionProposal & {
   deliveryTask?: string;
   deliveryDecision?: "revise" | "accept" | "publish";
   publicationKey?: string;
+  publishApproval?: PublishApproval;
+  publishWait?: { reason: string; nextAt?: string };
   createdAt: string;
   dueAt: string;
   followUpAt: string | null;
@@ -51,6 +95,7 @@ export type Plan = ActionProposal & {
 };
 type Signal = { id: string; title: string; detail: string; source: string; role: Role | "all"; at: string };
 type Project = {
+  publishReservations?: PublishReservation[];
   business: string;
   owner: Role;
   maxDailyTasks: number;
@@ -83,10 +128,16 @@ export class Operations {
   private db: DatabaseSync;
   private directory: string;
   private dailyPlanning: boolean;
+  private config: Partial<CompanyConfig>;
+  private onDuty(s: Employee) {
+    return s.enabled && (!this.config.activeRoles || this.config.activeRoles.includes(s.role));
+  }
   constructor(directory: string) {
     this.directory = directory;
     const configFile = join(directory, "company.json");
-    this.dailyPlanning = existsSync(configFile) && JSON.parse(readFileSync(configFile, "utf8")).dailyPlanning === true;
+    this.config = existsSync(configFile) ? JSON.parse(readFileSync(configFile, "utf8")) : {};
+    validatePublishPolicy(this.config);
+    this.dailyPlanning = this.config.dailyPlanning === true;
     mkdirSync(join(directory, "workspace/knowledge/operations"), { recursive: true, mode: 0o700 });
     const file = join(directory, "operations.db");
     this.db = new DatabaseSync(file);
@@ -293,12 +344,31 @@ export class Operations {
             nextAction = issue.question;
           }
           const daily = s.daily;
-          if (!assigned && !work && !issue && s.enabled && b.autonomy && b.status === "active" && this.dailyPlanning) {
+          if (
+            !assigned &&
+            !work &&
+            !issue &&
+            this.onDuty(s) &&
+            b.autonomy &&
+            b.status === "active" &&
+            this.dailyPlanning
+          ) {
             workStatus =
               !daily || daily.date !== day(now) ? "待 CEO 今日安排" : daily.mode === "standby" ? "待命" : "待复查";
             nextAction = !daily || daily.date !== day(now) ? "CEO更新今日目标和工作" : daily.focus;
           }
-          return { ...s, currentTask, workStatus, nextAction };
+          if (!assigned && !work && !issue && !this.onDuty(s)) {
+            workStatus = "未在岗";
+            nextAction = "有具体工作时可临时派工";
+          }
+          return {
+            ...s,
+            onDuty: this.onDuty(s),
+            inspections: this.config.inspections ?? true,
+            currentTask,
+            workStatus,
+            nextAction,
+          };
         }),
         alerts: p.plans
           .filter(
@@ -384,7 +454,7 @@ export class Operations {
             ...(this.dailyPlanning
               ? {
                   staffPlans: project.staff
-                    .filter((s) => s.enabled)
+                    .filter((s) => this.onDuty(s))
                     .map((s) => [
                       s.role,
                       s.daily ?? null,
@@ -419,6 +489,10 @@ export class Operations {
     for (const issue of c.issues.filter((i) => i.state === "open" && active.some((b) => b.id === i.business))) {
       const task = tasks.find((t) => t.id === issue.task),
         report = task?.reports.at(-1);
+      if (task?.status === "superseded") {
+        issue.state = "answered";
+        issue.answer = `原任务已取代关闭：${task.reason}`;
+      }
       if (task?.status === "completed" && report?.verdict === "pass" && report.inspection?.state !== "blocked") {
         issue.state = "answered";
         issue.answer = `原任务已通过验收：${task.reason}`;
@@ -628,7 +702,9 @@ export class Operations {
       if (p.plans.filter((p) => p.status !== "closed").length + additions.size > 30)
         return "该项目已有 30 项未结束计划，请先处理已有工作。";
     }
-    c.nextReviewAt = new Date(now.getTime() + 30 * 60000).toISOString();
+    if (this.config.ceoWake === "events") {
+      delete c.nextReviewAt;
+    } else c.nextReviewAt = new Date(now.getTime() + 30 * 60000).toISOString();
     c.decisions.push({ task: decisionId, summary, at: now.toISOString(), decision: d });
     for (const brief of d.briefs) c.briefs[brief.business] = brief.objective;
     for (const directive of d.directives) {
@@ -662,20 +738,16 @@ export class Operations {
       if (JSON.stringify(previous) === JSON.stringify(daily)) continue;
       if (s.daily?.mode === "followup" && !s.daily.checkedAt && daily.mode === "work") {
         s.followups ??= [];
-        if (
-          !s.followups.some(
-            (f) => f.reviewAt === s.daily!.reviewAt && f.focus === s.daily!.focus && f.plan === s.daily!.plan,
-          )
-        )
-          s.followups.push(s.daily);
+        if (!s.followups.some((f) => sameFollowup(f, s.daily!))) s.followups.push(s.daily);
       }
       s.daily = { ...daily, issuedAt: now.toISOString() };
+      mergeFollowups(s);
       s.nextAt = a.reviewAt;
       this.save(p, "ceo-daily-plan", now);
     }
     if (
       staffPlans.length &&
-      active.some((b) => this.get(b.id, now).staff.some((s) => s.enabled && s.daily?.date !== day(now)))
+      active.some((b) => this.get(b.id, now).staff.some((s) => this.onDuty(s) && s.daily?.date !== day(now)))
     )
       c.nextReviewAt = now.toISOString();
     for (const a of d.approvals) {
@@ -701,6 +773,8 @@ export class Operations {
         }
         c.pendingRetries = (c.pendingRetries ?? []).filter((r) => r.task !== a.task);
         delete plan.publicationKey;
+        delete plan.publishApproval;
+        delete plan.publishWait;
         plan.revision = (plan.revision ?? 0) + 1;
         plan.task = null;
         plan.status = "planned";
@@ -708,6 +782,8 @@ export class Operations {
         plan.deliveredAt = null;
       } else if (a.verdict === "publish") {
         plan.publicationKey = publications.get(a.plan)!;
+        delete plan.publishApproval;
+        delete plan.publishWait;
         plan.task = null;
         plan.status = "publishing";
       } else plan.status = "closed";
@@ -944,12 +1020,18 @@ export class Operations {
           sources: sourceSnapshots(this.directory),
           questions: c.questions,
           briefs: c.briefs,
+          controls: {
+            activeRoles: this.config.activeRoles ?? roles,
+            inspections: this.config.inspections ?? true,
+            ceoWake: this.config.ceoWake ?? "legacy",
+            dailyModelRuns: this.config.dailyModelRuns ?? null,
+          },
           ...(this.dailyPlanning
             ? {
                 planningDate: day(now),
                 missingDailyPlans: active.flatMap((b) =>
                   this.get(b.id, now)
-                    .staff.filter((s) => s.enabled && s.daily?.date !== day(now))
+                    .staff.filter((s) => this.onDuty(s) && s.daily?.date !== day(now))
                     .map((s) => ({ business: b.id, role: s.role })),
                 ),
               }
@@ -967,15 +1049,53 @@ export class Operations {
     );
     renameSync(file + ".tmp", file);
   }
+  private eventInputs(c: Leadership, businesses: Portfolio, tasks: Task[], now: Date) {
+    const relevant = new Set(
+      businesses
+        .filter((b) => b.autonomy && b.status === "active")
+        .flatMap((b) => this.get(b.id, now).activity.map((a) => a.task)),
+    );
+    c.eventOutcomes ??= {};
+    for (const t of tasks) {
+      if (!relevant.has(t.id) || t.kind === "ceo" || !["blocked", "completed"].includes(t.status)) continue;
+      const inspection = t.reports.at(-1)?.inspection;
+      if (
+        t.kind.startsWith("check-") &&
+        t.status === "completed" &&
+        inspection?.state === "idle" &&
+        !inspection.questions?.length &&
+        !inspection.actions.length
+      )
+        continue;
+      c.eventOutcomes[t.id] = JSON.stringify([t.assignment, t.status, t.reason]);
+    }
+    return hash(
+      JSON.stringify({
+        day: day(new Date(now.getTime() - 9 * 3600_000)),
+        results: Object.entries(c.eventOutcomes).sort(),
+        answers: c.answeredCards,
+      }),
+    );
+  }
   private scheduleCEO(c: Leadership, businesses: Portfolio, tasks: Task[], receipt: Receipt, now: Date) {
     const active = businesses.filter((b) => b.autonomy && b.status === "active");
     if (!active.length) return;
     const latest = tasks.find((t) => t.id === c.lastTask);
+    if (this.config.ceoWake === "events") delete c.nextReviewAt;
+    if (latest?.status === "queued") {
+      this.writeCEOContext(c, businesses, tasks, now, join(this.directory, "workspace/knowledge/ceo.json"));
+      if (this.config.ceoWake === "events") c.eventInputs = this.eventInputs(c, businesses, tasks, now);
+    }
     if (c.lastTask && latest?.status !== "completed") return;
+    const eventInputs = this.eventInputs(c, businesses, tasks, now);
+    if (this.config.ceoWake === "events") {
+      delete c.nextReviewAt;
+      if (c.eventInputs === eventInputs) return;
+    }
     const fingerprint = this.ceoInputs(c, businesses, tasks, now);
     const agenda =
       (this.dailyPlanning &&
-        active.some((b) => this.get(b.id, now).staff.some((s) => s.enabled && s.daily?.date !== day(now)))) ||
+        active.some((b) => this.get(b.id, now).staff.some((s) => this.onDuty(s) && s.daily?.date !== day(now)))) ||
       c.issues.some((i) => i.state === "open") ||
       active.some((b) =>
         this.get(b.id, now).plans.some(
@@ -983,7 +1103,7 @@ export class Operations {
         ),
       );
     const unchanged = fingerprint === c.fingerprint;
-    if (unchanged) {
+    if (unchanged && this.config.ceoWake !== "events") {
       if (!(agenda && c.nextReviewAt && Date.parse(c.nextReviewAt) <= now.getTime())) return;
       if ((c.unchangedReviews ?? 0) >= 2) {
         if (c.stalled?.fingerprint !== fingerprint) {
@@ -1085,10 +1205,61 @@ export class Operations {
       summary: request.title,
       detail: JSON.stringify(request),
     });
-    c.nextReviewAt = new Date(now.getTime() + 30 * 60000).toISOString();
+    if (this.config.ceoWake === "events") {
+      c.eventInputs = eventInputs;
+      delete c.nextReviewAt;
+    } else c.nextReviewAt = new Date(now.getTime() + 30 * 60000).toISOString();
     c.lastTask = id;
     c.fingerprint = fingerprint;
     c.runs.push({ task: id, at: now.toISOString() });
+  }
+  private admitPublication(project: Project, plan: Plan, businessName: string, receipt: Receipt, now: Date): boolean {
+    if (this.config.publishDailyLimit === undefined && this.config.publishApproval === undefined) return true;
+    const channel = publicationChannel(this.directory, project.business);
+    if (!channel) return true;
+    const results = publicationResults(this.directory);
+    const reservations = this.db
+      .prepare("SELECT body FROM projects")
+      .all()
+      .flatMap((row) => {
+        const p = JSON.parse(row.body as string) as Project;
+        return p.business === project.business ? [] : (p.publishReservations ?? []);
+      })
+      .concat(project.publishReservations ?? []);
+    const usage = publicationUsage(results, reservations, channel, now);
+    let approval = plan.publishApproval;
+    if (approval?.state === "deferred" && Date.parse(approval.nextAt!) > now.getTime()) return false;
+    if (
+      approval?.state !== "approved" &&
+      (approval || usage.successes < (this.config.publishApproval?.confirmFirst ?? 0))
+    ) {
+      if (!approval || approval.state === "deferred") {
+        const round = (approval?.round ?? 0) + 1;
+        const about = `publish:${plan.publicationKey}:${round}`;
+        approval = plan.publishApproval = { key: plan.publicationKey!, about, round, state: "pending" };
+        (receipt.ask ??= []).push({
+          key: about,
+          about,
+          title: "发布确认",
+          text: publicationPreview(this.directory, plan.publicationKey!, businessName),
+          options: ["发布", "退回修改", "暂缓"],
+        });
+      }
+      plan.result = "已通过 CEO 审核，等待负责人发布确认";
+      return false;
+    }
+    if (this.config.publishDailyLimit !== undefined && usage.today + usage.pending >= this.config.publishDailyLimit) {
+      plan.publishWait = {
+        reason: usage.pending ? "同渠道有发布尚待核实，保留原稿等待" : "今日渠道发布额度已用完，顺延次日",
+        nextAt: nextPublishDay(now),
+      };
+      plan.result = plan.publishWait.reason;
+      return false;
+    }
+    delete plan.publishWait;
+    if (this.config.publishDailyLimit !== undefined)
+      (project.publishReservations ??= []).push({ key: plan.publicationKey!, channel, at: now.toISOString() });
+    return true;
   }
   plan(
     batch: string,
@@ -1108,6 +1279,7 @@ export class Operations {
       }
       const receipt: Receipt = {},
         chief = this.executive();
+      if (this.config.ceoWake === "events") delete chief.nextReviewAt;
       const beforeCEO = this.ceoInputs(chief, businesses, tasks, now),
         beforeProcessed = chief.processed;
       if (chief.enabled) this.manage(chief, businesses, tasks, answers, receipt, now);
@@ -1146,7 +1318,44 @@ export class Operations {
       for (const b of businesses.filter((b) => b.autonomy)) {
         const p = this.get(b.id, now),
           before = JSON.stringify(p);
+        for (const plan of p.plans) {
+          const approval = plan.publishApproval;
+          if (!approval || approval.state !== "pending" || approval.key !== plan.publicationKey || plan.task) continue;
+          for (const answer of answers) {
+            if (answer.about !== approval.about || chief.answeredCards.includes(answer.card)) continue;
+            const choice = answer.choice ?? ["发布", "退回修改", "暂缓"].indexOf(answer.text?.trim() ?? "");
+            if (![0, 1, 2].includes(choice)) {
+              chief.answeredCards.push(answer.card);
+              approval.state = "deferred";
+              approval.nextAt = now.toISOString();
+              approval.answer = answer.text?.trim();
+              break;
+            }
+            chief.answeredCards.push(answer.card);
+            approval.card = answer.card;
+            approval.answer = answer.text?.trim() || ["发布", "退回修改", "暂缓"][choice];
+            if (choice === 0) approval.state = "approved";
+            else if (choice === 2) {
+              approval.state = "deferred";
+              approval.nextAt = nextPublishDay(now);
+              plan.result = "负责人暂缓发布，次日重新确认";
+            } else {
+              plan.deliveryDecision = "revise";
+              plan.result = `负责人退回修改：${approval.answer}`;
+              plan.revision = (plan.revision ?? 0) + 1;
+              plan.status = "planned";
+              plan.task = null;
+              plan.dueAt = after(now, plan.dueDays);
+              plan.deliveredAt = null;
+              delete plan.publicationKey;
+              delete plan.publishApproval;
+              delete plan.publishWait;
+            }
+            break;
+          }
+        }
         for (const s of p.staff) {
+          mergeFollowups(s);
           const t = tasks.find((t) => t.id === s.lastTask);
           if (!t || t.status !== "completed" || s.processed === `${t.id}:${t.assignment}`) continue;
           const report = t.reports.at(-1),
@@ -1209,7 +1418,11 @@ export class Operations {
             a.result = "内部交付已完成，待 CEO 审核成果及下一步执行";
           }
           if (["working", "blocked", "publishing"].includes(a.status)) {
-            if (t?.status === "completed") {
+            if (t?.status === "superseded") {
+              a.status = "closed";
+              a.followUpAt = null;
+              a.result = `已取代关闭：${t.reason}`;
+            } else if (t?.status === "completed") {
               const published = t.kind === "publish-content" && t.reports.at(-1)?.publication?.key === a.publicationKey;
               a.status = chief.enabled && !published ? "delivered" : "observing";
               a.deliveredAt = now.toISOString();
@@ -1265,6 +1478,7 @@ export class Operations {
             (!publishing && busy().some((v) => v.role === a.owner))
           )
             continue;
+          if (publishing && !this.admitPublication(p, a, b.name, receipt, now)) continue;
           const id = publishing
             ? "P-" + hash(a.publicationKey!)
             : "W-" + hash(`${b.id}:${a.id}${a.revision ? `:${a.revision}` : ""}`);
@@ -1291,7 +1505,7 @@ export class Operations {
           a.status = publishing ? "publishing" : "working";
         }
         for (const s of p.staff) {
-          if (!capacity() || !s.enabled) continue;
+          if (this.config.inspections === false || !capacity() || !this.onDuty(s)) continue;
           const retained = s.followups
             ?.filter((f) => Date.parse(f.reviewAt) <= now.getTime())
             .sort((a, b) => a.reviewAt.localeCompare(b.reviewAt))[0];

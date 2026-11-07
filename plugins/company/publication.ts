@@ -83,7 +83,7 @@ export function executePublication(directory: string, key: string): Publication 
     !Array.isArray(target.command) ||
     !target.command.length ||
     !target.command.every((v: unknown) => typeof v === "string") ||
-    !isAbsolute(target.command[0])
+    (!isAbsolute(target.command[0]) && target.command[0] !== "sudo")
   )
     throw Error("发布入口配置不完整，需要修复渠道及固定执行程序");
   const timeout = target.timeoutMs ?? 30_000;
@@ -91,14 +91,18 @@ export function executePublication(directory: string, key: string): Publication 
     throw Error("发布入口超时必须为1000–600000毫秒");
   const call = (action: "lookup" | "publish"): any => {
     // Commands come only from private operator configuration, never from CEO text or draft files.
-    const result = spawnSync(target.command[0], target.command.slice(1), {
-      input: JSON.stringify({ ...request, channel: target.channel, action }),
-      encoding: "utf8",
-      timeout,
-      maxBuffer: 100_000,
-      cwd: directory,
-      shell: false,
-    });
+    const result = spawnSync(
+      target.command[0] === "sudo" ? "/usr/bin/sudo" : target.command[0],
+      target.command.slice(1),
+      {
+        input: JSON.stringify({ ...request, channel: target.channel, action }),
+        encoding: "utf8",
+        timeout,
+        maxBuffer: 100_000,
+        cwd: directory,
+        shell: false,
+      },
+    );
     if (result.error || result.status !== 0)
       throw Error("发布入口调用失败，尚未确认平台结果；保留原发布编号核对，不能重复发布");
     try {

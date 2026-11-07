@@ -151,7 +151,7 @@ test("explicit lean content configuration updates CEO and staff rules once while
     const text = readFileSync(join(dir, "hub/rules.json"), "utf8");
     const rules = JSON.parse(text).rules;
     for (const name of ["公司部门-growth", "公司部门-ceo", "公司部门-qa", "CEO · 业务答复"])
-      assert.match(rules.find((r: any) => r.name === name).prompt, /精简推广流程 v1/);
+      assert.match(rules.find((r: any) => r.name === name).prompt, /精简推广流程 v2/);
     const book = readFileSync(join(dir, "workspace/handbook/growth.md"), "utf8");
     assert.ok(book.startsWith("自定义运营职责"));
     assert.match(book, /负责人本人发布/);

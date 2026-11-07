@@ -10,7 +10,10 @@ try {
   if (
     config.ceoMode &&
     Math.max(0, ...context.events.map((e: any) => e.hops ?? 0)) < 8 &&
-    context.events.some((e: any) => e.type === "company.result" || e.type === "company.task.failed")
+    context.events.some(
+      (e: any) =>
+        e.type === "company.result" || e.type === "company.task.failed" || e.type === "company.task.supersede",
+    )
   ) {
     receipt.events ??= [];
     receipt.events.push({
