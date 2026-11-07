@@ -18,7 +18,7 @@ node plugins/xiaohongshu/manage.ts status /private/connector.json
 node plugins/xiaohongshu/manage.ts bind /private/connector.json
 ```
 
-用户用目标小红书账号扫码后，`bind` 固定平台返回的账号编号；不凭昵称猜账号。绑定仍保持 `enabled:false`，由操作者完成账号范围和真实发布验证后再设置为 `true`。不用提供密码。二维码和 cookies 不进入员工资料。
+用户用目标小红书账号扫码后，`bind` 固定平台返回的账号编号；不凭昵称猜账号。绑定仍保持 `enabled:false`，由操作者核实账号范围、登录状态及负责人的发布授权后再设置为 `true`。不用提供密码。二维码和 cookies 不进入员工资料。
 
 ## 图文交付
 
@@ -45,3 +45,19 @@ node plugins/xiaohongshu/manage.ts pack post.json tasks/原任务/xiaohongshu.js
 上游返回“发布完成”没有笔记编号，不能当作成功。本适配器再查本人笔记和详情，核对账号、唯一标题、正文、图片数量、笔记编号和平台时间，才返回真实 HTTPS 链接交给 QA。图片数量核验不等于图片像素一致性或业务效果验收；QA 还需查看实际帖子。列表未展示、同名歧义或正文经平台改写时保留待核验，不能编造链接或再次提交。
 
 账号未绑定、图文未交付和登录过期给 CEO 返回具体原因。外部发布只有在平台可读回后才记完成；模拟测试不代表生产发布验证完成。
+
+## 跨机发布窄通道
+
+发布服务、登录态和 `connector.json` 留在国内旧机；公司新机不保管小红书 cookies 或服务 token。新机使用独立、无密码、`nologin` 的 `company-publisher` 系统账号保管 SSH 私钥（0600，home 和 `.ssh` 0700）；root 拥有的 `/usr/local/libexec/company-xhs-publish` 不接受参数，只转发 stdin 并返回适配器 stdout。sudoers 的命令末尾必须写 `""`，禁止 agentcompany 添加参数；脚本使用固定 `/usr/bin/ssh`、空环境、`-F /dev/null`、固定私钥和 known_hosts，严格校验旧机主机公钥，不允许转发。
+
+旧机仍使用运行服务的账号；`authorized_keys` 必须限制新机公网来源，并设置 `restrict,command="/absolute/node24 /absolute/app/plugins/xiaohongshu/publish-run.ts /private/connector.json"`。适配器仅接受 `lookup`、`publish`，不执行 SSH 请求中的任意命令，也不提供登录、评论、私信或读取任意文件的入口。主机公钥经已有可信运维连接取得，不能以未经核验的扫描结果替代。
+
+两个 APP 共用账号时，`publishing.json` 的两个项目必须使用完全相同的 `channel`：
+
+```json
+{"projects":{"jizhu":{"channel":"小红书·负责人个人账号","command":["sudo","-n","-u","company-publisher","/usr/local/libexec/company-xhs-publish"],"timeoutMs":600000},"jinzhao":{"channel":"小红书·负责人个人账号","command":["sudo","-n","-u","company-publisher","/usr/local/libexec/company-xhs-publish"],"timeoutMs":600000}}}
+```
+
+`sudo` 是唯一允许省略绝对路径的入口名，固定解析为 `/usr/bin/sudo`，不通过 PATH 查找。私有 `company.json` 设置 `"publishDailyLimit":1,"publishApproval":{"confirmFirst":5}`，具体计数、卡片与延期语义见[发布护栏](company.md#发布护栏)。通道安装不等于授权开帖；`enabled` 保持 false，首次真实发布前由负责人确认稿件、核实登录及绑定账号后再开启。
+
+上线必须用员工实际 Codex 身份、工作目录和沙箱模式执行只读探测：sudo 不可提权、旧机网络不可达、发布私钥不可读；任一绕过即停止启用。另在固定程序所在宿主环境仅发送 `lookup` 验证链路。模型沙箱与系统账号是边界，岗位提示词不是权限控制。

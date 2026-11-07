@@ -183,10 +183,12 @@ POST /v1/runs/12/result    Authorization: Bearer <token>   Result
 ```ts
 export default {
   command: (run) => [...],                                // 这一轮的命令行，run.resume 是要接着的会话
-  read: (output) => ({ text, session, usage, finished }), // 从输出里读出最后一条消息和会话
+  read: (output) => ({ text, session, usage, finished, receiptProblem }), // 从输出里读出最后一条消息和会话
   link: (session) => "…",                                 // 可选：打开这个会话的链接
 };
 ```
+
+`read` 可选返回 `receiptProblem`，表示业务已完成但插件自有回执格式不合法。接单程序按同一会话最多重写两次；耗尽后保留原首行结局、丢弃整份无效回执并通知本人，所有尝试的用量累加。它不是进程失败的 `error`。这是插件读取接口的可选扩展，不增加 HTTP 字段；未提供它的旧插件行为不变，使用它的插件须与新版接单程序一起部署。
 
 专用插件的 `access` 三档，翻译成各自 CLI 的权限：`read` 只读，`edit` 只改工作目录（默认），`full` 完整权限、不审批。只读不等于读不到密钥，要隔离密钥请用系统账号或容器。`command` 只传命令参数，不替任意程序限制权限。
 
@@ -405,3 +407,7 @@ Ship 使用本引擎仓库的 `plugins/delivery/action.yml`，项目固定到发
 公司应用新增 `check-<岗位>` 与 `internal-<业务类型>` 任务及报告 `inspection` 资料；仍装在现有事件 `detail` 中。普通任务继续本人验收；职责检查可返回无行动，内部交付保留独立验收后自动归档。完整资料格式与边界见 [公司协作层](company.md#员工自主工作)。
 
 公司应用的可选 `executive.deliveries`、`publish-content` 任务及发布回执仍位于事件 detail，内核协议不变。CEO 模式内部交付先审核，只有平台确认和 QA 验证后进入效果观察；私有发布入口与权限边界见[成果审核与发布](company.md#成果审核与发布)。
+
+公司插件的可选调用控制见[模型调用控制](company.md#模型调用控制)：`company.model.deferred` 把被限额挡住的派工留在原任务，`company.task.resume` 由固定调度恢复；独立负责人来源的 `company.task.supersede` 记录取代关闭原因。默认配置与既有事件兼容，不改内核协议、日志或领取接口。
+
+公司应用可选 `publishDailyLimit` 和 `publishApproval.confirmFirst` 复用现有 ask/answer 与发布事件；渠道预留、本人确认、顺延及成功计数均保留在 plugins/company 的经营日志与现有发布记录，不增加内核字段。默认兼容，见[发布护栏](company.md#发布护栏)。
