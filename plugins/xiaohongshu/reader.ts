@@ -18,7 +18,9 @@ export type Observation =
   | { state: "unknown" | "blocked"; reason: string };
 function readFailure(error: unknown, reason: string): Observation {
   // A stalled browser or broken transport is unknown, not evidence of an account restriction.
-  const transient = error instanceof Error && ["TimeoutError", "AbortError", "TypeError"].includes(error.name);
+  const transient =
+    error instanceof Error &&
+    ["TimeoutError", "AbortError", "TypeError", "SyntaxError", "XhsUnavailable"].includes(error.name);
   return {
     state: transient ? "unknown" : "blocked",
     reason: transient ? "浏览器读取超时或连接中断，等待有限复查" : reason,

@@ -1,6 +1,7 @@
 // Failure modes: program verification invokes QA or republishes; unknown results loop forever;
 // daily collectors duplicate reads, ignore access blocks, invent zeros, or misattribute manual data.
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { test } from "node:test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -407,6 +408,30 @@ print(json.dumps({'devices':devices,'users':users,'downloads':m['download_counts
       ["2026-11-07", 1],
     );
   } finally {
+    f.clean();
+  }
+});
+
+test("browser HTTP 500 is unknown and HTTP 401 stops collection without further requests", async () => {
+  const f = fixture();
+  let status = 500,
+    calls = 0;
+  const server = createServer((_req, res) => {
+    calls++;
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(JSON.stringify({ success: false }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address() as import("node:net").AddressInfo;
+  const config = { endpoint: `http://127.0.0.1:${address.port}`, token: "fake", accountId: account };
+  try {
+    assert.equal((await readXhs(config, join(f.dir, "remote"), { action: "read", notes: [id] })).state, "unknown");
+    assert.equal(calls, 1);
+    status = 401;
+    assert.equal((await readXhs(config, join(f.dir, "remote"), { action: "read", notes: [id] })).state, "blocked");
+    assert.equal(calls, 2);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     f.clean();
   }
 });
