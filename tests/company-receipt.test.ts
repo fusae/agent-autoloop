@@ -1,5 +1,5 @@
 // Failure modes: company wrappers lose resumable sessions, oversized or invalid CEO decisions bypass bounded
-// receipt repair, exhausted repairs replay business, or Codex/Claude sessions are routed to the wrong CLI.
+// receipt repair, bare report JSON silently disappears, exhausted repairs replay business, or Codex/Claude sessions are routed to the wrong CLI.
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -40,7 +40,7 @@ const decision = (count: number) => ({
 });
 let run = 100;
 for (const engine of ["codex", "claude"])
-  for (const failure of ["length", "acceptance", "report", "exhausted"]) {
+  for (const failure of ["length", "acceptance", "report", "raw-report", "exhausted"]) {
     test(`${engine}: ${failure} uses the same session and at most two receipt rewrites`, async () => {
       const dir = join(home, String(++run));
       mkdirSync(dir);
@@ -55,21 +55,25 @@ for (const engine of ["codex", "claude"])
         }),
       );
       const receipt = (bad: boolean) =>
-        "已安排打包\n```agent-autoloop\n" +
-        JSON.stringify({
-          events: [
-            {
-              id: "decision",
-              type: failure === "report" ? "company.result" : "company.ceo.decision",
-              subject: "owner",
-              detail: JSON.stringify({
-                summary: bad && failure === "length" ? "字".repeat(4117) : "打包",
-                executive: decision(bad && failure !== "length" ? 5 : 3),
-              }),
-            },
-          ],
-        }) +
-        "\n```";
+        bad && failure === "raw-report"
+          ? "没事可做：日报已汇总。\n```json\n" +
+            JSON.stringify({ assignment: 1, verdict: "pass", executive: { ...decision(3), report: "今日汇报" } }) +
+            "\n```"
+          : "已安排打包\n```agent-autoloop\n" +
+            JSON.stringify({
+              events: [
+                {
+                  id: "decision",
+                  type: ["report", "raw-report"].includes(failure) ? "company.result" : "company.ceo.decision",
+                  subject: "owner",
+                  detail: JSON.stringify({
+                    summary: bad && failure === "length" ? "字".repeat(4117) : "打包",
+                    executive: decision(bad && failure !== "length" ? 5 : 3),
+                  }),
+                },
+              ],
+            }) +
+            "\n```";
       const fake = `#!${process.execPath}\nimport{appendFileSync,readFileSync}from'node:fs';const a=process.argv.slice(2);appendFileSync(${JSON.stringify(join(dir, "calls"))},JSON.stringify(a)+'\\n');const resume=a.includes('resume')||a.includes('--resume');const text=resume&&${failure !== "exhausted"}?${JSON.stringify(receipt(false))}:${JSON.stringify(receipt(true))};for(const e of ${engine === "codex" ? "[{type:'thread.started',thread_id:'original-session'},{type:'item.completed',item:{type:'agent_message',text}},{type:'turn.completed',usage:{input_tokens:1,output_tokens:2}}]" : "[{type:'result',subtype:'success',session_id:'original-session',result:text,usage:{input_tokens:1,output_tokens:2}}]"})console.log(JSON.stringify(e));`;
       writeFileSync(join(bin, engine), fake, { mode: 0o700 });
       const jobs: any[] = [
@@ -120,7 +124,10 @@ for (const engine of ["codex", "claude"])
       for (const args of calls.slice(1)) {
         assert.ok(args.includes("original-session"));
         assert.match(args.join(" "), /不要重做/);
-        assert.match(args.join(" "), failure === "length" ? /4000/ : /acceptance.*3/);
+        assert.match(
+          args.join(" "),
+          failure === "length" ? /4000/ : failure === "raw-report" ? /company.result/ : /acceptance.*3/,
+        );
       }
       assert.equal(results[0].outcome, "done");
       assert.equal(results[0].usage.input, calls.length);

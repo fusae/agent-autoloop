@@ -229,6 +229,8 @@ test("reporting, draft and preview prompts upgrade idempotently and can be disab
     ensureBusinessRules(dir);
     const first = readFileSync(join(dir, "hub/rules.json"), "utf8");
     assert.match(first, /汇报节奏 v1/);
+    assert.match(first, /不受CEO和总额度阻挡/);
+    assert.doesNotMatch(first, /最后一次为日报保留/);
     assert.match(first, /inspection.noProductionReason/);
     assert.match(first, /发布预告 v1/);
     ensureBusinessRules(dir);

@@ -18,6 +18,21 @@ function modelReading(engine: "codex" | "claude", stdout: string, code: number |
   const { result, problem } = resultFrom(readMessage(reading.text), {});
   if (problem) return reading;
   try {
+    // A bare business JSON block is not a hub receipt; do not silently discard a completed report.
+    if (!result.events?.length) {
+      for (const block of reading.text.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/g)) {
+        let detail: any;
+        try {
+          detail = JSON.parse(block[1]);
+        } catch {
+          continue;
+        }
+        if (Number.isInteger(detail?.assignment) && typeof detail?.verdict === "string")
+          throw Error(
+            "部门报告未装入回执：使用 agent-autoloop 代码块及 events 数组，提交 company.result；subject 和 assignment 取本轮派工资料，detail 为已有报告的 JSON 字符串，不重做业务。",
+          );
+      }
+    }
     for (const event of result.events ?? []) {
       if (!["company.ceo.decision", "company.result"].includes(event.type)) continue;
       const detail = JSON.parse(event.detail ?? "{}");
