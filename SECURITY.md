@@ -47,7 +47,7 @@ ACP 的授权依赖 Agent 遵守协议。桥接只按结构化工具种类、编
 
 公司插件固定部门来源、阶段和派工编号，老板审批只从中台验证后的回答读取。它提供流程边界，不提供多租户隔离；模型依然以本机用户运行，权限含义沿用上文。公司工作区禁止自动发布、付款、发送外部消息，接受交付只归档。真实隔离需操作系统或容器权限。
 
-公司目录包含 `hub/config.json` 凭据、业务资料和 SQLite 数据库，必须留在仓库外，不提交 Git。单任务最大派工次数和并发约束仍保留；项目和 CEO 的每日次数上限已移除，这不构成服务商消费硬上限。
+公司目录包含 `hub/config.json` 凭据、业务资料和 SQLite 数据库，必须留在仓库外，不提交 Git。单任务最大派工次数和并发约束仍保留；默认不设每日次数上限；可在私有 company.json 配置 dailyModelRuns，它限制模型派出次数，不构成服务商金额上限。
 
 公司网页仅监听 127.0.0.1，严格校验 Host；写入额外要求同源 Origin 与随机 CSRF token。本人/来源密钥仅在服务端使用，不返回浏览器。文本交付物仅可读取账本登记且真实路径在 workspace 内的文件。默认工作台信任本机用户，不提供多用户权限。服务器部署必须由前置 HTTPS 代理对全部页面、静态资源及 API 认证；仅将可信服务环境变量 `AGENT_COMPANY_PUBLIC_ORIGIN` 设为精确 HTTPS 来源，代理保留真实 Origin、将 Host 固定为回环上游。不要直接暴露 3360/3361，也不要把来源改写成可信值以绕过 CSRF。
 
@@ -70,3 +70,7 @@ Company publishing uses an operator-owned `publishing.json` outside the model wo
 Company owner-reply decisions reference authenticated inbox event IDs, never model-written owner quotations. The coordinator checks source, message completeness and chronology against its read-only hub ledger, records the original text, and answers only the question’s matching card through the authenticated hub API. Duplicate or invalid references cannot partially apply a decision.
 
 Co-located workers persist their worker identity with each execution and must not settle, cancel or count another worker’s entries. Only the original primary worker adopts legacy unnamed entries; extra workers use separate scoped credentials.
+
+公司模型控制与计数仅在插件层实现，不修改内核。模型包装保留既有模型、目录和权限；负责人对话的额度例外依据可信规则名称，不依据事件正文。取代关闭只接受独立 company-owner 来源，不授予普通部门该事件来源；只能关闭暂停任务，不伪造发布或负责人答复。
+
+公司发布护栏在插件固定程序内执行：同渠道事务预留、北京时间日额度、冻结稿件的本人一次性确认及发布入口复核。跨机私钥由独立系统账号持有，sudoers 仅授权无参数固定转发程序，SSH 限来源、禁转发、固定强制命令并严格核验主机；必须实测模型沙箱不可 sudo、不可连接旧机、不可读私钥。未知发布预留不能自动跨日释放；回滚先撤销通道，不能用旧代码绕过待决确认。详见[窄通道](docs/xiaohongshu.md#跨机发布窄通道)。

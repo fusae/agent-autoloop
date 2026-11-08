@@ -23,13 +23,21 @@ export type Turn = {
   contextFile: string;
   folder: string;
 };
-export type Reading = { text?: string; session?: string; usage?: Usage; error?: string; finished?: boolean };
+export type Reading = {
+  text?: string;
+  session?: string;
+  usage?: Usage;
+  error?: string;
+  finished?: boolean;
+  /** The business finished, but the plugin-specific receipt is invalid; repair only the last message. */
+  receiptProblem?: string;
+};
 export type Adapter = {
   /** Its command line for this turn. */
   command(turn: Turn): string[];
   /** What its output says so far. `code` is null while it's still running or when it died without saying. */
   read(stdout: string, code: number | null, stderr: string): Reading;
-  /** Where a person can open this session. */
+  /** Where a person can open this session; empty for a fixed command without a session. */
   link?(session: string): string;
   /** Whether it's installed and signed in: what's wrong, in words a person can act on, or nothing. */
   check?(): string | null;

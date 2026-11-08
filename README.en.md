@@ -8,7 +8,7 @@ Start the local Chinese dashboard and task engine with `npm run company -- start
 
 Enable CEO management with `npm run company -- ceo "$HOME/.agent-company"`, configure the owner DM with `npm run company -- feishu "$HOME/.agent-company" ou_OWNER`, then restart. The CEO sets objectives, approves staff proposals, resolves blockers and escalates only unresolved questions to the owner. Reply `#42 your answer`; replies persist as project knowledge. Checks run every five minutes; the company Feishu channel polls owner replies every 30 seconds without a second WebSocket listener. See [company architecture](docs/company.md).
 
-Source snapshots refresh hourly and preserve last-success timestamps on failure. Malformed reports receive two bounded repair attempts; completed work schedules outcome follow-ups. Approved work and CEO management have no daily task-count cap. Identical unresolved CEO agendas get at most two additional reviews before a stalled-management notice; new facts wake management again. Run the hub and dashboard as OS user services for restart persistence; see [continuous operation and data sources](docs/company.md#持续运行与故障恢复).
+Source snapshots refresh hourly and preserve last-success timestamps on failure. Malformed reports receive two bounded repair attempts; completed work schedules outcome follow-ups. Approved work and CEO management have no daily task-count cap by default; optional private model quotas can defer new model launches. Identical unresolved CEO agendas get at most two additional reviews before a stalled-management notice; new facts wake management again. Run the hub and dashboard as OS user services for restart persistence; see [continuous operation and data sources](docs/company.md#持续运行与故障恢复).
 
 ---
 
@@ -274,3 +274,7 @@ In CEO mode, internal deliverables wait for CEO review. Rejected work is revised
 Owner replies in ordinary chat, quoted messages or after deferral can be linked to the original question using authenticated evidence, persisted as knowledge and synchronized to its card. QA rejection creates a revision; publication QA retries do not repost. Employee execution failures stay with the CEO for resolution or escalation.
 
 Company coordination and fixed publishing run on a separate worker, so occupied model slots cannot block task intake or feedback. Upgrades preserve running jobs and the existing model concurrency.
+
+Company operators can configure `activeRoles`, `inspections`, `ceoWake`, and `dailyModelRuns` in private `company.json`; omitted fields retain existing behavior. Capped work remains queued until the next Beijing calendar day; owner conversations are counted but remain available. See [model controls](docs/company.md#模型调用控制).
+
+Optional company settings `publishDailyLimit` and `publishApproval.confirmFirst` share limits across projects using the same channel, count Beijing calendar days, and require owner confirmation for the first successful posts. Defaults preserve existing behavior. See [publication guards](docs/company.md#发布护栏) and [the restricted cross-host Xiaohongshu channel](docs/xiaohongshu.md#跨机发布窄通道).

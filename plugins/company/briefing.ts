@@ -36,8 +36,8 @@ export function companyBriefing(directory: string, task?: string) {
       return { task: row ? JSON.parse(row.body as string) : null };
     }
     const tasks = rows(db, "SELECT body FROM tasks ORDER BY rowid DESC") as Task[];
-    const active = tasks.filter((t) => !["completed", "rejected"].includes(t.status));
-    const recent = tasks.filter((t) => ["completed", "rejected"].includes(t.status)).slice(0, 15);
+    const active = tasks.filter((t) => !["completed", "rejected", "superseded"].includes(t.status));
+    const recent = tasks.filter((t) => ["completed", "rejected", "superseded"].includes(t.status)).slice(0, 15);
     const describe = (t: Task) => ({
       id: t.id,
       title: t.title,
@@ -111,6 +111,14 @@ export function companyBriefing(directory: string, task?: string) {
   return {
     checkedAt: new Date().toISOString(),
     companyName: config.name,
+    controls: {
+      activeRoles: config.activeRoles ?? null,
+      inspections: config.inspections ?? true,
+      ceoWake: config.ceoWake ?? "legacy",
+      dailyModelRuns: config.dailyModelRuns ?? null,
+      workday: config.workday ?? { enabled: false, after: "09:00" },
+      permissions: config.permissions ?? null,
+    },
     company,
     business,
     operations,

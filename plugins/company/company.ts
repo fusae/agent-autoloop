@@ -1,3 +1,6 @@
+import { validateWorkday, type permissions } from "./workday.ts";
+import { validatePublishPolicy } from "./publication-policy.ts";
+import { ModelBudget } from "./model-budget.ts";
 import { publication, verifiedPublication, type Publication } from "./publication.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
@@ -25,6 +28,10 @@ export const workflows: Record<string, Role[]> = {
   finance: ["finance", "qa"],
 };
 for (const role of Object.keys(departments) as Role[]) workflows[`check-${role}`] = [role];
+for (const role of Object.keys(departments)) {
+  workflows[`workday-${role}`] = [role as Role];
+  workflows[`staff-${role}`] = [role as Role];
+}
 for (const kind of ["software", "content", "support", "finance"]) workflows[`internal-${kind}`] = [...workflows[kind]];
 export type CompanyConfig = {
   name: string;
@@ -33,6 +40,15 @@ export type CompanyConfig = {
   ceoMode?: boolean;
   contentReview?: "qa" | "ceo";
   dailyPlanning?: boolean;
+  activeRoles?: Role[];
+  inspections?: boolean;
+  ceoWake?: "legacy" | "events";
+  dailyModelRuns?: Partial<Record<Role | "total" | "employee", number>>;
+  workday?: { enabled: boolean; after: string; startDate?: string };
+  permissions?: typeof permissions;
+  publishVerification?: "qa" | "program";
+  publishDailyLimit?: number;
+  publishApproval?: { confirmFirst: number };
 };
 export type Context = {
   events: { id: string | number; source: string; type: string; subject: string; detail: string; hops?: number }[];
@@ -54,7 +70,7 @@ export type Task = {
   goal: string;
   kind: string;
   acceptance: string[];
-  status: "active" | "blocked" | "awaiting_approval" | "completed" | "rejected";
+  status: "active" | "blocked" | "awaiting_approval" | "completed" | "rejected" | "queued" | "superseded";
   stage: number;
   assignment: number;
   reports: (Report & { role: Role })[];
@@ -122,6 +138,30 @@ export class Company {
       config.maxAssignments > 30
     )
       throw new CompanyInputError("database 必须是绝对路径；maxAssignments 必须在 1–30 之间");
+    if (
+      config.activeRoles !== undefined &&
+      (!Array.isArray(config.activeRoles) || config.activeRoles.some((r) => !Object.hasOwn(departments, r)))
+    )
+      throw new CompanyInputError("在岗岗位不正确");
+    if (config.inspections !== undefined && typeof config.inspections !== "boolean")
+      throw new CompanyInputError("巡检开关不正确");
+    if (config.ceoWake !== undefined && !["legacy", "events"].includes(config.ceoWake))
+      throw new CompanyInputError("CEO 唤醒方式不正确");
+    if (
+      config.dailyModelRuns !== undefined &&
+      (!config.dailyModelRuns ||
+        Array.isArray(config.dailyModelRuns) ||
+        typeof config.dailyModelRuns !== "object" ||
+        Object.entries(config.dailyModelRuns).some(
+          ([key, n]) =>
+            (!["total", "employee"].includes(key) && !Object.hasOwn(departments, key)) ||
+            !Number.isSafeInteger(n) ||
+            n < 0,
+        ))
+    )
+      throw new CompanyInputError("每日模型次数需要非负整数及正确岗位");
+    validatePublishPolicy(config);
+    validateWorkday(config);
     this.config = config;
     mkdirSync(dirname(config.database), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(config.database);
@@ -161,7 +201,7 @@ export class Company {
     receipt.notice ??= [];
     receipt.notice.push({ key: `company-${task}`, title: `公司任务：${task}`, text });
   }
-  private dispatch(task: Task, receipt: Receipt) {
+  private dispatch(task: Task, receipt: Receipt, now: Date) {
     task.approval = null;
     if (task.assignment >= this.config.maxAssignments) {
       task.status = "blocked";
@@ -169,9 +209,22 @@ export class Company {
       if (!task.supervised) this.notice(receipt, task.id, task.reason);
       return;
     }
+    const role = workflows[task.kind][task.stage];
+    const program = task.kind === "publish-content" && role === "qa" && this.config.publishVerification === "program";
+    if (this.config.dailyModelRuns && !(task.kind === "publish-content" && (role === "growth" || program))) {
+      const budget = new ModelBudget(dirname(this.config.database), this.config);
+      try {
+        if (!budget.available(role, now, task.id)) {
+          budget.limited(now);
+          task.status = "queued";
+          return;
+        }
+      } finally {
+        budget.close();
+      }
+    }
     task.assignment++;
     task.status = "active";
-    const role = workflows[task.kind][task.stage];
     // Only the current brief and latest handoff travel in the event; full artifacts stay in the workspace.
     const detail = JSON.stringify({
       task: task.id,
@@ -181,6 +234,7 @@ export class Company {
       assignment: task.assignment,
       role,
       inspection: task.kind.startsWith("check-"),
+      workday: task.kind.startsWith("workday-"),
       internal: task.kind.startsWith("internal-"),
       supervised: !!task.supervised,
       publication: task.publication ?? null,
@@ -193,13 +247,17 @@ export class Company {
     receipt.events ??= [];
     receipt.events.push({
       id: `company:${task.id}:${task.assignment}`,
-      type: task.kind === "publish-content" && role === "growth" ? "company.work.publish" : `company.work.${role}`,
+      type: program
+        ? "company.work.verify"
+        : task.kind === "publish-content" && role === "growth"
+          ? "company.work.publish"
+          : `company.work.${role}`,
       subject: task.id,
       summary: `${departments[role]}处理任务 ${task.id}`,
       detail,
     });
   }
-  private event(event: Context["events"][number], receipt: Receipt) {
+  private event(event: Context["events"][number], receipt: Receipt, now: Date) {
     const id = taskId(event.subject);
     const data = object(JSON.parse(event.detail || "{}"));
     let task = this.task(id);
@@ -215,16 +273,40 @@ export class Company {
           !!this.config.ceoMode &&
           (String(data.kind).startsWith("check-") ||
             String(data.kind).startsWith("internal-") ||
+            String(data.kind).startsWith("workday-") ||
+            String(data.kind).startsWith("staff-") ||
             data.kind === "publish-content"),
         reports: [],
         approval: null,
         reason: "",
       };
-      this.dispatch(task, receipt);
+      this.dispatch(task, receipt, now);
       this.save(task, "created");
       return;
     }
     if (!task) throw new CompanyInputError("任务不存在");
+    if (event.source === "company-owner" && event.type === "company.task.supersede") {
+      if (task.status === "superseded") return;
+      if (!["blocked", "rejected", "queued"].includes(task.status))
+        throw new CompanyInputError("只能取代关闭已暂停的任务");
+      task.reason = words(data.reason, 400, "取代关闭原因");
+      task.status = "superseded";
+      task.approval = null;
+      this.save(task, "superseded");
+      return;
+    }
+    if (event.type === "company.model.deferred" && event.source === `company-${workflows[task.kind][task.stage]}`) {
+      if (task.status !== "active" || task.assignment !== data.assignment) return;
+      task.status = "queued";
+      this.save(task, "model-deferred");
+      return;
+    }
+    if (event.source === "company-inbox" && event.type === "company.task.resume") {
+      if (task.status !== "queued") return;
+      this.dispatch(task, receipt, now);
+      this.save(task, "model-resumed");
+      return;
+    }
     if (event.source === "company-inbox" && event.type === "company.task.failed") {
       if (task.status !== "active" || data.assignment !== task.assignment) return;
       task.status = "blocked";
@@ -237,13 +319,16 @@ export class Company {
         throw new CompanyInputError("只能重试已阻塞或被否决的任务");
       if (workflows[task.kind][task.stage] === "qa" && task.kind !== "publish-content")
         task.stage = Math.max(0, task.stage - 1);
-      this.dispatch(task, receipt);
+      this.dispatch(task, receipt, now);
       this.save(task, "retried");
       return;
     }
     const role = workflows[task.kind][task.stage];
-    if (event.type !== "company.result" || event.source !== `company-${role}`)
-      throw new CompanyInputError("来源不是当前负责部门");
+    const source =
+      task.kind === "publish-content" && role === "qa" && this.config.publishVerification === "program"
+        ? "company-verifier"
+        : `company-${role}`;
+    if (event.type !== "company.result" || event.source !== source) throw new CompanyInputError("来源不是当前负责部门");
     if (task.status !== "active" || data.assignment !== task.assignment)
       throw new CompanyInputError("结果已过期或任务已暂停");
     let report: Report;
@@ -255,12 +340,15 @@ export class Company {
         verdict: data.verdict as Report["verdict"],
         summary: words(data.summary, 400, "结果摘要"),
         artifacts:
-          data.verdict === "pass" && !task.kind.startsWith("check-") && task.kind !== "ceo"
+          data.verdict === "pass" &&
+          !task.kind.startsWith("check-") &&
+          !task.kind.startsWith("workday-") &&
+          task.kind !== "ceo"
             ? list(data.artifacts, "交付物", 150)
             : [],
         evidence: list(data.evidence, "核验依据", 150),
       };
-      if (task.kind.startsWith("check-") && data.verdict === "pass") {
+      if ((task.kind.startsWith("check-") || task.kind.startsWith("workday-")) && data.verdict === "pass") {
         try {
           report.inspection = inspection(data.inspection);
         } catch (error) {
@@ -319,12 +407,14 @@ export class Company {
       !(this.config.ceoMode && this.config.contentReview === "ceo" && task.kind === "internal-content")
     ) {
       task.stage++;
-      this.dispatch(task, receipt);
+      this.dispatch(task, receipt, now);
     } else if (
       task.kind === "ceo" ||
       task.kind === "publish-content" ||
       (task.kind.startsWith("check-") && (task.supervised || report.inspection?.state !== "blocked")) ||
-      task.kind.startsWith("internal-")
+      task.kind.startsWith("internal-") ||
+      task.kind.startsWith("workday-") ||
+      task.kind.startsWith("staff-")
     ) {
       task.status = "completed";
       task.approval = null;
@@ -344,7 +434,7 @@ export class Company {
     }
     this.save(task, `reported:${role}`);
   }
-  process(context: Context): Receipt {
+  process(context: Context, now = new Date()): Receipt {
     if (!Array.isArray(context.events) || !Array.isArray(context.answers))
       throw new CompanyInputError("缺少中台事件或回答上下文");
     const batch = createHash("sha256")
@@ -363,7 +453,7 @@ export class Company {
         if (this.db.prepare("SELECT id FROM processed WHERE id=?").get(key)) continue;
         this.db.exec("SAVEPOINT event_input");
         try {
-          this.event(event, receipt);
+          this.event(event, receipt, now);
           this.db.exec("RELEASE event_input");
         } catch (error) {
           this.db.exec("ROLLBACK TO event_input; RELEASE event_input");

@@ -29,11 +29,13 @@ node --disable-warning=ExperimentalWarning --test --test-name-pattern='agent-aut
 | 导出对象的方法 | 作用 |
 |---|---|
 | `command(turn)` | 返回命令参数数组；参数不作为 shell 代码执行 |
-| `read(stdout, code, stderr)` | 返回 `text`、`session`、`usage`、`error`、`finished`；运行中 `code` 为 `null` |
-| `link(session)` | 可选，会话链接；支持会话的插件可只重写错误回执 |
+| `read(stdout, code, stderr)` | 返回 `text`、`session`、`usage`、`error`、`finished`、可选 `receiptProblem`；运行中 `code` 为 `null` |
+| `link(session)` | 可选，会话链接；固定程序无会话时可返回空串；支持会话的插件可只重写错误回执 |
 | `check()` | 可选，能用返回 `null`，否则返回下一步怎么做 |
 
 `turn` 包含 `prompt`、`session`、`resume`、`cwd`、`access`、`model`、`effort`、`command`、`contextFile`、`folder`。`contextFile` 是资料文件，受限 CLI 需要允许读取 `folder`。`read` 要能处理未写完的输出；CLI 真正完成后才返回 `text`。Codex 中途重连的 `error` 在收到有效 `turn.completed` 后清除，避免将成功交付误判为失败并重做；没有完成事件、没有最终正文或最终 `turn.failed` 仍按失败处理。
+
+`receiptProblem` 仅用于插件自有回执格式错误，不表示业务失败；接单程序在原会话最多重写两次，失败时丢弃回执并保留原结局。包装模型须保留 `session`、`usage`、`finished` 和 `link`，会话路由不能依赖会丢失的内存映射。
 
 在规则里选择这个插件：
 

@@ -1,5 +1,5 @@
 // Failure modes: wrong accounts publish, an ambiguous timeout causes duplicate posts,
-// draft-only success is accepted, or unreviewed/invalid images are uploaded.
+// draft-only success is accepted, platform blank-line tabs hide a real post, or invalid images are uploaded.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -9,10 +9,10 @@ import { createHash } from "node:crypto";
 import { xhsPublication, parseXhsDraft } from "../plugins/xiaohongshu/publisher.ts";
 
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j9n8AAAAASUVORK5CYII=";
-function request(action = "lookup") {
+function request(action = "lookup", text = "明天记得还书。") {
   const content = JSON.stringify({
     title: "记下一件事",
-    content: "明天记得还书。",
+    content: text,
     images: [{ mime: "image/png", base64: png }],
   });
   return {
@@ -117,6 +117,43 @@ test("timeout persists an attempt before network write and never blindly retries
     await assert.rejects(xhsPublication(config, f.directory, request("publish"), f.call), /timeout/);
     assert.equal((await xhsPublication(config, f.directory, request(), f.call)).state, "unknown");
     await xhsPublication(config, f.directory, request("publish"), f.call);
+    assert.equal(f.posts(), 1);
+  } finally {
+    f.close();
+  }
+});
+test("readback tolerates blank-line tabs but retains content and publication checks", async () => {
+  const f = fixture();
+  const content = "明天记得还书。\n\n带上借书卡。";
+  try {
+    await xhsPublication(config, f.directory, request("publish", content), f.call);
+    f.show();
+    let changes: Record<string, unknown> = {};
+    let duplicate = false;
+    const readback = async (path: string, body?: any) => {
+      const data = await f.call(path, body);
+      if (path === "/api/v1/feeds/detail")
+        Object.assign(data.data.note, { desc: " 明天记得还书。 \n\t\n 带上借书卡。\t" }, changes);
+      if (path === "/api/v1/user/me" && duplicate) data.data.feeds.push(data.data.feeds[0]);
+      return data;
+    };
+    assert.equal((await xhsPublication(config, f.directory, request("lookup", content), readback)).state, "published");
+    for (const mismatch of [
+      { desc: "明天记得买书。\n\t\n带上借书卡。" },
+      { desc: "明天记得 还书。\n\t\n带上借书卡。" },
+      { user: { userId: "other" } },
+      { noteId: "c".repeat(24) },
+      { title: "另一篇" },
+      { imageList: [] },
+      { time: Date.now() - 120_000 },
+      { time: Date.now() + 120_000 },
+    ]) {
+      changes = mismatch;
+      assert.equal((await xhsPublication(config, f.directory, request("lookup", content), readback)).state, "unknown");
+    }
+    changes = {};
+    duplicate = true;
+    assert.equal((await xhsPublication(config, f.directory, request("lookup", content), readback)).state, "unknown");
     assert.equal(f.posts(), 1);
   } finally {
     f.close();

@@ -1,3 +1,4 @@
+import { ModelBudget } from "../plugins/company/model-budget.ts";
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -24,6 +25,7 @@ export async function companyCLI(args: string[]) {
         "      agent-company feishu <目录> <本人 open_id>\n" +
         "      agent-company submit <目录> <任务编号> <需求.json>\n" +
         "      agent-company retry <目录> <任务编号> [请求编号]\n" +
+        "      agent-company supersede <目录> <任务编号> <取代原因>\n" +
         "      agent-company show|history <目录> <任务编号>\n" +
         "      agent-company answer <目录> <卡片编号> <选项序号，从1开始>",
     );
@@ -179,7 +181,19 @@ export async function companyCLI(args: string[]) {
         const config = read(join(directory, "hub/config.json"));
         try {
           const state = await hubClient(config.url, config.owner).state();
-          json({ tasks, cards: state.cards, spending: state.spending });
+          const cfg = read(join(directory, "company.json"));
+          const budget = cfg.dailyModelRuns ? new ModelBudget(directory, cfg) : null;
+          try {
+            json({
+              tasks,
+              cards: state.cards,
+              spending: state.spending,
+              modelRuns: budget?.snapshot() ?? null,
+              controls: { activeRoles: cfg.activeRoles, inspections: cfg.inspections, ceoWake: cfg.ceoWake },
+            });
+          } finally {
+            budget?.close();
+          }
         } catch {
           json({ tasks, hub: "离线；这里只显示公司已保存的任务状态" });
         }
@@ -196,6 +210,36 @@ export async function companyCLI(args: string[]) {
     if (!Number.isSafeInteger(card) || card < 1 || !Number.isSafeInteger(choice) || choice < 1 || choice > 5)
       throw new Error("需要卡片编号和选项序号（从 1 开始）");
     json(await hubClient(config.url, config.owner).answer(card, { choice: choice - 1 }));
+    return;
+  }
+  if (command === "supersede") {
+    const id = taskId(rest[0] ?? ""),
+      reason = rest[1];
+    if (!reason?.trim() || reason.length > 400) throw new Error("取代原因需要1–400字");
+    const company = new Company(read(join(directory, "company.json")));
+    try {
+      if (!["blocked", "rejected", "queued", "superseded"].includes(company.task(id)?.status ?? ""))
+        throw new Error("只能取代关闭已暂停的任务");
+    } finally {
+      company.close();
+    }
+    ensureBusinessRules(directory);
+    if (!config.ownerSource) {
+      config.ownerSource = execFileSync(process.execPath, [hubCLI, "key", "new", "source", "company-owner"], {
+        env: environment(directory),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+      writeFileSync(join(directory, "hub/config.json"), JSON.stringify(config, null, 2) + "\n", { mode: 0o600 });
+    }
+    const response = await hubClient(config.url, config.ownerSource).event({
+      id: `company:supersede:${id}`,
+      type: "company.task.supersede",
+      subject: id,
+      detail: JSON.stringify({ reason }),
+    });
+    if (!response.routed?.length) throw new Error("取代事件已记录但未接单，请先升级公司规则");
+    json(response);
     return;
   }
   if (command !== "submit" && command !== "retry") throw new Error("未知命令，运行 npm run company -- help");

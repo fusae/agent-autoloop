@@ -1,3 +1,4 @@
+import { weeklyGoal, type WeeklyGoal } from "./workday.ts";
 import { inspection, type ActionProposal } from "./inspection.ts";
 export type StaffPlan = {
   business: string;
@@ -11,6 +12,8 @@ export type StaffPlan = {
   reviewAt: string;
 };
 export type ExecutiveDecision = {
+  weeklyGoals?: WeeklyGoal[];
+  manualMetrics?: { publication: string; event: number; reads: number }[];
   staffPlans?: StaffPlan[];
   briefs: { business: string; objective: string }[];
   directives: { business: string; action: ActionProposal }[];
@@ -68,6 +71,7 @@ export type Knowledge = {
   at: string;
 };
 export type Leadership = {
+  manualMetrics?: import("./feedback.ts").ManualMetric[];
   enabled: boolean;
   lastTask: string | null;
   processed: string | null;
@@ -83,6 +87,8 @@ export type Leadership = {
   ownerReplyEvents?: string[];
   retries: Record<string, number>;
   nextReviewAt?: string;
+  eventInputs?: string;
+  eventOutcomes?: Record<string, string>;
   unchangedReviews?: number;
   stalled?: { fingerprint: string; at: string; reason: string };
   pendingRetries?: { task: string; decision: string }[];
@@ -112,6 +118,23 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
     return d[key].map(object);
   };
   return {
+    ...(d.weeklyGoals !== undefined ? { weeklyGoals: list("weeklyGoals", 6).map(weeklyGoal) } : {}),
+    ...(d.manualMetrics !== undefined
+      ? {
+          manualMetrics: list("manualMetrics", 5).map((a) => {
+            if (
+              typeof a.publication !== "string" ||
+              !/^[a-f0-9]{32}$/.test(a.publication) ||
+              !Number.isSafeInteger(a.event) ||
+              a.event < 1 ||
+              !Number.isSafeInteger(a.reads) ||
+              a.reads < 0
+            )
+              throw Error("人工阅读量需要已发布编号、本人消息事件和非负整数");
+            return { publication: a.publication, event: a.event, reads: a.reads };
+          }),
+        }
+      : {}),
     ...(d.staffPlans !== undefined
       ? {
           staffPlans: list("staffPlans", 6).map((a): StaffPlan => {

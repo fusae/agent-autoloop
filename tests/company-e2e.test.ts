@@ -1,5 +1,6 @@
 // Failure modes: generated company rules work in isolation but not through the real worker, the hop cap prevents final
 // approval, or the CLI leaks state outside its isolated home. Fake departments are explicit fixtures, never real models.
+// Cleanup must tolerate a detached fake agent finishing its last log write after the CLI exits.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -219,7 +220,7 @@ console.log('模拟部门完成。\\n\\n\`\`\`agent-autoloop\\n'+JSON.stringify(
         await new Promise((r) => up!.once("exit", r));
       }
       office?.close();
-      rmSync(scratch, { recursive: true, force: true });
+      rmSync(scratch, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   },
 );

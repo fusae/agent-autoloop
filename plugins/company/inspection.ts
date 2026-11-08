@@ -1,4 +1,6 @@
+import { permissions, type WorkOperation } from "./workday.ts";
 export type ActionProposal = {
+  operation?: WorkOperation;
   key: string;
   title: string;
   kind: "software" | "content" | "support" | "finance";
@@ -46,8 +48,11 @@ export function inspection(value: unknown): Inspection {
     const a = obj(raw);
     if (!["software", "content", "support", "finance"].includes(a.kind)) throw new Error("只能安排内部工作");
     if (!Array.isArray(a.acceptance) || !a.acceptance.length || a.acceptance.length > 3)
-      throw new Error("需要验收标准");
+      throw new Error("acceptance 验收标准需要 1–3 项，每项最多 100 字");
+    if (a.operation !== undefined && !Object.values(permissions).flat().includes(a.operation))
+      throw Error("工作权限类型不正确");
     return {
+      ...(a.operation !== undefined ? { operation: a.operation } : {}),
       key: key(a.key),
       title: str(a.title, 80),
       kind: a.kind,

@@ -1,5 +1,5 @@
 // Failure modes: replies from another sender or unrelated messages become decisions, restart loses routing,
-// failed delivery drops a card, or retry sends the same report twice.
+// failed delivery drops a card, retry sends the same report twice, or CLI upgrades silently break polling/callbacks.
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -375,82 +375,102 @@ test("legacy questions gain buttons without changing their answer binding and tr
   }
 });
 
-// The one managed listener consumes persisted raw callbacks and exits with the channel; no real CLI is used.
-test("channel drains durable callback files and stops its sole listener", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "company-feishu-listener-"));
-  const file = join(dir, "state.json"),
-    spool = file + ".callbacks",
-    script = join(dir, "lark");
-  const abort = new AbortController(),
-    answers: any[] = [];
-  const timeout = setTimeout(() => abort.abort(), 5000);
-  const hub = {
-    delivered: async () => {},
-    failed: async () => {},
-    answer: async (...args: any[]) => {
-      answers.push(args);
-    },
-    nextCard: async () => {
-      await new Promise<void>((resolve) => {
-        if (abort.signal.aborted) resolve();
-        else abort.signal.addEventListener("abort", () => resolve(), { once: true });
-      });
-      return { card: null };
-    },
-  } as any;
-  try {
-    await new CompanyFeishu(
-      file,
-      "ou_owner",
-      hub,
-      async () => ({ data: { message_id: "om_native" } }),
-      undefined,
-      true,
-    ).deliver(card);
-    mkdirSync(spool);
-    writeFileSync(
-      join(spool, "pending.json"),
-      JSON.stringify({
-        header: { event_id: "persisted", event_type: "card.action.trigger" },
-        event: {
-          operator: { open_id: "ou_owner" },
-          context: { open_message_id: "om_native" },
-          action: { value: { card: 42, version: 1, choice: 0 } },
-        },
-      }),
-    );
-    writeFileSync(
-      script,
-      `#!${process.execPath}
+// HTTP mode must drain the same spool without spawning a listener; legacy mode must stop its owned listener.
+for (const listener of [true, false])
+  test(`channel drains durable callback files with CLI listener ${listener}`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "company-feishu-listener-"));
+    const file = join(dir, "state.json"),
+      spool = file + ".callbacks",
+      script = join(dir, "lark");
+    const abort = new AbortController(),
+      answers: any[] = [];
+    const timeout = setTimeout(() => abort.abort(), 5000);
+    const hub = {
+      delivered: async () => {},
+      failed: async () => {},
+      answer: async (...args: any[]) => {
+        answers.push(args);
+      },
+      nextCard: async () => {
+        await new Promise<void>((resolve) => {
+          if (abort.signal.aborted) resolve();
+          else abort.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return { card: null };
+      },
+    } as any;
+    try {
+      await new CompanyFeishu(
+        file,
+        "ou_owner",
+        hub,
+        async () => ({ data: { message_id: "om_native" } }),
+        undefined,
+        true,
+      ).deliver(card);
+      mkdirSync(spool);
+      writeFileSync(
+        join(spool, "pending.json"),
+        JSON.stringify({
+          header: { event_id: "persisted", event_type: "card.action.trigger" },
+          event: {
+            operator: { open_id: "ou_owner" },
+            context: { open_message_id: "om_native" },
+            action: { value: { card: 42, version: 1, choice: 0 } },
+          },
+        }),
+      );
+      writeFileSync(
+        script,
+        `#!${process.execPath}
 const fs=require('node:fs'); const a=process.argv.slice(2);
 if(a[0]==='event') {
-  if(a.includes('--force')||a.includes('--mode')||!a.includes('card.action.trigger')||a[a.indexOf('--output-dir')+1]!=='.') process.exit(2);
+  if(a[1]!=='consume'||a.includes('--quiet')||a.includes('--force')||!a.includes('card.action.trigger')||a[a.indexOf('--output-dir')+1]!=='.') process.exit(2);
+  process.stdin.resume(); process.stdin.on('end',()=>process.exit(3));
+  console.error('[event] ready event_key=card.action.trigger');
   fs.writeFileSync(${JSON.stringify(join(dir, "pid"))},String(process.pid));
   process.on('SIGTERM',()=>{fs.writeFileSync(${JSON.stringify(join(dir, "stopped"))},'yes');process.exit(0);});
   setInterval(()=>{},1000);
-} else console.log(JSON.stringify({data:{messages:[],has_more:false}}));
+} else console.log(JSON.stringify({data:{items:[{message_id:'om_native',chat_id:'oc_owner'}],messages:[],has_more:false}}));
 `,
-      { mode: 0o700 },
-    );
-    const running = companyChannel({
-      hub,
-      signal: abort.signal,
-      log: () => {},
-      options: { lark: script, stateFile: file, user: "ou_owner", cards: true, cardCallbacks: true },
-    });
-    while (!abort.signal.aborted && (!existsSync(join(dir, "pid")) || !answers.length))
-      await new Promise((r) => setTimeout(r, 20));
-    assert.equal(answers.length, 1);
-    assert.equal(existsSync(join(spool, "pending.json")), false);
-    abort.abort();
-    await running;
-    assert.equal(readFileSync(join(dir, "stopped"), "utf8"), "yes");
-  } finally {
-    abort.abort();
-    clearTimeout(timeout);
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+        { mode: 0o700 },
+      );
+      const running = companyChannel({
+        hub,
+        signal: abort.signal,
+        log: () => {},
+        options: {
+          lark: script,
+          stateFile: file,
+          user: "ou_owner",
+          cards: true,
+          cardCallbacks: true,
+          cardCallbackListener: listener,
+        },
+      });
+      while (
+        !abort.signal.aborted &&
+        ((listener && !existsSync(join(dir, "pid"))) || !answers.length || existsSync(join(spool, "pending.json")))
+      )
+        await new Promise((r) => setTimeout(r, 20));
+      assert.equal(answers.length, 1);
+      assert.equal(existsSync(join(spool, "pending.json")), false);
+      if (listener)
+        assert.match(readFileSync(join(spool, "connection.log"), "utf8"), /ready event_key=card.action.trigger/);
+      else {
+        assert.equal(existsSync(join(dir, "pid")), false);
+        assert.equal(existsSync(join(spool, "connection.log")), false);
+      }
+      abort.abort();
+      await running;
+      if (listener) assert.equal(readFileSync(join(dir, "stopped"), "utf8"), "yes");
+      else assert.equal(existsSync(join(dir, "pid")), false);
+    } finally {
+      abort.abort();
+      clearTimeout(timeout);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
 // Free-form decisions must submit text, never reinterpret a typed number as a button choice.
 test("decision cards accept validated owner form text and clear the form after submission", async () => {
@@ -723,6 +743,155 @@ test("withdrawn quoted messages are explicitly unavailable rather than guessed",
     assert.ok(detail.quoted.unavailable);
     assert.equal(detail.quoted.text, undefined);
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// CLI 1.0.99 rejects bot --user-id history; resolving an existing sent message must not resend or lose the cursor.
+test("bot polling resolves and persists the owner chat, retries history without skipping messages", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-feishu-chat-id-"));
+  const file = join(dir, "state.json");
+  const calls: string[][] = [],
+    events: any[] = [];
+  const cursor = "2026-11-07T05:54:09.929Z";
+  let fail = true;
+  writeFileSync(
+    file,
+    JSON.stringify({ cards: { 53: { ref: "om_owner", version: 1, open: true, options: [] } }, seen: [], cursor }),
+  );
+  const lark = async (args: string[]) => {
+    calls.push(args);
+    if (args[0] === "api") return { data: { items: [{ message_id: "om_owner", chat_id: "oc_owner" }] } };
+    assert.equal(args[args.indexOf("--chat-id") + 1], "oc_owner");
+    assert.equal(args.includes("--user-id"), false);
+    assert.equal(args[args.indexOf("--order") + 1], "asc");
+    assert.equal(args[args.indexOf("--start") + 1], "2026-11-07T05:52:09.929Z");
+    if (fail) throw Error("read unavailable");
+    return {
+      data: {
+        messages: [
+          {
+            message_id: "om_question",
+            msg_type: "text",
+            sender: { id: "ou_owner", sender_type: "user" },
+            content: "进展怎样？",
+          },
+        ],
+        has_more: false,
+      },
+    };
+  };
+  try {
+    let bridge = new CompanyFeishu(file, "ou_owner", {} as any, lark, async (e) => events.push(e));
+    await assert.rejects(bridge.poll(), /read unavailable/);
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).cursor, cursor);
+    fail = false;
+    bridge = new CompanyFeishu(file, "ou_owner", {} as any, lark, async (e) => events.push(e));
+    await bridge.poll();
+    assert.equal(calls.filter((a) => a[0] === "api").length, 1);
+    assert.equal(
+      calls.some((a) => a.includes("+messages-send")),
+      false,
+    );
+    assert.equal(events.length, 1);
+    assert.notEqual(JSON.parse(readFileSync(file, "utf8")).cursor, cursor);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Flattened consume callbacks must retain the original authentication, version, form, and deduplication checks.
+test("CLI consume callbacks authenticate owner, message and version and preserve form answers", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-feishu-consume-"));
+  const answers: any[] = [];
+  const hub = { delivered: async () => {}, answer: async (...a: any[]) => answers.push(a) } as any;
+  try {
+    const bridge = new CompanyFeishu(
+      join(dir, "state.json"),
+      "ou_owner",
+      hub,
+      async () => ({ data: { message_id: "om_card" } }),
+      undefined,
+      true,
+    );
+    await bridge.deliver(card);
+    const value = { card: 42, version: 1, choice: 0 };
+    const raw = {
+      type: "card.action.trigger",
+      event_id: "e1",
+      operator_id: "ou_owner",
+      message_id: "om_card",
+      action_tag: "button",
+      action_value: JSON.stringify(value),
+    };
+    for (const bad of [
+      { ...raw, operator_id: "ou_other" },
+      { ...raw, message_id: "om_other" },
+      { ...raw, action_value: JSON.stringify({ ...value, version: 2 }) },
+      { ...raw, action_value: "malformed" },
+    ])
+      assert.equal(await bridge.receiveAction(bad), false);
+    assert.equal(await bridge.receiveAction(raw), true);
+    assert.equal(await bridge.receiveAction(raw), false);
+    await bridge.deliver({ ...card, id: 43 });
+    assert.equal(
+      await bridge.receiveAction({
+        ...raw,
+        event_id: "e2",
+        action_name: "submit_reply",
+        action_value: JSON.stringify({ card: 43, version: 1, action: "reply" }),
+        form_value: JSON.stringify({ reply: "先核查资料" }),
+      }),
+      true,
+    );
+    assert.deepEqual(answers, [
+      [42, { choice: 0, by: "ou_owner", ref: "om_card" }],
+      [43, { text: "先核查资料", by: "ou_owner", ref: "om_card" }],
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Operational failures must reveal the CLI cause, without exposing tokens or sending diagnostic messages.
+test("poll diagnostics retain CLI validation errors and redact credentials", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-feishu-error-"));
+  const abort = new AbortController(),
+    logs: string[] = [];
+  const timeout = setTimeout(() => abort.abort(), 3000);
+  const file = join(dir, "state.json"),
+    script = join(dir, "lark");
+  writeFileSync(file, JSON.stringify({ cards: {}, seen: [], cursor: new Date().toISOString(), chatId: "oc_owner" }));
+  writeFileSync(
+    script,
+    `#!${process.execPath}
+console.error(JSON.stringify({error:{message:'invalid_argument: --user-id requires user identity; token=private-token secret=private-secret https://example.test/?key=private-key'}})); process.exit(2);
+`,
+    { mode: 0o700 },
+  );
+  try {
+    await companyChannel({
+      options: { lark: script, stateFile: file, user: "ou_owner" },
+      signal: abort.signal,
+      log: (line) => {
+        logs.push(line);
+        abort.abort();
+      },
+      hub: {
+        nextCard: async () => {
+          await new Promise<void>((resolve) => {
+            if (abort.signal.aborted) resolve();
+            else abort.signal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          return { card: null };
+        },
+      } as any,
+    });
+    assert.match(logs.join("\n"), /invalid_argument.*--user-id requires user identity/);
+    assert.doesNotMatch(logs.join("\n"), /private-token|private-secret|private-key/);
+  } finally {
+    abort.abort();
+    clearTimeout(timeout);
     rmSync(dir, { recursive: true, force: true });
   }
 });

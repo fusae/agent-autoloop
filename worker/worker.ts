@@ -79,6 +79,9 @@ export type WorkerOptions = {
   now?: () => number;
 };
 
+// A shared adapter may also run fixed commands that have no resumable session.
+const resumable = (adapter: Adapter, session: string) => (adapter.link?.(session) ? session : undefined);
+
 function save(entry: Entry) {
   const file = path.join(entry.dir, "entry.json");
   writeFileSync(`${file}.tmp`, JSON.stringify(entry), { mode: 0o600 });
@@ -273,10 +276,13 @@ export function createWorker({
   function discardReceipt(entry: Entry, adapter: Adapter, problem: string) {
     const original = { ...entry, turn: entry.turn - entry.repairs };
     const reading = read(original, adapter, 0);
-    const { result } = resultFrom(readMessage(reading.text!), {
-      session: reading.session ?? (adapter.link ? entry.session : undefined),
-      usage: entry.usage,
-    });
+    const { result } = resultFrom(
+      { ...readMessage(reading.text!), ...(reading.receiptProblem && { problem: reading.receiptProblem }) },
+      {
+        session: reading.session ?? resumable(adapter, entry.session),
+        usage: entry.usage,
+      },
+    );
     const notice: Notice = {
       title: `「${entry.job.rule.name}」的回执读不懂`,
       text: `这一轮按第一行算结束了，但它要中台做的事没有生效（${problem}）。原文在 ${files(original).out}。`,
@@ -289,7 +295,7 @@ export function createWorker({
     // One ended because its turn was over but it wouldn't exit said what it had to say first.
     const seen = read(entry, adapter, entry.finishedAt ? 0 : code);
     entry.usage = addUsage(entry.usage, seen.usage);
-    const session = seen.session ?? (entry.turn > 0 && adapter.link ? entry.session : undefined);
+    const session = seen.session ?? (entry.turn > 0 ? resumable(adapter, entry.session) : undefined);
     if (seen.session) entry.session = seen.session;
     const usage = entry.usage && { usage: entry.usage };
     const known = session && { session };
@@ -318,7 +324,10 @@ export function createWorker({
       }
       return endWith(entry, { outcome: "failed", error: error.slice(0, 500), ...known, ...usage });
     }
-    const { result, problem } = resultFrom(readMessage(seen.text), { session, usage: entry.usage });
+    const { result, problem } = resultFrom(
+      { ...readMessage(seen.text), ...(seen.receiptProblem && { problem: seen.receiptProblem }) },
+      { session, usage: entry.usage },
+    );
     if (entry.repairs && !problem && result.outcome === "failed") return discardReceipt(entry, adapter, result.error!);
     if (!problem) return endWith(entry, result);
     // Its work is done and only the receipt is wrong: it writes the receipt again, and does nothing again.
@@ -371,7 +380,7 @@ export function createWorker({
       return conclude(entry, adapter, existsSync(exit) ? Number(readFileSync(exit, "utf8").trim()) : null);
     }
     const seen = read(entry, adapter, null);
-    const session = seen.session ?? (adapter.link ? (entry.resume ?? entry.session) : undefined);
+    const session = seen.session ?? resumable(adapter, entry.resume ?? entry.session);
     if (session && session !== entry.told) {
       try {
         await hub.started(entry.run, entry.token, { session, ...(adapter.link && { link: adapter.link(session) }) });

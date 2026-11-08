@@ -27,6 +27,7 @@ export function ownerReplyEvidence(directory: string, event: number, after: stri
     )
       throw Error("负责人原话不完整，不能据此关闭问题");
     return {
+      at: String(row.received_at),
       text: detail.question,
       message: detail.message,
       context: typeof detail.quoted?.text === "string" ? detail.quoted.text.slice(0, 2200) : undefined,
