@@ -1,3 +1,4 @@
+import { xStatus } from "./rabbitrun.ts";
 import {
   businessPublishPolicy,
   previewEnabled,
@@ -103,7 +104,7 @@ for (const event of context.events) {
     report = {
       assignment: data.assignment,
       verdict: "pass",
-      summary: proof.x ? "币安广场已发布；X 待发，需要在 Mac 上执行" : "平台已确认内容发布，交验收核对",
+      summary: proof.x ? `币安广场已发布；${xStatus(proof.x)}` : "平台已确认内容发布，交验收核对",
       artifacts: [artifact],
       evidence: [`${proof.channel}：${proof.url}`.slice(0, 150)],
       publication: proof,

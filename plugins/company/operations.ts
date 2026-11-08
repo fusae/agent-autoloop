@@ -1,3 +1,4 @@
+import { pendingXReminder } from "./rabbitrun.ts";
 import { draftSummaries } from "./content.ts";
 import { employeeEntries, validateReporting, nextReportTime, reportTime, type EmployeeReport } from "./reporting.ts";
 import {
@@ -1327,7 +1328,7 @@ export class Operations {
       (receipt.notice ??= []).push({
         key: `ceo-evening-${entry.date}`,
         title: new Date(entry.date).getUTCDay() === 1 ? "CEO · 周报" : "CEO · 日报",
-        text: d?.report ?? report.summary,
+        text: (d?.report ?? report.summary) + pendingXReminder(publicationResults(this.directory), entry.date),
       });
       entry.processed = true;
     }

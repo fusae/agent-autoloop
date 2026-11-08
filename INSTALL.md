@@ -127,4 +127,4 @@ Claude Code 需 2.1.317 或更新版本；Linux 安装 `bubblewrap`、`socat`。
 
 公司额度升级需同步公司模型包装器、模型适配器与 `worker/agents.ts`；当天已登记日报/周报不受额度阻挡，确认未开始模型工作的失败自动冲回，旧启动账目不改写，详见[模型调用控制](docs/company.md#模型调用控制)。
 
-公司 rabbitrun 业务、root 发布入口及 Mac 交互命令的安装边界见 [海外运营配置](examples/recipes/company/rabbitrun.md)；不要用真实发布验证安装。
+公司 rabbitrun 业务、root 发布入口及飞书手动发布确认的安装边界见 [海外运营配置](examples/recipes/company/rabbitrun.md)；不要用真实发布验证安装。

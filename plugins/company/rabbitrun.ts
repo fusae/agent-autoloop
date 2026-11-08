@@ -75,6 +75,7 @@ export function xReceipt(value: unknown): XReceipt {
     throw Error("X 发布状态无效");
   if (
     x.state === "published" &&
+    (x.url !== undefined || x.remoteId !== undefined) &&
     (!/^[0-9]{1,30}$/.test(x.remoteId ?? "") || x.url !== `https://x.com/rabbitrun_eth/status/${x.remoteId}`)
   )
     throw Error("X 回执必须属于 rabbitrun_eth");
@@ -84,13 +85,22 @@ export function xReceipt(value: unknown): XReceipt {
     state: x.state,
     attempts: x.attempts,
     at: x.at,
-    ...(x.state === "published" ? { url: x.url, remoteId: x.remoteId } : {}),
+    ...(x.state === "published" && x.url ? { url: x.url, remoteId: x.remoteId } : {}),
     ...(x.reason ? { reason: x.reason } : {}),
   };
 }
 export function xStatus(x: XReceipt) {
-  if (x.state === "published") return `X 已发：${x.url}`;
-  if (x.state === "failed") return "X 发布失败，需要在 Mac 上核对登录、验证码或平台提示；不自动重试。";
-  if (x.state === "claimed") return "X 正在 Mac 上处理；若中断，先核对是否已发布，不能重复发送。";
-  return "X 待发，需要在 Mac 上执行";
+  return x.state === "published" ? `X 已发${x.url ? "：" + x.url : ""}` : "X 待发，请手动发布";
+}
+export const manualXNotice = (key: string) => `X 待发，请手动发布\n发布稿件：${key}`;
+export const manualXKey = (card: { kind: string; text: string }) =>
+  card.kind === "notice" ? /^X 待发，请手动发布\n发布稿件：([a-f0-9]{32})$/.exec(card.text)?.[1] : undefined;
+export function pendingXReminder(results: { x?: XReceipt; publishedAt: string }[], date: string) {
+  const pending = results.filter(
+    (p) =>
+      p.x &&
+      p.x.state !== "published" &&
+      new Date(Date.parse(p.publishedAt) + 8 * 3600000).toISOString().slice(0, 10) < date,
+  );
+  return pending.length ? `\n\nX 还有 ${pending.length} 篇待手动发布，发布后请点原卡片“我已在 X 发布”。` : "";
 }

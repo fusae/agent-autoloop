@@ -104,17 +104,35 @@ async function openDraft(key) {
     const draft = await api(`/api/publications/${encodeURIComponent(key)}`);
     $("#draft-title").textContent = draft.title;
     box.innerHTML = `<p class="draft-meta">${esc(homeBusiness(data() ?? {}, draft.business))}，正文 ${Array.from(draft.content).length} 字，配图 ${draft.images} 张</p>
+      <button type="button" class="text-action" data-copy-draft="${esc(key)}">复制全文</button>
       <div class="draft-body">${esc(draft.content)}</div>
-      ${draft.images ? `<div class="draft-images">${Array.from({ length: draft.images }, (_, i) => `<a href="api/publications/${esc(key)}/image/${i}" target="_blank" rel="noopener"><img src="api/publications/${esc(key)}/image/${i}" alt="第 ${i + 1} 张配图" loading="lazy" /></a>`).join("")}</div>` : '<p class="empty-line">这份稿件没有配图。</p>'}`;
+      ${draft.images ? `<div class="draft-images">${Array.from({ length: draft.images }, (_, i) => `<a href="api/publications/${esc(key)}/image/${i}" target="_blank" rel="noopener"><img src="api/publications/${esc(key)}/image/${i}" alt="第 ${i + 1} 张配图" loading="lazy" /></a><a class="text-action" href="api/publications/${esc(key)}/image/${i}" download="配图-${i + 1}">下载配图 ${i + 1}</a>`).join("")}</div>` : '<p class="empty-line">这份稿件没有配图。</p>'}`;
   } catch (error) {
     box.innerHTML = `<p class="empty-line">${esc(error.message)}</p>`;
   }
 }
-if (typeof document !== "undefined")
+async function copyDraft(key, button) {
+  try {
+    const draft = await api(`/api/publications/${encodeURIComponent(key)}`);
+    const text = draft.content.split(/\r?\n/, 1)[0] === draft.title ? draft.content : `${draft.title}\n\n${draft.content}`;
+    await navigator.clipboard.writeText(text);
+    button.textContent = "已复制";
+  } catch {
+    button.textContent = "复制失败，请查看全文复制";
+  }
+}
+if (typeof document !== "undefined") {
+  document.addEventListener("DOMContentLoaded", () => {
+    const key = new URLSearchParams(location.search).get("draft");
+    if (/^[a-f0-9]{32}$/.test(key ?? "")) openDraft(key);
+  });
   document.addEventListener("click", (event) => {
     const button = event.target.closest?.("[data-draft]");
     if (button) openDraft(button.dataset.draft);
+    const copy = event.target.closest?.("[data-copy-draft]");
+    if (copy) copyDraft(copy.dataset.copyDraft, copy);
   });
+}
 
 function homeGoal(stock) {
   if (!stock || stock.target == null) return '<span class="goal-none">本周还没定发帖目标</span>';
@@ -203,8 +221,8 @@ function homePosts(d) {
     });
   for (const proof of results.filter((r) => r.x)) {
     const x = proof.x;
-    const label = x.state === "published" ? "X 已发" : x.state === "failed" ? "X 发布失败，需要在 Mac 上核对" : x.state === "claimed" ? "X 已领取，待核对结果" : "X 待发，需要在 Mac 上执行";
-    cards.push(`<li class="post"><div class="post-title"><h3>rabbitrun 币圈内容</h3><span>${homeShortDate(proof.publishedAt)} ${homeClock(proof.publishedAt)}</span> ${draftButton(proof.key, "看全文")}</div><p><a href="${esc(proof.url)}" target="_blank" rel="noopener noreferrer">币安广场</a> · ${x.state === "published" ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">X</a>` : esc(label)}</p>${x.state !== "published" ? '<p class="post-note">Mac 触发命令：rabbitrun-x</p>' : ""}<p class="post-note">只记录发布结果，暂不采集互动数据。</p></li>`);
+    const label = x.state === "published" ? "X 已发" : "X 待发";
+    cards.push(`<li class="post"><div class="post-title"><h3>rabbitrun 币圈内容</h3><span>${homeShortDate(proof.publishedAt)} ${homeClock(proof.publishedAt)}</span> ${draftButton(proof.key, "全文和配图")} <button type="button" class="text-action" data-copy-draft="${esc(proof.key)}">复制全文</button></div><p><a href="${esc(proof.url)}" target="_blank" rel="noopener noreferrer">币安广场</a> · ${x.state === "published" && x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${label}</a>` : label}</p><p class="post-note">只记录发布结果，暂不采集互动数据。</p></li>`);
   }
   const waiting = (d.home?.operations ?? d.operations ?? []).flatMap((p) =>
     (p.plans ?? [])

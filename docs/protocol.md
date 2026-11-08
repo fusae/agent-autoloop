@@ -418,4 +418,4 @@ Ship 使用本引擎仓库的 `plugins/delivery/action.yml`，项目固定到发
 
 公司网页的按需读取、分页和 ETag 仅属于外部客户端 `/api/*`，不改变上述 `/v1/*`；网页与服务端须同步升级，详见[网页按需读取](company.md#网页按需读取)。
 
-公司应用的业务级 `publishPolicies`、员工展示名及发布回执可选 `x` 状态均属插件约定；缺省兼容旧配置。rabbitrun 每篇永久确认、币安窄发布与 Mac 交互队列见 [说明](../examples/recipes/company/rabbitrun.md)，不改内核。
+公司应用的业务级 `publishPolicies`、员工展示名及发布回执可选 `x` 状态均属插件约定；缺省兼容旧配置。rabbitrun 每篇永久确认、币安窄发布与 X 手动发布队列见 [说明](../examples/recipes/company/rabbitrun.md)，不改内核。

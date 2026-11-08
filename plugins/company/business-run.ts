@@ -1,5 +1,5 @@
 import { publicationResults } from "./publication-policy.ts";
-import { xStatus } from "./rabbitrun.ts";
+import { manualXNotice } from "./rabbitrun.ts";
 import { collectFeedback } from "./feedback.ts";
 import { ModelBudget } from "./model-budget.ts";
 import { workflows } from "./company.ts";
@@ -91,10 +91,10 @@ try {
   }
   if (existsSync(hubFile)) {
     const cfg = JSON.parse(readFileSync(hubFile, "utf8"));
-    for (const proof of publicationResults(dirname(configFile)).filter((p) => p.x)) {
+    for (const proof of publicationResults(dirname(configFile)).filter((p) => p.x && p.x.state !== "published")) {
       await hubClient(cfg.url, cfg.source.key).tell({
-        key: `rabbitrun-x-${proof.key}-${proof.x!.state}-${proof.x!.at}`,
-        text: `rabbitrun 发布记录\n币安广场：${proof.url}\n${xStatus(proof.x!)}\nMac 触发命令：rabbitrun-x`,
+        key: `rabbitrun-x-manual-${proof.key}`,
+        text: manualXNotice(proof.key),
       });
     }
   }

@@ -452,4 +452,4 @@ CEO日报单独使用当天稳定任务编号，在 `executive.report` 写1800�
 
 ## 海外运营
 
-公司插件支持 `publishPolicies.<业务>.dailyLimit/alwaysConfirm`，缺省保持原确认逻辑；员工可选 `name` 仅用于展示。rabbitrun 永久逐篇确认、双平台回执与 Mac 交互发布见 [配置说明](../examples/recipes/company/rabbitrun.md)。回执可增加 `x` 状态（pending/claimed/failed/published），原有字段不变；不增加内核协议。第一阶段只记录发布结果。
+公司插件支持 `publishPolicies.<业务>.dailyLimit/alwaysConfirm`，缺省保持原确认逻辑；员工可选 `name` 仅用于展示。rabbitrun 永久逐篇确认、双平台回执与 X 手动发布见 [配置说明](../examples/recipes/company/rabbitrun.md)。回执可增加 `x` 状态（pending/published，兼容历史 claimed/failed），published 可不带 url/remoteId，表示董事长确认手动已发；有链接时仍严格核验账号，其他字段不变；不增加内核协议。第一阶段只记录发布结果。

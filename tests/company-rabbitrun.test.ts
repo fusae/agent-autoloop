@@ -1,5 +1,5 @@
 // Failure modes: credentials escape through errors, unapproved/revised drafts publish, response loss
-// causes duplicates, the sixth post bypasses approval, or X jobs lose links and get claimed twice.
+// causes duplicates, the sixth post bypasses approval, or manual X confirmations bypass callback authentication, duplicate reminders or lose copyable text.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
@@ -15,8 +15,16 @@ import {
   squarePublish,
   squarePublication,
 } from "../plugins/binance-square/publisher.ts";
-import { rabbitChannel, rabbitDraft, rabbitText, xReceipt } from "../plugins/company/rabbitrun.ts";
+import {
+  rabbitChannel,
+  rabbitDraft,
+  rabbitText,
+  xReceipt,
+  manualXNotice,
+  pendingXReminder,
+} from "../plugins/company/rabbitrun.ts";
 import { rabbitQueue, approvedRabbitRequest } from "../plugins/company/rabbitrun-bridge.ts";
+import { CompanyFeishu, interactiveCard } from "../plugins/company/channel.ts";
 import { publication } from "../plugins/company/publication.ts";
 import {
   businessPublishPolicy,
@@ -172,7 +180,7 @@ function approval(dir: string) {
   );
   hub.close();
 }
-test("X queue requires recorded chairman approval and Binance receipt, claims once and validates account links", () =>
+test("X queue requires recorded chairman approval and Binance receipt, accepts manual confirmation without a link and validates optional account links", () =>
   temporary(async (dir) => {
     approval(dir);
     const state = join(dir, "publisher");
@@ -185,14 +193,18 @@ test("X queue requires recorded chairman approval and Binance receipt, claims on
     const queue = rabbitQueue(dir, state, { action: "list" });
     assert.ok(Array.isArray(queue));
     assert.equal(queue.length, 1);
-    const claimed = rabbitQueue(dir, state, { action: "claim", key });
-    assert.ok(!Array.isArray(claimed));
-    assert.equal(claimed.text, rabbitText(draft));
-    assert.throws(() => rabbitQueue(dir, state, { action: "claim", key }), /禁止自动重复/);
-    assert.throws(() => rabbitQueue(dir, state, { action: "complete", key, url: "https://x.com/other/status/123" }));
-    rabbitQueue(dir, state, { action: "fail", key, reason: "verification" });
     assert.throws(() => rabbitQueue(dir, state, { action: "claim", key }));
+    assert.throws(() => rabbitQueue(dir, state, { action: "complete", key, url: "https://x.com/other/status/123" }));
+    const completed = rabbitQueue(dir, state, { action: "complete", key });
+    assert.ok(!Array.isArray(completed));
+    assert.equal(completed.x.state, "published");
+    assert.equal(completed.x.url, undefined);
+    assert.deepEqual(rabbitQueue(dir, state, { action: "complete", key }), completed);
     rabbitQueue(dir, state, { action: "complete", key, url: "https://x.com/rabbitrun_eth/status/456" });
+    assert.throws(() =>
+      rabbitQueue(dir, state, { action: "complete", key, url: "https://x.com/rabbitrun_eth/status/789" }),
+    );
+    rabbitQueue(dir, state, { action: "complete", key });
     const proof = publication(JSON.parse(readFileSync(join(dir, "publications", key + "-result.json"), "utf8")));
     assert.equal(proof.x?.url, "https://x.com/rabbitrun_eth/status/456");
     const empty = rabbitQueue(dir, state, { action: "list" });
@@ -289,7 +301,12 @@ test("dashboard shows overseas employee, both URLs and pending or failed X witho
     home: { publications: [proof] },
     businesses: [{ id: "rabbitrun", name: "rabbitrun 币圈内容" }],
   };
-  assert.match(context.render(data), /X 待发，需要在 Mac 上执行/);
+  assert.match(context.render(data), /X 待发/);
+  assert.match(context.render(data), /复制全文/);
+  assert.match(context.render(data), /全文和配图/);
+  proof.x = { state: "published" };
+  assert.match(context.render(data), /X 已发/);
+  assert.doesNotMatch(context.render(data), /undefined|Mac|rabbitrun-x/);
   proof.x = { state: "published", url: "https://x.com/rabbitrun_eth/status/456" } as any;
   assert.match(context.render(data), /https:\/\/x.com\/rabbitrun_eth\/status\/456/);
   assert.match(
@@ -298,26 +315,151 @@ test("dashboard shows overseas employee, both URLs and pending or failed X witho
   );
 });
 
-test("Mac bridge never claims unattended jobs and retains a confirmed link when SSH fails", async () => {
-  const { runMacX, recordMacX } = await import("../plugins/company/rabbitrun-mac.ts");
-  await temporary((dir) => {
-    const calls: any[] = [];
-    const bridge = (input: any) => {
-      calls.push(input);
-      return [{ key, x: { state: "pending" } }];
+test("manual X card uploads images, preserves full text, authenticates callbacks and retries only bookkeeping", () =>
+  temporary(async (dir) => {
+    approval(dir);
+    const body = { ...draft, content: "第一段\n\n" + "全文".repeat(2500) + "\n最后一段", images: [png] };
+    writeFileSync(join(dir, "publications", key + ".json"), JSON.stringify(request(body)));
+    const state = join(dir, "publisher");
+    const proof = await squarePublication(state, request(body), async () => ({
+      remoteId: "123",
+      url: "https://www.binance.com/square/post/123",
+    }));
+    writeFileSync(join(dir, "publications", key + "-result.json"), JSON.stringify(proof));
+    const sent: any[] = [],
+      answers: any[] = [],
+      completions: string[] = [];
+    let lost = true;
+    const hub: any = {
+      delivered: async () => {},
+      answer: async (...args: any[]) => {
+        if (lost) {
+          lost = false;
+          throw Error("offline");
+        }
+        answers.push(args);
+      },
     };
-    assert.throws(() => runMacX({ state: dir, bridge, interactive: false }), /交互执行/);
-    assert.deepEqual(calls, [{ action: "list" }]);
-    const input = { action: "complete", key, url: "https://x.com/rabbitrun_eth/status/456" };
-    assert.throws(() =>
-      recordMacX(input, dir, () => {
-        throw Error("offline");
-      }),
+    const lark = async (args: string[]) => {
+      if (args[1] === "images") return { data: { image_key: "img_fixture" } };
+      if (args[1] === "PATCH") return {};
+      sent.push(JSON.parse(args[args.indexOf("--content") + 1]));
+      return { data: { message_id: "om_manual" } };
+    };
+    const options = {
+      dashboardUrl: "https://company.example/",
+      complete: async (id: string) => {
+        completions.push(id);
+        return rabbitQueue(dir, state, { action: "complete", key: id });
+      },
+    };
+    const file = join(dir, "state.json");
+    let bridge = new CompanyFeishu(file, "ou_owner", hub, lark, undefined, true, options);
+    const card: any = {
+      id: 42,
+      version: 1,
+      ref: null,
+      kind: "notice",
+      state: "open",
+      title: "公司",
+      text: manualXNotice(key),
+      options: [],
+      recommend: null,
+      choice: null,
+      answer: null,
+      result: null,
+      link: null,
+    };
+    await bridge.deliver(card);
+    bridge = new CompanyFeishu(file, "ou_owner", hub, lark, undefined, true, options);
+    await bridge.deliver(card);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].header.title.content, "X 待发，请手动发布");
+    assert.ok(sent[0].body.elements[0].text.content.includes(rabbitText(body)));
+    assert.ok(sent[0].body.elements[0].text.content.includes(proof.url));
+    assert.ok(sent[0].body.elements.some((e: any) => e.img_key === "img_fixture"));
+    assert.ok(sent[0].body.elements.some((e: any) => e.text?.content === "我已在 X 发布"));
+    const callback = (id = "callback1") => ({
+      header: { event_id: id, event_type: "card.action.trigger" },
+      event: {
+        operator: { open_id: "ou_owner" },
+        context: { open_message_id: "om_manual" },
+        action: { tag: "button", value: { card: 42, version: 1, action: "x-published" } },
+      },
+    });
+    const stranger = callback();
+    stranger.event.operator.open_id = "ou_other";
+    const wrongMessage = callback();
+    wrongMessage.event.context.open_message_id = "om_other";
+    const oldVersion = callback();
+    oldVersion.event.action.value.version = 2;
+    const wrongAction = callback();
+    wrongAction.event.action.value.action = "reply";
+    for (const raw of [stranger, wrongMessage, oldVersion, wrongAction])
+      assert.equal(await bridge.receiveAction(raw), false);
+    assert.equal(completions.length, 0);
+    await assert.rejects(bridge.receiveAction(callback()), /offline/);
+    assert.equal(
+      publication(JSON.parse(readFileSync(join(dir, "publications", key + "-result.json"), "utf8"))).x?.state,
+      "published",
     );
-    assert.deepEqual(JSON.parse(readFileSync(join(dir, "result.json"), "utf8")), input);
-    runMacX({ state: dir, bridge, listOnly: true });
-    assert.deepEqual(calls[1], input);
-  });
+    assert.equal(await bridge.receiveAction(callback()), true);
+    assert.equal(await bridge.receiveAction(callback()), false);
+    assert.equal(await bridge.receiveAction(callback("new-event")), false);
+    assert.equal(answers.length, 1);
+    assert.deepEqual(answers[0], [42, { by: "ou_owner", ref: "om_manual" }]);
+    const fallback = new CompanyFeishu(
+      join(dir, "fallback.json"),
+      "ou_owner",
+      hub,
+      async (args) => {
+        if (args[1] === "images") throw Error("image unavailable");
+        return lark(args);
+      },
+      undefined,
+      true,
+      options,
+    );
+    await fallback.deliver(card);
+    assert.ok(
+      sent
+        .at(-1)
+        .body.elements.some((e: any) => e.behaviors?.[0]?.default_url === `https://company.example/?draft=${key}`),
+    );
+  }));
+
+test("pending X appears only from the next Beijing day and disappears after confirmation", () => {
+  const proof = {
+    publishedAt: "2026-11-09T15:59:00Z",
+    x: { state: "pending", attempts: 0, at: "2026-11-09T15:59:00Z" },
+  } as const;
+  assert.equal(pendingXReminder([proof], "2026-11-09"), "");
+  assert.match(pendingXReminder([proof], "2026-11-10"), /1 篇待手动发布/);
+  assert.equal(pendingXReminder([{ ...proof, x: { ...proof.x, state: "published" } }], "2026-11-10"), "");
+});
+
+test("copy full text preserves line breaks and never repeats a title already in the first line", async () => {
+  const js = readFileSync(new URL("../plugins/company/dashboard/home.js", import.meta.url), "utf8");
+  let content = "第一段\n\n第二段",
+    copied = "";
+  const context: any = {
+    api: async () => ({ title: "标题", content }),
+    navigator: {
+      clipboard: {
+        writeText: async (text: string) => {
+          copied = text;
+        },
+      },
+    },
+  };
+  runInNewContext(js + "\nthis.copy=copyDraft;", context);
+  const button = { textContent: "复制全文" };
+  await context.copy(key, button);
+  assert.equal(copied, "标题\n\n第一段\n\n第二段");
+  assert.equal(button.textContent, "已复制");
+  content = "标题\n第一段";
+  await context.copy(key, button);
+  assert.equal(copied, content);
 });
 
 test("rabbitrun setup registers a separate employee and guide without scheduling or altering APP confirmation", async () => {
@@ -361,4 +503,21 @@ test("rabbitrun setup registers a separate employee and guide without scheduling
       b.close();
     }
   });
+});
+
+// Closing a notice in another client is not evidence that the post was published.
+test("closing the notice alone never claims that X was published", () => {
+  const card: any = {
+    id: 1,
+    version: 2,
+    kind: "notice",
+    state: "closed",
+    title: "通知",
+    text: manualXNotice(key),
+    options: [],
+    choice: null,
+  };
+  const rendered = interactiveCard(card, undefined, { text: "正文", published: false });
+  assert.equal(rendered.header.title.content, "X 待发，请手动发布");
+  assert.doesNotMatch(JSON.stringify(rendered), /X 已发/);
 });

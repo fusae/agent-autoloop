@@ -291,4 +291,4 @@ CEO 的成果审核、返工和固定发布入口配置见[成果审核与发布
 
 Claude Code 适配器现在强制沙箱，需 CLI 2.1.317 或更新版本；Linux 另需 bubblewrap、socat。OAuth 与 API key 不能共存，`full` 也保留隔离，详见[权限边界](docs/plugins.md#access-实际能做什么)。
 
-公司工作台支持 [rabbitrun 海外运营](examples/recipes/company/rabbitrun.md)：币安官方图文发布、逐篇飞书确认、X 在 Mac 交互执行，密钥不交给员工。
+公司工作台支持 [rabbitrun 海外运营](examples/recipes/company/rabbitrun.md)：币安官方图文发布、逐篇飞书确认、X 由董事长手动发布，飞书卡片确认已发，密钥不交给员工。

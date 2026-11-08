@@ -1,4 +1,4 @@
-import { rabbitChannel, rabbitDraft } from "./rabbitrun.ts";
+import { rabbitChannel, rabbitDraft, rabbitText, manualXKey } from "./rabbitrun.ts";
 import { parseXhsDraft } from "../xiaohongshu/publisher.ts";
 import { ARRANGEMENT_DETAILS } from "./arrangement.ts";
 // HTTP callbacks share the spool without owning a CLI connection; chat still uses history polling.
@@ -38,6 +38,7 @@ type Saved = {
   cardRef?: string;
   layout?: number;
   publicationMedia?: PublicationMedia;
+  manualX?: string;
 };
 type State = { cards: Record<string, Saved>; seen: string[]; cursor: string; chatId?: string };
 // Execution recovery is bookkeeping, not evidence of a business result.
@@ -65,13 +66,18 @@ function updateText(card: Card, acknowledged: boolean) {
 }
 type PublicationMedia = { version: 2; keys: (string | null)[]; count: number };
 function publicationKey(card: Card) {
-  return card.kind === "ask" && card.title === "发布确认"
-    ? /\n发布稿件：([a-f0-9]{32})$/.exec(card.text)?.[1]
-    : undefined;
+  return (
+    manualXKey(card) ??
+    (card.kind === "ask" && card.title === "发布确认" ? /\n发布稿件：([a-f0-9]{32})$/.exec(card.text)?.[1] : undefined)
+  );
 }
-export function interactiveCard(card: Card, media?: PublicationMedia) {
+export function interactiveCard(
+  card: Card,
+  media?: PublicationMedia,
+  manual?: { text: string; url?: string; published: boolean },
+) {
   const publication = publicationKey(card);
-  const text = publication ? card.text.replace(/\n发布稿件：[a-f0-9]{32}$/, "") : card.text;
+  const text = manual ? manual.text : publication ? card.text.replace(/\n发布稿件：[a-f0-9]{32}$/, "") : card.text;
   const answer = card.answer || (card.choice !== null ? card.options[card.choice] : "");
   const deferred = card.state !== "open" && answer?.trim() === "暂缓";
   const arrangement = card.kind === "notice" && card.title === "CEO · 工作安排";
@@ -105,7 +111,26 @@ export function interactiveCard(card: Card, media?: PublicationMedia) {
     if (media.keys.filter(Boolean).length !== media.count)
       elements.push({ tag: "div", text: { tag: "plain_text", content: `图片未能加载，共 ${media.count} 张` } });
   }
-  if (card.kind === "ask" && card.state === "open") {
+  if (manual) {
+    if (manual.url)
+      elements.push({
+        tag: "button",
+        text: { tag: "plain_text", content: "查看全文和配图" },
+        behaviors: [{ type: "open_url", default_url: manual.url }],
+      });
+    if (card.state === "open" && !manual.published)
+      elements.push({
+        tag: "button",
+        text: { tag: "plain_text", content: "我已在 X 发布" },
+        type: "primary",
+        behaviors: [{ type: "callback", value: { card: card.id, version: card.version, action: "x-published" } }],
+      });
+    else
+      elements.push({
+        tag: "div",
+        text: { tag: "plain_text", content: manual.published ? "X 已发" : "X 待发，通知已关闭" },
+      });
+  } else if (card.kind === "ask" && card.state === "open") {
     elements.push(
       ...card.options.flatMap((label, choice) =>
         card.title === "发布预告" && choice !== 0
@@ -166,8 +191,15 @@ export function interactiveCard(card: Card, media?: PublicationMedia) {
     header: {
       title: {
         tag: "plain_text",
-        content:
-          card.kind === "ask" && card.state !== "open" ? (deferred ? "CEO · 已暂缓" : "CEO · 答复已记录") : card.title,
+        content: manual
+          ? manual.published
+            ? "X 已发"
+            : "X 待发，请手动发布"
+          : card.kind === "ask" && card.state !== "open"
+            ? deferred
+              ? "CEO · 已暂缓"
+              : "CEO · 答复已记录"
+            : card.title,
       },
       template: deferred ? "grey" : card.state === "open" ? "blue" : "green",
     },
@@ -175,6 +207,7 @@ export function interactiveCard(card: Card, media?: PublicationMedia) {
   };
 }
 export class CompanyFeishu {
+  private manualX?: { complete: (key: string) => Promise<unknown>; dashboardUrl: string };
   private cards: boolean;
   private file: string;
   private owner: string;
@@ -195,9 +228,11 @@ export class CompanyFeishu {
     lark: (args: string[], cwd?: string) => Promise<any>,
     onQuestion?: CompanyFeishu["onQuestion"],
     cards = false,
+    manualX?: { complete: (key: string) => Promise<unknown>; dashboardUrl: string },
   ) {
     if (!isAbsolute(file) || !/^ou_[A-Za-z0-9]+$/.test(owner)) throw new Error("需要飞书本人 open_id 和绝对状态路径");
     this.cards = cards;
+    this.manualX = manualX;
     this.file = file;
     this.owner = owner;
     this.hub = hub;
@@ -261,6 +296,24 @@ export class CompanyFeishu {
     return media;
   }
   async deliver(card: Card) {
+    const manualKey = manualXKey(card);
+    let manual: { text: string; url?: string; published: boolean } | undefined;
+    if (manualKey) {
+      if (!this.manualX || !this.cards) throw Error("X 手动确认卡片入口尚未配置");
+      const directory = dirname(this.file);
+      const request = JSON.parse(readFileSync(join(directory, "publications", manualKey + ".json"), "utf8"));
+      const proof = JSON.parse(readFileSync(join(directory, "publications", manualKey + "-result.json"), "utf8"));
+      if (request.key !== manualKey || proof.key !== manualKey || !proof.x) throw Error("X 待发稿件不匹配");
+      const draft = rabbitDraft({ ...request, channel: rabbitChannel, action: "lookup" });
+      const url = new URL(this.manualX.dashboardUrl);
+      if (url.protocol !== "https:") throw Error("后台链接需要 HTTPS");
+      url.searchParams.set("draft", manualKey);
+      manual = {
+        text: `${rabbitText(draft)}\n\n币安广场：${proof.url}\n图片数：${draft.images.length}`,
+        url: url.href,
+        published: proof.x.state === "published",
+      };
+    }
     let saved = this.state.cards[card.id];
     const promote =
       this.cards &&
@@ -272,7 +325,7 @@ export class CompanyFeishu {
       const acknowledged = saved?.acknowledged ?? (!!saved && saved.version > 1 && !saved.open);
       let text: string | null;
       if (card.state === "open")
-        text = `${card.title}\n\n${card.text}${card.kind === "ask" ? `\n\n请回复：#${card.id} 你的回答\n也可回复：${card.options.map((o, i) => `#${card.id} ${i + 1}（${o}）`).join("；")}` : ""}`;
+        text = `${manual ? "X 待发，请手动发布" : card.title}\n\n${manual?.text ?? card.text}${card.kind === "ask" ? `\n\n请回复：#${card.id} 你的回答\n也可回复：${card.options.map((o, i) => `#${card.id} ${i + 1}（${o}）`).join("；")}` : ""}`;
       else text = updateText(card, acknowledged);
       // Persist the original message reference: owner authentication remains bound to that question.
       let ref = saved?.ref ?? card.ref;
@@ -291,7 +344,7 @@ export class CompanyFeishu {
           "--as",
           "bot",
           "--data",
-          JSON.stringify({ content: JSON.stringify(interactiveCard(card, publicationMedia)) }),
+          JSON.stringify({ content: JSON.stringify(interactiveCard(card, publicationMedia, manual)) }),
         ]);
       } else if (text) {
         const version = card.state !== "open" && text.startsWith("答复已记录\n") ? "answer" : card.version;
@@ -309,7 +362,12 @@ export class CompanyFeishu {
           "--user-id",
           this.owner,
           ...(native
-            ? ["--msg-type", "interactive", "--content", JSON.stringify(interactiveCard(card, publicationMedia))]
+            ? [
+                "--msg-type",
+                "interactive",
+                "--content",
+                JSON.stringify(interactiveCard(card, publicationMedia, manual)),
+              ]
             : ["--text", text]),
           "--idempotency-key",
           key,
@@ -327,7 +385,8 @@ export class CompanyFeishu {
         cardRef,
         ref,
         version: card.version,
-        open: card.kind === "ask" && card.state === "open",
+        open: (card.kind === "ask" || !!manualKey) && card.state === "open",
+        ...(manualKey ? { manualX: manualKey } : {}),
         options: card.options,
         acknowledged: acknowledged || (card.kind === "ask" && card.state !== "open" && !!text),
       };
@@ -380,6 +439,24 @@ export class CompanyFeishu {
       saved.version !== value.version
     )
       return false;
+    if (saved.manualX) {
+      if (
+        !this.manualX ||
+        value.action !== "x-published" ||
+        value.choice !== undefined ||
+        event.action.tag !== "button"
+      )
+        return false;
+      // Only the authenticated original notice may update the fixed publisher entry point.
+      // Complete first: replay after a lost hub response is safe and cannot publish anything.
+      await this.manualX.complete(saved.manualX);
+      await this.hub.answer(value.card, { by: this.owner, ref: saved.ref });
+      saved.open = false;
+      this.state.seen.push(id);
+      this.state.seen = this.state.seen.slice(-2000);
+      this.save();
+      return true;
+    }
     let answer: { text: string } | { choice: number };
     if (value.action === "reply") {
       const text = event.action.form_value?.reply;
@@ -496,7 +573,7 @@ export class CompanyFeishu {
       const card = Number(match[1]),
         saved = this.state.cards[card],
         text = match[2].trim();
-      if (!saved?.open || !saved.ref || !text || text.length > 4000) continue;
+      if (!saved?.open || saved.manualX || !saved.ref || !text || text.length > 4000) continue;
       const choice = /^[1-5]$/.test(text) ? Number(text) - 1 : null;
       if (choice !== null && choice >= saved.options.length) continue;
       try {
@@ -613,6 +690,30 @@ export default async function companyChannel({ hub, options, signal, log }: Chan
     lark,
     onQuestion,
     options.cards === true,
+    typeof options.dashboardUrl === "string"
+      ? {
+          dashboardUrl: options.dashboardUrl,
+          complete: (key) =>
+            new Promise((resolve, reject) => {
+              const child = execFile(
+                "sudo",
+                ["-n", "/usr/local/libexec/company-rabbitrun-x"],
+                { encoding: "utf8", timeout: 15000, maxBuffer: 10000 },
+                (error, stdout) => {
+                  if (error) return reject(Error("X 已发登记失败，请稍后重试"));
+                  try {
+                    const result = JSON.parse(stdout);
+                    if (result.key !== key || result.x?.state !== "published") throw Error();
+                    resolve(result);
+                  } catch {
+                    reject(Error("X 已发登记未确认"));
+                  }
+                },
+              );
+              child.stdin!.end(JSON.stringify({ action: "complete", key }));
+            }),
+        }
+      : undefined,
   );
   if (openCards) for (const card of await openCards()) await bridge.deliver(card);
   const pause = () => delay(30_000, undefined, { signal }).catch(() => {});

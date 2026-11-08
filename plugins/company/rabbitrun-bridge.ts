@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { existsSync, readFileSync, readdirSync, mkdirSync, rmSync, chownSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { durableSave } from "../binance-square/publisher.ts";
-import { rabbitChannel, rabbitDraft, rabbitText, xReceipt, type RabbitRequest } from "./rabbitrun.ts";
+import { rabbitChannel, rabbitDraft, xReceipt, type RabbitRequest } from "./rabbitrun.ts";
 
 export function approvedRabbitRequest(directory: string, key: string, action: "lookup" | "publish"): RabbitRequest {
   if (!/^[a-f0-9]{32}$/.test(key)) throw Error("审核编号无效");
@@ -45,7 +45,7 @@ export function approvedRabbitRequest(directory: string, key: string, action: "l
   return result;
 }
 export function rabbitQueue(directory: string, stateDirectory: string, input: any, now = new Date()) {
-  if (!input || !["list", "claim", "complete", "fail"].includes(input.action)) throw Error("X 窄命令无效");
+  if (!input || !["list", "complete"].includes(input.action)) throw Error("X 窄命令无效");
   if (!existsSync(stateDirectory))
     return input.action === "list"
       ? []
@@ -73,72 +73,40 @@ export function rabbitQueue(directory: string, stateDirectory: string, input: an
         const draft = rabbitDraft(request);
         return [{ key: request.key, title: draft.title, images: draft.images.length, x: xReceipt(saved.proof.x) }];
       });
-    const request = approvedRabbitRequest(directory, input.key, "lookup"),
-      draft = rabbitDraft(request);
+    approvedRabbitRequest(directory, input.key, "lookup");
     const file = join(stateDirectory, input.key + ".json");
     const saved = JSON.parse(readFileSync(file, "utf8"));
     if (!saved.proof?.x || saved.proof.key !== input.key) throw Error("币安尚未确认发布，X 不可发送");
     const x = xReceipt(saved.proof.x);
-    if (input.action === "claim") {
-      if (!existsSync(join(directory, "publications", input.key + "-result.json"))) throw Error("币安回执尚未登记");
-      if (x.state !== "pending") throw Error("此稿已被领取或失败；先核对现有结果，禁止自动重复发送");
-      const day = (s: string) => new Date(Date.parse(s) + 8 * 3600000).toISOString().slice(0, 10);
-      if (
-        keys.some((f) => {
-          const v = JSON.parse(readFileSync(join(stateDirectory, f), "utf8")).proof?.x;
-          return (
-            f !== input.key + ".json" &&
-            v &&
-            (v.state === "claimed" ||
-              v.state === "failed" ||
-              (v.state === "published" && day(v.at) === day(now.toISOString())))
-          );
-        })
-      )
-        throw Error("X 今日已发或上篇结果仍待核对，每天最多一篇");
-      saved.proof.x = { state: "claimed", attempts: x.attempts + 1, at: now.toISOString() };
-    } else if (input.action === "complete") {
-      const match = /^https:\/\/x\.com\/rabbitrun_eth\/status\/(\d{1,30})$/.exec(input.url ?? "");
-      if (!match || !["claimed", "failed", "published"].includes(x.state))
-        throw Error("需已领取稿件和本人账号的帖子链接");
-      if (x.state === "published") {
-        if (x.url !== input.url) throw Error("不可覆盖已发布结果");
-      }
-      if (
-        keys.some(
-          (f) =>
-            f !== input.key + ".json" &&
-            JSON.parse(readFileSync(join(stateDirectory, f), "utf8")).proof?.x?.url === input.url,
-        )
-      )
-        throw Error("该帖子链接已登记在另一稿件");
-      saved.proof.x = xReceipt({
-        ...x,
-        state: "published",
-        at: x.state === "published" ? x.at : now.toISOString(),
-        url: input.url,
-        remoteId: match[1],
-        reason: undefined,
-      });
-    } else {
-      if (x.state !== "claimed" && !(x.state === "failed" && x.reason === input.reason))
-        throw Error("只能标记当前已领取稿件失败");
-      saved.proof.x = xReceipt({
-        ...x,
-        state: "failed",
-        at: x.state === "failed" ? x.at : now.toISOString(),
-        reason: input.reason,
-      });
+    const match = /^https:\/\/x\.com\/rabbitrun_eth\/status\/(\d{1,30})$/.exec(input.url ?? "");
+    if (input.url !== undefined && !match) throw Error("需要本人账号的帖子链接");
+    if (x.state === "published") {
+      if (input.url !== undefined && x.url !== undefined && x.url !== input.url) throw Error("不可覆盖已发布结果");
     }
+    if (
+      input.url &&
+      keys.some(
+        (f) =>
+          f !== input.key + ".json" &&
+          JSON.parse(readFileSync(join(stateDirectory, f), "utf8")).proof?.x?.url === input.url,
+      )
+    )
+      throw Error("该帖子链接已登记在另一稿件");
+    saved.proof.x = xReceipt({
+      ...x,
+      state: "published",
+      at: x.state === "published" ? x.at : now.toISOString(),
+      url: input.url ?? x.url,
+      remoteId: match?.[1] ?? x.remoteId,
+      reason: undefined,
+    });
     durableSave(file, saved);
-    // The public receipt is a projection; publisher-owned state remains authoritative for X claims.
+    // The public receipt is a projection; publisher-owned state remains authoritative for manual X confirmation.
     const target = join(directory, "publications", input.key + "-result.json");
     const owner = statSync(join(directory, "publications"));
     durableSave(target, saved.proof);
     if (process.getuid?.() === 0) chownSync(target, owner.uid, owner.gid);
-    return input.action === "claim"
-      ? { key: input.key, text: rabbitText(draft), images: draft.images, x: saved.proof.x }
-      : { key: input.key, x: saved.proof.x };
+    return { key: input.key, x: saved.proof.x };
   } finally {
     rmSync(lock, { recursive: true, force: true });
   }
