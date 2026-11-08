@@ -6,8 +6,64 @@ import { Company, departments, taskId, taskRequest, workflows, type Task } from 
 import { sourceSnapshots } from "../plugins/company/sources.ts";
 import { Operations } from "../plugins/company/operations.ts";
 import { Businesses } from "../plugins/company/business.ts";
+import { DatabaseSync } from "node:sqlite";
+import { modelDay } from "../plugins/company/model-budget.ts";
+import { publicationResults } from "../plugins/company/publication-policy.ts";
+import type { Publication } from "../plugins/company/publication.ts";
+import { draftStock } from "../plugins/company/workday.ts";
 
 const assets = resolve(import.meta.dirname, "../plugins/company/dashboard");
+// Owner home page: read-only extras the overview did not carry (quota, promotion results, publications).
+function homeData(directory: string, companyConfig: any, operations: any[]) {
+  const now = new Date();
+  let quota: unknown = null;
+  const runsFile = join(directory, "model-runs.db");
+  if (companyConfig.dailyModelRuns && existsSync(runsFile)) {
+    const date = modelDay(now),
+      start = new Date(date + "T00:00:00+08:00").toISOString(),
+      end = new Date(Date.parse(start) + 86400_000).toISOString();
+    const db = new DatabaseSync(runsFile, { readOnly: true });
+    try {
+      const count = (kind: string) =>
+        Object.fromEntries(
+          db
+            .prepare("SELECT role,COUNT(*) AS n FROM journal WHERE kind=? AND at>=? AND at<? GROUP BY role")
+            .all(kind, start, end)
+            .map((r) => [String(r.role), Number(r.n)]),
+        );
+      const roles = count("started");
+      quota = {
+        date,
+        total: Object.values(roles).reduce((a: number, b) => a + Number(b), 0),
+        roles,
+        employees: count("employee-started"),
+        limits: companyConfig.dailyModelRuns,
+        limited: !!db.prepare("SELECT 1 FROM journal WHERE id=?").get(`limited:${date}`),
+      };
+    } finally {
+      db.close();
+    }
+  }
+  let feedback: unknown = null;
+  try {
+    const file = join(directory, "workspace/knowledge/feedback.json");
+    if (existsSync(file)) feedback = JSON.parse(readFileSync(file, "utf8"));
+  } catch {
+    feedback = null;
+  }
+  let publications: Publication[] = [];
+  try {
+    publications = publicationResults(directory);
+  } catch {
+    publications = [];
+  }
+  const stock: Record<string, unknown> = {};
+  for (const p of operations) {
+    const growth = p.staff?.find((s: any) => s.role === "growth");
+    if (growth) stock[p.business] = draftStock(p.plans ?? [], growth.weeklyGoal, publications, now);
+  }
+  return { quota, feedback, publications, stock };
+}
 class HTTPError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -93,6 +149,8 @@ export async function startDashboard(directory: string, port = 3361, options: { 
           "/": ["index.html", "text/html"],
           "/app.js": ["app.js", "text/javascript"],
           "/style.css": ["style.css", "text/css"],
+          "/home.js": ["home.js", "text/javascript"],
+          "/home.css": ["home.css", "text/css"],
         };
         if (Object.hasOwn(staticFiles, url.pathname)) {
           const [file, mime] = staticFiles[url.pathname];
@@ -110,6 +168,7 @@ export async function startDashboard(directory: string, port = 3361, options: { 
             connectionError = (error as Error).message;
           }
           const tasks = company.tasks().map(publicTask);
+          const snapshot = operations.snapshot(businesses.list(), company.tasks());
           return send(200, {
             name: companyConfig.name,
             maxAssignments: companyConfig.maxAssignments,
@@ -122,8 +181,9 @@ export async function startDashboard(directory: string, port = 3361, options: { 
             workflows,
             tasks,
             businesses: businesses.list(),
-            operations: operations.snapshot(businesses.list(), company.tasks()),
+            operations: snapshot,
             leadership: operations.executive(),
+            home: homeData(directory, companyConfig, snapshot),
             sources: Object.values(sourceSnapshots(directory)).map((s) => ({
               business: s.business,
               status: s.status,

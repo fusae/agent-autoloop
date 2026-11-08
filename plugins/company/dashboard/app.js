@@ -54,7 +54,8 @@ for (const kind of ["software", "content", "support", "finance"]) {
   kindNames[`internal-${kind}`] = kindNames[kind];
 }
 const labels = {
-  ceo: "CEO",
+  home: "首页",
+  ceo: "CEO 管理",
   businesses: "业务管理",
   overview: "公司概览",
   tasks: "任务列表",
@@ -62,7 +63,7 @@ const labels = {
   departments: "部门",
   spending: "费用",
   employees: "员工",
-  plans: "项目计划",
+  plans: "工作计划",
 };
 let live = null,
   demo = null,
@@ -70,7 +71,7 @@ let live = null,
   csrf = "",
   filter = "all",
   search = "",
-  view = "businesses",
+  view = "home",
   pending = 0,
   draftId = "",
   lastRefresh = 0,
@@ -429,8 +430,8 @@ function render() {
   const d = data();
   if (!d) return;
   if (!isDemo) renderedState = signature(d);
-  view = location.hash.slice(1) || "businesses";
-  if (!labels[view]) view = "overview";
+  view = location.hash.slice(1) || "home";
+  if (!labels[view]) view = "home";
   document.querySelectorAll("[data-view]").forEach((a) => {
     a.classList.toggle("active", a.dataset.view === view);
     if (a.dataset.view === view) a.setAttribute("aria-current", "page");
@@ -441,15 +442,19 @@ function render() {
   $("#connection").textContent = isDemo ? "示例预览" : d.connected ? "任务引擎已连接" : "任务引擎离线";
   $("#connection").classList.toggle("offline", !d.connected);
   $("#demo-banner").hidden = !isDemo;
-  $("#demo-toggle").innerHTML = isDemo ? "返回我的公司 <span>↗</span>" : "查看示例公司 <span>↗</span>";
+  $("#demo-toggle").textContent = isDemo ? "返回我的公司" : "查看示例公司";
   $("#offline-banner").hidden = d.connected;
   $("#offline-banner").textContent = d.connectionError ?? "当前显示已保存的数据，任务引擎离线，提交与审批暂不可用。";
   $("#nav-tasks").textContent = d.tasks.length;
   $("#nav-approvals").textContent = d.cards.filter((c) => c.kind === "ask").length;
+  $("#nav-approvals").hidden = !d.cards.some((c) => c.kind === "ask");
   $("#stats").innerHTML = statsHTML(d);
-  $("#stats").hidden = ["ceo", "departments", "businesses", "employees", "plans"].includes(view);
+  $("#stats").hidden = ["home", "ceo", "departments", "businesses", "employees", "plans"].includes(view);
+  document.body.dataset.view = view;
   $("#view-content").innerHTML =
-    view === "ceo"
+    view === "home"
+      ? homeHTML(d)
+      : view === "ceo"
       ? ceoHTML(d)
       : view === "businesses"
         ? businessesHTML(d)
@@ -466,6 +471,7 @@ function render() {
                   : view === "plans"
                     ? plansHTML(d)
                     : spendingHTML(d);
+  $("#new-task").hidden = view === "home";
   $("#new-task").disabled = view !== "businesses" && !d.connected;
   $("#new-task").innerHTML = view === "businesses" ? "＋ 新建业务" : "<span>＋</span> 新建任务";
   $("#last-updated").textContent = (isDemo ? "示例数据 · " : "最后同步 ") + time(d.at) + " · 北京时间";
