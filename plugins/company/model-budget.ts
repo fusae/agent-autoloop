@@ -7,8 +7,10 @@ export const modelDay = (now: Date) => new Date(now.getTime() + 8 * 3600_000).to
 export class ModelBudget {
   private db: DatabaseSync;
   private config: CompanyConfig;
+  private directory: string;
   constructor(directory: string, config: CompanyConfig) {
     this.config = config;
+    this.directory = directory;
     const file = join(directory, "model-runs.db");
     this.db = new DatabaseSync(file);
     chmodSync(file, 0o600);
@@ -87,7 +89,13 @@ export class ModelBudget {
       .all(start, end);
     const roles: Partial<Record<Role, number>> = {};
     for (const row of rows) roles[row.role as Role] = Number(row.n);
+    const employees: Record<string, number> = {};
+    for (const row of this.db
+      .prepare("SELECT role,COUNT(*) AS n FROM journal WHERE kind='employee-started' AND at>=? AND at<? GROUP BY role")
+      .all(start, end))
+      employees[String(row.role)] = Number(row.n);
     return {
+      employees,
       date,
       total: Object.values(roles).reduce((a, b) => a + b, 0),
       roles,
@@ -95,20 +103,44 @@ export class ModelBudget {
       limited: !!this.db.prepare("SELECT 1 FROM journal WHERE id=?").get(`limited:${date}`),
     };
   }
-  available(role: Role, now = new Date()) {
+  private employee(role: Role, task?: string): string | undefined {
+    if (!task || role === "ceo" || !existsSync(join(this.directory, "operations.db"))) return undefined;
+    const db = new DatabaseSync(join(this.directory, "operations.db"), { readOnly: true });
+    try {
+      for (const row of db.prepare("SELECT id,body FROM projects").all()) {
+        const project = JSON.parse(row.body as string);
+        if (project.activity.some((a: any) => a.task === task)) return `${row.id}:${role}`;
+      }
+    } finally {
+      db.close();
+    }
+    return undefined;
+  }
+  available(role: Role, now = new Date(), task?: string) {
     const s = this.snapshot(now),
       limits = this.config.dailyModelRuns;
-    return !limits || (s.total < (limits.total ?? Infinity) && (s.roles[role] ?? 0) < (limits[role] ?? Infinity));
+    if (!limits) return true;
+    if (s.total >= (limits.total ?? Infinity) || (s.roles[role] ?? 0) >= (limits[role] ?? Infinity)) return false;
+    if (role !== "ceo" && limits.employee !== undefined) {
+      const employee = this.employee(role, task);
+      if (!employee) return false;
+      return (s.employees[employee] ?? 0) < limits.employee;
+    }
+    return true;
   }
   limited(now = new Date()) {
     this.record(`limited:${modelDay(now)}`, "limited", now);
   }
-  start(role: Role, key: string, owner = false, now = new Date()) {
+  start(role: Role, key: string, owner = false, now = new Date(), task?: string) {
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const allowed = owner || this.available(role, now);
-      if (allowed) this.record(key, "started", now, role);
-      if (!allowed || !this.available(role, now)) this.limited(now);
+      const allowed = owner || this.available(role, now, task);
+      if (allowed) {
+        this.record(key, "started", now, role);
+        const employee = this.employee(role, task);
+        if (employee) this.record(key + ":employee", "employee-started", now, employee);
+      }
+      if (!allowed || !this.available(role, now, task)) this.limited(now);
       this.db.exec("COMMIT");
       return allowed;
     } catch (error) {

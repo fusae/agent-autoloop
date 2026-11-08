@@ -19,15 +19,15 @@ const budget = new ModelBudget(dirname(configFile), config);
 const adapter = engine === "codex" ? codex : engine === "claude" ? claude : null;
 if (!adapter) throw new Error("模型入口只支持 codex 或 claude");
 const command = adapter.command(turn);
+const context: Context = JSON.parse(readFileSync(turn.contextFile, "utf8"));
+const event = context.events.findLast((e) => e.source === "company-office" && e.type === `company.work.${role}`);
 let allowed: boolean;
 try {
-  allowed = budget.start(role as Role, key, owner);
+  allowed = budget.start(role as Role, key, owner, new Date(), event?.subject);
 } finally {
   budget.close();
 }
 if (!allowed) {
-  const context: Context = JSON.parse(readFileSync(turn.contextFile, "utf8"));
-  const event = context.events.findLast((e) => e.source === "company-office" && e.type === `company.work.${role}`);
   if (!event) throw new Error("限额排队缺少原始派工记录");
   const work = JSON.parse(event.detail);
   process.stdout.write(

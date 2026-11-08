@@ -116,6 +116,8 @@ export function companyBriefing(directory: string, task?: string) {
       inspections: config.inspections ?? true,
       ceoWake: config.ceoWake ?? "legacy",
       dailyModelRuns: config.dailyModelRuns ?? null,
+      workday: config.workday ?? { enabled: false, after: "09:00" },
+      permissions: config.permissions ?? null,
     },
     company,
     business,

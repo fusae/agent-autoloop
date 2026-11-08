@@ -72,7 +72,7 @@ try {
     const budget = new ModelBudget(dirname(configFile), config);
     try {
       for (const task of tasks.filter((t) => t.status === "queued")) {
-        if (!budget.available(workflows[task.kind][task.stage], now)) continue;
+        if (!budget.available(workflows[task.kind][task.stage], now, task.id)) continue;
         resumes.push(resume(task));
       }
       const usage = budget.snapshot(now);

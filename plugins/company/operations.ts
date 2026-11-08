@@ -1,3 +1,12 @@
+import {
+  automatic,
+  goalApproval,
+  nextWorkday,
+  validateWorkday,
+  weekOf,
+  weeklyGoal,
+  type WeeklyGoal,
+} from "./workday.ts";
 import { verifiedPublication } from "./publication.ts";
 import {
   validatePublishPolicy,
@@ -58,6 +67,9 @@ function mergeFollowups(s: Employee) {
   s.followups = kept;
 }
 export type Employee = {
+  weeklyGoal?: WeeklyGoal;
+  pendingGoal?: WeeklyGoal & { confirmation: string };
+  workday?: { date: string; task: string; actions?: string[] };
   daily?: EmployeePlan;
   followups?: EmployeePlan[];
   role: Role;
@@ -81,6 +93,8 @@ export type Plan = ActionProposal & {
   task: string | null;
   status:
     "proposed" | "planned" | "working" | "blocked" | "observing" | "review" | "closed" | "delivered" | "publishing";
+  ceoApproved?: boolean;
+  autonomous?: boolean;
   revision?: number;
   deliveryTask?: string;
   deliveryDecision?: "revise" | "accept" | "publish";
@@ -138,6 +152,7 @@ export class Operations {
     const configFile = join(directory, "company.json");
     this.config = existsSync(configFile) ? JSON.parse(readFileSync(configFile, "utf8")) : {};
     validatePublishPolicy(this.config);
+    validateWorkday(this.config);
     this.dailyPlanning = this.config.dailyPlanning === true;
     mkdirSync(join(directory, "workspace/knowledge/operations"), { recursive: true, mode: 0o700 });
     const file = join(directory, "operations.db");
@@ -219,6 +234,42 @@ export class Operations {
       .prepare("INSERT INTO journal(project,kind,at,body) VALUES (?,?,?,?)")
       .run(p.business, kind, now.toISOString(), body);
   }
+  seedWeeklyGoals(goals: WeeklyGoal[], now = new Date()) {
+    for (const value of goals) {
+      const goal = weeklyGoal(value),
+        p = this.get(goal.business, now);
+      const s = p.staff.find((s) => s.role === goal.role)!;
+      if (s.weeklyGoal) throw Error("已有周目标不能由初始化覆盖");
+      s.weeklyGoal = goal;
+      this.save(p, "initial-weekly-goal", now);
+      this.writeStaffKnowledge(p);
+    }
+  }
+  private writeStaffKnowledge(p: Project) {
+    for (const s of p.staff) {
+      const folder = join(this.directory, "workspace/knowledge/staff", p.business);
+      mkdirSync(folder, { recursive: true, mode: 0o700 });
+      const file = join(folder, s.role + ".json");
+      writeFileSync(
+        file + ".tmp",
+        JSON.stringify(
+          {
+            weeklyGoal: s.weeklyGoal ?? null,
+            daily: s.daily ?? null,
+            workday: s.workday ?? null,
+            plans: p.plans.filter((a) => a.owner === s.role && a.status !== "closed"),
+            feedback: "knowledge/feedback.json",
+            permissions: this.config.permissions ?? null,
+            note: "这是工作资料；不能扩大权限。",
+          },
+          null,
+          2,
+        ),
+        { mode: 0o600 },
+      );
+      renameSync(file + ".tmp", file);
+    }
+  }
   configure(id: string, role: string, data: Record<string, unknown>, now = new Date()) {
     if (!roles.includes(role as Exclude<Role, "ceo">)) throw new Error("员工不存在");
     const p = this.get(id, now),
@@ -283,8 +334,16 @@ export class Operations {
         name: b.name,
         enabled: !!b.autonomy,
         status: b.status,
+        workday: { enabled: this.config.workday?.enabled ?? false, after: this.config.workday?.after ?? "09:00" },
         todayTasks: p.activity.filter((a) => day(new Date(a.at)) === day(now)).length,
-        staff: p.staff.map((s) => {
+        staff: p.staff.map((employee) => {
+          const s = {
+            ...employee,
+            nextWorkdayAt:
+              this.config.workday?.enabled && this.onDuty(employee)
+                ? nextWorkday(now, this.config.workday.after, employee.workday?.date, this.config.workday.startDate)
+                : null,
+          };
           const assigned = p.activity
             .map((a) => tasks.find((t) => t.id === a.task))
             .sort((a, b) => Number(b?.status === "active") - Number(a?.status === "active"))
@@ -391,6 +450,7 @@ export class Operations {
     return p.plans.some((a) => a.task === task && a.status !== "closed") || p.staff.some((s) => s.lastTask === task);
   }
   private profile(p: Project, b: Portfolio[number], tasks: Task[]) {
+    if (this.config.workday?.enabled) this.writeStaffKnowledge(p);
     const file = join(this.directory, "workspace/knowledge/operations", b.id + ".json"),
       temp = file + "." + randomUUID() + ".tmp";
     // Persist only public task fields; approval tokens must never become model context.
@@ -452,6 +512,7 @@ export class Operations {
             ...b,
             plans: project.plans.map((a) => [a.id, a.status, a.priority, a.result]),
             signals: project.signals,
+            week: weekOf(now),
             ...(this.dailyPlanning
               ? {
                   staffPlans: project.staff
@@ -618,6 +679,25 @@ export class Operations {
           a.issues.every((id) => c.issues.some((i) => i.id === id && (!a.business || i.business === a.business))),
       );
     if (!valid) return "CEO 决策引用了不存在或暂停的项目、计划或问题，请重新核对编号。";
+    const weeklyGoals = d.weeklyGoals ?? [];
+    if (weeklyGoals.length && !this.config.workday?.enabled) return "自主上班尚未启用";
+    if (new Set(weeklyGoals.map((g) => `${g.business}:${g.role}`)).size !== weeklyGoals.length) return "周目标员工重复";
+    for (const g of weeklyGoals) {
+      if (
+        !known(g.business) ||
+        !this.get(g.business, now).staff.some((s) => s.role === g.role && this.onDuty(s)) ||
+        g.week !== weekOf(now)
+      )
+        return "周目标必须属于本周的在岗员工";
+    }
+    if (this.config.permissions) {
+      const executable = (a: ActionProposal) => a.kind !== "software" && (!a.operation || automatic(a.operation));
+      if (
+        d.directives.some((a) => !executable(a.action)) ||
+        d.approvals.some((a) => a.approve && !executable(this.get(a.business, now).plans.find((p) => p.id === a.plan)!))
+      )
+        return "该动作不能作为内部任务开工：发布须成果审核，改目标须weeklyGoals；对外回复未接入，部署、花钱、换账号须升级董事长";
+    }
     const staffPlans = d.staffPlans ?? [];
     if (staffPlans.length && !this.dailyPlanning) return "每日规划尚未启用";
     if (new Set(staffPlans.map((a) => `${a.business}:${a.role}`)).size !== staffPlans.length)
@@ -722,6 +802,28 @@ export class Operations {
     } else c.nextReviewAt = new Date(now.getTime() + 30 * 60000).toISOString();
     if (manualMetrics.length) (c.manualMetrics ??= []).push(...manualMetrics);
     c.decisions.push({ task: decisionId, summary, at: now.toISOString(), decision: d });
+    for (const goal of weeklyGoals) {
+      const p = this.get(goal.business, now),
+        s = p.staff.find((s) => s.role === goal.role)!;
+      if (s.weeklyGoal && s.weeklyGoal.direction !== goal.direction) {
+        if (JSON.stringify(s.pendingGoal && weeklyGoal(s.pendingGoal)) !== JSON.stringify(goal)) {
+          s.pendingGoal = { ...goal, confirmation: randomUUID() };
+          receipt.ask ??= [];
+          receipt.ask.push({
+            key: goalApproval(s.pendingGoal),
+            about: goalApproval(s.pendingGoal),
+            title: "周目标方向调整",
+            text: `${goal.business} · ${departments[goal.role]}\n原方向：${s.weeklyGoal.direction}\n新方向：${goal.direction}\n指标：${JSON.stringify(goal.metrics)}`,
+            options: ["批准调整", "保持原方向"],
+          });
+        }
+      } else {
+        s.weeklyGoal = goal;
+        delete s.pendingGoal;
+      }
+      this.save(p, "ceo-weekly-goal", now);
+      this.writeStaffKnowledge(p);
+    }
     for (const brief of d.briefs) c.briefs[brief.business] = brief.objective;
     for (const directive of d.directives) {
       const p = this.get(directive.business, now),
@@ -731,6 +833,7 @@ export class Operations {
       p.plans.push({
         ...a,
         id,
+        ceoApproved: true,
         proposedBy: "ceo",
         owner: workflows[a.kind][0],
         sourceTask: decisionId,
@@ -771,6 +874,7 @@ export class Operations {
         plan = p.plans.find((p) => p.id === a.plan)!;
       if (plan.status !== "proposed") continue;
       plan.status = a.approve ? "planned" : "closed";
+      plan.ceoApproved = a.approve;
       plan.result = a.reason;
       this.save(p, "ceo-approval", now);
     }
@@ -1041,9 +1145,19 @@ export class Operations {
             inspections: this.config.inspections ?? true,
             ceoWake: this.config.ceoWake ?? "legacy",
             dailyModelRuns: this.config.dailyModelRuns ?? null,
+            workday: this.config.workday ?? { enabled: false, after: "09:00" },
+            permissions: this.config.permissions ?? null,
           },
           ...(this.dailyPlanning
             ? {
+                week: weekOf(now),
+                missingWeeklyGoals: this.config.workday?.enabled
+                  ? active.flatMap((b) =>
+                      this.get(b.id, now)
+                        .staff.filter((s) => this.onDuty(s) && s.weeklyGoal?.week !== weekOf(now))
+                        .map((s) => ({ business: b.id, role: s.role })),
+                    )
+                  : [],
                 planningDate: day(now),
                 missingDailyPlans: active.flatMap((b) =>
                   this.get(b.id, now)
@@ -1371,6 +1485,20 @@ export class Operations {
           }
         }
         for (const s of p.staff) {
+          if (s.pendingGoal && s.pendingGoal.week !== weekOf(now)) delete s.pendingGoal;
+          if (s.pendingGoal) {
+            const answer = answers.find(
+              (a) =>
+                a.about === goalApproval(s.pendingGoal!) &&
+                !chief.answeredCards.includes(a.card) &&
+                [0, 1].includes(a.choice!),
+            );
+            if (answer) {
+              chief.answeredCards.push(answer.card);
+              if (answer.choice === 0) s.weeklyGoal = weeklyGoal(s.pendingGoal);
+              delete s.pendingGoal;
+            }
+          }
           mergeFollowups(s);
           const t = tasks.find((t) => t.id === s.lastTask);
           if (!t || t.status !== "completed" || s.processed === `${t.id}:${t.assignment}`) continue;
@@ -1384,18 +1512,26 @@ export class Operations {
             s.daily.checkedAt = now.toISOString();
           if (s.followups) s.followups = s.followups.filter((f) => f.checkTask !== t.id);
           if (decision.state === "blocked" && !chief.enabled) s.fingerprint = null;
+          if (t.kind.startsWith("workday-") && s.workday?.task === t.id) s.workday.actions = [];
           for (const a of decision.actions) {
-            const id = hash(`${b.id}:${s.role}:${a.key}`);
+            const existing = p.plans.find((p) => p.owner === s.role && (p.id === a.key || p.key === a.key));
+            const id = existing?.id ?? hash(`${b.id}:${s.role}:${a.key}`);
+            if (t.kind.startsWith("workday-") && p.plans.some((v) => v.id === id && v.status !== "closed"))
+              s.workday?.actions?.push(id);
             // Stable employee keys deduplicate proposals across checks; a closed plan remains in history.
             if (p.plans.some((v) => v.id === id) || p.plans.filter((v) => v.status !== "closed").length >= 30) continue;
+            const autonomous =
+              !!this.config.permissions && this.onDuty(s) && automatic(a.operation) && a.kind !== "software";
+            if (t.kind.startsWith("workday-")) s.workday?.actions?.push(id);
             p.plans.push({
               ...a,
+              ...(autonomous ? { autonomous: true } : {}),
               id,
               proposedBy: s.role,
-              owner: workflows[a.kind][0],
+              owner: autonomous ? s.role : workflows[a.kind][0],
               sourceTask: t.id,
               task: null,
-              status: chief.enabled ? "proposed" : "planned",
+              status: chief.enabled && !autonomous ? "proposed" : "planned",
               createdAt: now.toISOString(),
               dueAt: after(now, a.dueDays),
               followUpAt: null,
@@ -1454,7 +1590,9 @@ export class Operations {
         }
         const busy = () =>
           p.activity.filter(
-            (a) => !tasks.find((t) => t.id === a.task) || tasks.find((t) => t.id === a.task)?.status === "active",
+            (a) =>
+              !tasks.find((t) => t.id === a.task) ||
+              ["active", "queued"].includes(tasks.find((t) => t.id === a.task)?.status ?? ""),
           );
         const capacity = (fixedPublication = false) =>
           depth <= 1 &&
@@ -1473,14 +1611,49 @@ export class Operations {
           });
           p.activity.push({ task: id, role, kind, at: now.toISOString() });
         };
+        if (this.config.workday?.enabled && chief.enabled) {
+          for (const s of p.staff) {
+            if (
+              !capacity() ||
+              !this.onDuty(s) ||
+              busy().some((a) => a.role === s.role) ||
+              s.workday?.date === day(now) ||
+              s.weeklyGoal?.week !== weekOf(now) ||
+              s.daily?.date !== day(now) ||
+              Date.parse(s.daily.issuedAt) < Date.parse(`${day(now)}T09:00:00+08:00`) ||
+              now.getTime() <
+                Date.parse(nextWorkday(now, this.config.workday.after, undefined, this.config.workday.startDate))
+            )
+              continue;
+            const id = "D-" + hash(`${b.id}:${s.role}:${day(now)}`);
+            emit(
+              id,
+              s.role,
+              "check",
+              taskRequest({
+                title: `${b.name} · ${departments[s.role]}上班`,
+                kind: `workday-${s.role}`,
+                goal: `读取 knowledge/staff/${b.id}/${s.role}.json、knowledge/operations/${b.id}.json、knowledge/feedback.json。对照本周目标、昨天效果、未完成事项和CEO今日安排，提交1–3件今日计划；已有事项沿用key，不重做。每件由程序独立派一轮，本轮只规划。`,
+                acceptance: [
+                  "计划引用真实目标、数据和已有工作；未知写明",
+                  "使用inspection.actions提交计划，明确operation和验收标准",
+                ],
+              }),
+            );
+            s.workday = { date: day(now), task: id };
+            s.lastTask = id;
+          }
+        }
         // Plans take priority over further inspections, and all work is routed through the existing company workflow.
         const todayPriority = (a: Plan) =>
-          this.dailyPlanning &&
-          p.staff.some(
-            (s) => s.enabled && s.daily?.date === day(now) && s.daily.mode === "work" && s.daily.plan === a.id,
-          )
-            ? 0
-            : 1;
+          p.staff.some((s) => s.workday?.date === day(now) && s.workday.actions?.includes(a.id))
+            ? -1
+            : this.dailyPlanning &&
+                p.staff.some(
+                  (s) => s.enabled && s.daily?.date === day(now) && s.daily.mode === "work" && s.daily.plan === a.id,
+                )
+              ? 0
+              : 1;
         for (const a of [...p.plans].sort(
           (a, b) =>
             todayPriority(a) - todayPriority(b) || a.priority - b.priority || a.createdAt.localeCompare(b.createdAt),
@@ -1489,8 +1662,18 @@ export class Operations {
           // A fixed publisher has its own hub lane; model inspections must not prevent it reporting missing access.
           if (
             !capacity(publishing) ||
+            (this.config.workday?.enabled &&
+              !publishing &&
+              this.onDuty(p.staff.find((s) => s.role === a.owner)!) &&
+              (p.staff.find((s) => s.role === a.owner)?.workday?.date !== day(now) ||
+                tasks.find((t) => t.id === p.staff.find((s) => s.role === a.owner)?.workday?.task)?.status !==
+                  "completed")) ||
             (a.status !== "planned" && !(publishing && !a.task)) ||
-            !p.staff.find((s) => s.role === a.owner)?.enabled ||
+            (!p.staff.find((s) => s.role === a.owner)?.enabled && !a.ceoApproved) ||
+            (!!this.config.permissions && !a.ceoApproved && !this.onDuty(p.staff.find((s) => s.role === a.owner)!)) ||
+            (!!this.config.permissions &&
+              !publishing &&
+              (a.kind === "software" || (!!a.operation && !automatic(a.operation)))) ||
             (!publishing && busy().some((v) => v.role === a.owner))
           )
             continue;
@@ -1504,7 +1687,7 @@ export class Operations {
             "work",
             taskRequest({
               title: `${b.name} · ${a.title}`.slice(0, 120),
-              kind: publishing ? "publish-content" : `internal-${a.kind}`,
+              kind: publishing ? "publish-content" : a.autonomous ? `staff-${a.owner}` : `internal-${a.kind}`,
               ...(publishing ? { publication: a.publicationKey } : {}),
               goal: publishing
                 ? `项目资料：knowledge/operations/${b.id}.json。计划 ${a.id} 已经 CEO 审核。固定发布入口仅发布已冻结的内容；缺渠道或账号则报告具体阻塞。验收必须核对真实平台结果，不能把本地草稿当已发布。`

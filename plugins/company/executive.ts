@@ -1,3 +1,4 @@
+import { weeklyGoal, type WeeklyGoal } from "./workday.ts";
 import { inspection, type ActionProposal } from "./inspection.ts";
 export type StaffPlan = {
   business: string;
@@ -11,6 +12,7 @@ export type StaffPlan = {
   reviewAt: string;
 };
 export type ExecutiveDecision = {
+  weeklyGoals?: WeeklyGoal[];
   manualMetrics?: { publication: string; event: number; reads: number }[];
   staffPlans?: StaffPlan[];
   briefs: { business: string; objective: string }[];
@@ -116,6 +118,7 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
     return d[key].map(object);
   };
   return {
+    ...(d.weeklyGoals !== undefined ? { weeklyGoals: list("weeklyGoals", 6).map(weeklyGoal) } : {}),
     ...(d.manualMetrics !== undefined
       ? {
           manualMetrics: list("manualMetrics", 5).map((a) => {

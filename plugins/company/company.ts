@@ -1,3 +1,4 @@
+import { validateWorkday, type permissions } from "./workday.ts";
 import { validatePublishPolicy } from "./publication-policy.ts";
 import { ModelBudget } from "./model-budget.ts";
 import { publication, verifiedPublication, type Publication } from "./publication.ts";
@@ -27,6 +28,10 @@ export const workflows: Record<string, Role[]> = {
   finance: ["finance", "qa"],
 };
 for (const role of Object.keys(departments) as Role[]) workflows[`check-${role}`] = [role];
+for (const role of Object.keys(departments)) {
+  workflows[`workday-${role}`] = [role as Role];
+  workflows[`staff-${role}`] = [role as Role];
+}
 for (const kind of ["software", "content", "support", "finance"]) workflows[`internal-${kind}`] = [...workflows[kind]];
 export type CompanyConfig = {
   name: string;
@@ -38,7 +43,9 @@ export type CompanyConfig = {
   activeRoles?: Role[];
   inspections?: boolean;
   ceoWake?: "legacy" | "events";
-  dailyModelRuns?: Partial<Record<Role | "total", number>>;
+  dailyModelRuns?: Partial<Record<Role | "total" | "employee", number>>;
+  workday?: { enabled: boolean; after: string; startDate?: string };
+  permissions?: typeof permissions;
   publishVerification?: "qa" | "program";
   publishDailyLimit?: number;
   publishApproval?: { confirmFirst: number };
@@ -146,11 +153,15 @@ export class Company {
         Array.isArray(config.dailyModelRuns) ||
         typeof config.dailyModelRuns !== "object" ||
         Object.entries(config.dailyModelRuns).some(
-          ([key, n]) => (key !== "total" && !Object.hasOwn(departments, key)) || !Number.isSafeInteger(n) || n < 0,
+          ([key, n]) =>
+            (!["total", "employee"].includes(key) && !Object.hasOwn(departments, key)) ||
+            !Number.isSafeInteger(n) ||
+            n < 0,
         ))
     )
       throw new CompanyInputError("每日模型次数需要非负整数及正确岗位");
     validatePublishPolicy(config);
+    validateWorkday(config);
     this.config = config;
     mkdirSync(dirname(config.database), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(config.database);
@@ -203,7 +214,7 @@ export class Company {
     if (this.config.dailyModelRuns && !(task.kind === "publish-content" && (role === "growth" || program))) {
       const budget = new ModelBudget(dirname(this.config.database), this.config);
       try {
-        if (!budget.available(role, now)) {
+        if (!budget.available(role, now, task.id)) {
           budget.limited(now);
           task.status = "queued";
           return;
@@ -223,6 +234,7 @@ export class Company {
       assignment: task.assignment,
       role,
       inspection: task.kind.startsWith("check-"),
+      workday: task.kind.startsWith("workday-"),
       internal: task.kind.startsWith("internal-"),
       supervised: !!task.supervised,
       publication: task.publication ?? null,
@@ -261,6 +273,8 @@ export class Company {
           !!this.config.ceoMode &&
           (String(data.kind).startsWith("check-") ||
             String(data.kind).startsWith("internal-") ||
+            String(data.kind).startsWith("workday-") ||
+            String(data.kind).startsWith("staff-") ||
             data.kind === "publish-content"),
         reports: [],
         approval: null,
@@ -326,12 +340,15 @@ export class Company {
         verdict: data.verdict as Report["verdict"],
         summary: words(data.summary, 400, "结果摘要"),
         artifacts:
-          data.verdict === "pass" && !task.kind.startsWith("check-") && task.kind !== "ceo"
+          data.verdict === "pass" &&
+          !task.kind.startsWith("check-") &&
+          !task.kind.startsWith("workday-") &&
+          task.kind !== "ceo"
             ? list(data.artifacts, "交付物", 150)
             : [],
         evidence: list(data.evidence, "核验依据", 150),
       };
-      if (task.kind.startsWith("check-") && data.verdict === "pass") {
+      if ((task.kind.startsWith("check-") || task.kind.startsWith("workday-")) && data.verdict === "pass") {
         try {
           report.inspection = inspection(data.inspection);
         } catch (error) {
@@ -395,7 +412,9 @@ export class Company {
       task.kind === "ceo" ||
       task.kind === "publish-content" ||
       (task.kind.startsWith("check-") && (task.supervised || report.inspection?.state !== "blocked")) ||
-      task.kind.startsWith("internal-")
+      task.kind.startsWith("internal-") ||
+      task.kind.startsWith("workday-") ||
+      task.kind.startsWith("staff-")
     ) {
       task.status = "completed";
       task.approval = null;
