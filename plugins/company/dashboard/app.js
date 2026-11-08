@@ -105,7 +105,7 @@ async function api(path, body) {
     method: body === undefined ? "GET" : "POST",
     headers: body === undefined ? {} : { "Content-Type": "application/json", "X-Company-CSRF": csrf },
     body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(8000),
+    signal: AbortSignal.timeout(body === undefined ? 30000 : 8000),
   });
   const result = await response.json();
   if (!response.ok) throw new Error(result.error ?? "操作未完成，请重试");
