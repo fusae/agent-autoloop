@@ -29,6 +29,8 @@ export type Reading = {
   usage?: Usage;
   error?: string;
   finished?: boolean;
+  /** Adapter evidence proves this failed process never performed model work; unknown failures stay charged. */
+  modelNotStarted?: boolean;
   /** The business finished, but the plugin-specific receipt is invalid; repair only the last message. */
   receiptProblem?: string;
 };

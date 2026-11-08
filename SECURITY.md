@@ -71,7 +71,7 @@ Company owner-reply decisions reference authenticated inbox event IDs, never mod
 
 Co-located workers persist their worker identity with each execution and must not settle, cancel or count another worker’s entries. Only the original primary worker adopts legacy unnamed entries; extra workers use separate scoped credentials.
 
-公司模型控制与计数仅在插件层实现，不修改内核。模型包装保留既有模型、目录和权限；负责人对话的额度例外依据可信规则名称，不依据事件正文。取代关闭只接受独立 company-owner 来源，不授予普通部门该事件来源；只能关闭暂停任务，不伪造发布或负责人答复。
+公司模型控制与计数仅在插件层实现，不修改内核。模型包装保留既有模型、目录和权限；负责人对话的额度例外依据可信规则名称，不依据事件正文；日报/周报例外仅认经营账本登记的当天任务。额度冲回只认适配器原始输出与退出证据或进程启动失败，不认业务文字，未知仍计数。取代关闭只接受独立 company-owner 来源，不授予普通部门该事件来源；只能关闭暂停任务，不伪造发布或负责人答复。
 
 公司发布护栏在插件固定程序内执行：同渠道事务预留、北京时间日额度、冻结稿件的本人一次性确认及发布入口复核。跨机私钥由独立系统账号持有，sudoers 仅授权无参数固定转发程序，SSH 限来源、禁转发、固定强制命令并严格核验主机；必须实测模型沙箱不可 sudo、不可连接旧机、不可读私钥。未知发布预留不能自动跨日释放；回滚先撤销通道，不能用旧代码绕过待决确认。详见[窄通道](docs/xiaohongshu.md#跨机发布窄通道)。
 

@@ -1,5 +1,5 @@
 // Failure modes: concurrent workers overrun a shared limit, repair turns escape counting, the wrapper calls a
-// real model after denial, loses the original assignment, or blocks authenticated owner conversations.
+// real model after denial, charges proven pre-model failures, refunds ambiguous/worked failures, loses the original assignment, or blocks authenticated owner conversations.
 import { createServer } from "node:http";
 import { Company } from "../plugins/company/company.ts";
 import { DatabaseSync } from "node:sqlite";
@@ -203,6 +203,138 @@ test("fixed ticks retry one daily notice key and never call a real messaging ser
     assert.match(keys[0], /^company-model-limit-\d{4}-\d{2}-\d{2}$/);
   } finally {
     await new Promise<void>((done) => server.close(() => done()));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// All executables below are local fakes; no provider requests or notifications are sent.
+test("wrapper refunds proven auth and spawn failures durably, but charges worked and uncertain failures", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-refund-"));
+  try {
+    const cfg = { name: "test", database: join(dir, "company.db"), maxAssignments: 6, dailyModelRuns: { total: 100 } };
+    const config = join(dir, "company.json");
+    writeFileSync(config, JSON.stringify(cfg));
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "shell"), '#!/bin/sh\nexec /bin/sh -c "$2"\n', { mode: 0o700 });
+    let n = 0;
+    const run = async (engine: string, output: object[], missing = false) => {
+      const folder = join(dir, `run-${++n}`);
+      mkdirSync(folder);
+      const contextFile = join(folder, "context.json");
+      writeFileSync(contextFile, JSON.stringify({ events: [], answers: [] }));
+      writeFileSync(
+        join(folder, "entry.json"),
+        JSON.stringify({ run: n, attempt: 1, turn: 1, job: { rule: { name: "CEO · 业务答复" } } }),
+      );
+      writeFileSync(
+        join(bin, engine),
+        missing
+          ? "#!/missing-interpreter\n"
+          : `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(output.map((e) => JSON.stringify(e)).join("\n"))});process.exitCode=1;\n`,
+        { mode: 0o700 },
+      );
+      const command = agent.command({
+        prompt: "test",
+        session: "test",
+        resume: null,
+        cwd: dir,
+        access: "read",
+        folder,
+        contextFile,
+        command: [config, "model", "ceo", engine],
+      });
+      await exec(command[0], command.slice(1), {
+        env: {
+          ...process.env,
+          ANTHROPIC_API_KEY: "",
+          CLAUDE_CODE_OAUTH_TOKEN: "",
+          PATH: bin + ":" + process.env.PATH,
+          SHELL: join(bin, "shell"),
+        },
+      }).catch((e) => {
+        assert.equal(e.code, 1);
+      });
+      const budget = new ModelBudget(dir, cfg);
+      try {
+        return budget.snapshot().total;
+      } finally {
+        budget.close();
+      }
+    };
+    const auth = {
+      type: "turn.failed",
+      error: {
+        message:
+          "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again",
+      },
+    };
+    assert.equal(await run("codex", [auth]), 0);
+    assert.equal(
+      await run("codex", [{ type: "item.completed", item: { type: "agent_message", text: "worked" } }, auth]),
+      1,
+    );
+    assert.equal(await run("codex", [{ type: "turn.failed", error: { message: "connection lost" } }]), 2);
+    assert.equal(await run("codex", [], true), 2);
+    const claudeAuth = {
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      result: "API Error: 401 authentication_error",
+      usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    };
+    assert.equal(await run("claude", [claudeAuth]), 2);
+    assert.equal(await run("claude", [{ ...claudeAuth, usage: { input_tokens: 10, output_tokens: 2 } }]), 3);
+    assert.equal(await run("claude", [{ ...claudeAuth, usage: undefined }]), 4);
+    assert.equal(await run("claude", [{ ...claudeAuth, modelUsage: { sonnet: { inputTokens: 10 } } }]), 5);
+    assert.equal(await run("claude", [{ ...claudeAuth, result: "provider unavailable" }]), 6);
+    const ledger = new ModelBudget(dir, cfg);
+    ledger.refund("model:1:1:1");
+    assert.equal(ledger.snapshot().total, 6, "refund replay cannot subtract twice");
+    ledger.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("retained adapter output rebuilds refunds across restart, without trusting receipts or partial output", () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-reconcile-"));
+  try {
+    const cfg = { name: "test", database: join(dir, "company.db"), maxAssignments: 6 };
+    const now = new Date("2026-11-08T05:00:00Z");
+    let budget = new ModelBudget(dir, cfg);
+    for (let n = 1; n <= 4; n++) budget.start("ceo", `model:${n}:1:1`, true, now);
+    budget.close();
+    const auth = JSON.stringify({
+      type: "turn.failed",
+      error: {
+        message:
+          "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.",
+      },
+    });
+    for (let n = 1; n <= 3; n++) {
+      const folder = join(dir, "hub/worker/runs", `${n}-1`);
+      mkdirSync(folder, { recursive: true });
+      writeFileSync(
+        join(folder, "stdout-1.log"),
+        '{"companyModel":"codex"}\n' +
+          (n === 3 ? '{"type":"item.started","item":{"type":"command_execution"}}\n' : "") +
+          auth,
+      );
+      if (n !== 2) writeFileSync(join(folder, "exit-1"), "1\n");
+    }
+    budget = new ModelBudget(dir, cfg);
+    assert.equal(budget.snapshot(now).total, 3);
+    budget.close();
+    budget = new ModelBudget(dir, cfg);
+    assert.equal(budget.snapshot(now).total, 3);
+    budget.close();
+    rmSync(join(dir, "hub"), { recursive: true });
+    budget = new ModelBudget(dir, cfg);
+    assert.equal(budget.snapshot(now).total, 3, "refund survives output cleanup");
+    budget.close();
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });

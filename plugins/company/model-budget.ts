@@ -1,3 +1,5 @@
+import codex from "../codex/agent.ts";
+import claude from "../claude/agent.ts";
 import { scheduledReport } from "./reporting.ts";
 import { chmodSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -15,7 +17,22 @@ export class ModelBudget {
     const file = join(directory, "model-runs.db");
     this.db = new DatabaseSync(file);
     chmodSync(file, 0o600);
-    this.db.exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+    this.db.exec("PRAGMA busy_timeout=5000");
+    // Concurrent first opens can get SQLITE_BUSY while switching to WAL despite busy_timeout.
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      try {
+        this.db.exec("PRAGMA journal_mode=WAL");
+        break;
+      } catch (error) {
+        if ((error as { errcode?: number }).errcode !== 5 || Date.now() >= deadline) {
+          this.db.close();
+          throw error;
+        }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+      }
+    }
+    this.db.exec(`PRAGMA synchronous=FULL;
       CREATE TABLE IF NOT EXISTS journal (id TEXT PRIMARY KEY, kind TEXT NOT NULL, at TEXT NOT NULL, role TEXT);
       CREATE INDEX IF NOT EXISTS journal_at ON journal(at);`);
     this.db.exec("BEGIN IMMEDIATE");
@@ -71,11 +88,36 @@ export class ModelBudget {
           }
         this.record("baseline", "baseline", new Date());
       }
+      this.reconcile();
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
       this.db.close();
       throw error;
+    }
+  }
+  private reconcile() {
+    // Worker exit files prove completion even after entry.json has been removed on acknowledgement.
+    // Never infer a refund from the business receipt or an error phrase in the hub projection.
+    const starts = this.db
+      .prepare(
+        "SELECT id FROM journal WHERE kind='started' AND NOT EXISTS (SELECT 1 FROM journal r WHERE r.id=journal.id||':refunded')",
+      )
+      .all();
+    for (const row of starts) {
+      const match = /^model:(\d+):(\d+):(\d+)$/.exec(String(row.id));
+      if (!match) continue;
+      const folder = join(this.directory, "hub/worker/runs", `${match[1]}-${match[2]}`);
+      const out = join(folder, `stdout-${match[3]}.log`),
+        exit = join(folder, `exit-${match[3]}`);
+      if (!existsSync(out) || !existsSync(exit)) continue;
+      const rawCode = readFileSync(exit, "utf8").trim();
+      if (!/^\d+$/.test(rawCode)) continue;
+      const stdout = readFileSync(out, "utf8");
+      const marker = stdout.split("\n")[0];
+      const adapter =
+        marker === '{"companyModel":"codex"}' ? codex : marker === '{"companyModel":"claude"}' ? claude : null;
+      if (adapter?.read(stdout, Number(rawCode), "").modelNotStarted) this.refund(String(row.id));
     }
   }
   private record(id: string, kind: string, now: Date, role?: string) {
@@ -86,13 +128,17 @@ export class ModelBudget {
       start = new Date(date + "T00:00:00+08:00").toISOString();
     const end = new Date(Date.parse(start) + 86400_000).toISOString();
     const rows = this.db
-      .prepare("SELECT role,COUNT(*) AS n FROM journal WHERE kind='started' AND at>=? AND at<? GROUP BY role")
+      .prepare(
+        "SELECT role,COUNT(*) AS n FROM journal WHERE kind='started' AND at>=? AND at<? AND NOT EXISTS (SELECT 1 FROM journal r WHERE r.id=journal.id||':refunded') GROUP BY role",
+      )
       .all(start, end);
     const roles: Partial<Record<Role, number>> = {};
     for (const row of rows) roles[row.role as Role] = Number(row.n);
     const employees: Record<string, number> = {};
     for (const row of this.db
-      .prepare("SELECT role,COUNT(*) AS n FROM journal WHERE kind='employee-started' AND at>=? AND at<? GROUP BY role")
+      .prepare(
+        "SELECT role,COUNT(*) AS n FROM journal WHERE kind='employee-started' AND at>=? AND at<? AND NOT EXISTS (SELECT 1 FROM journal r WHERE r.id=substr(journal.id,1,length(journal.id)-9)||':refunded') GROUP BY role",
+      )
       .all(start, end))
       employees[String(row.role)] = Number(row.n);
     return {
@@ -122,19 +168,8 @@ export class ModelBudget {
       limits = this.config.dailyModelRuns;
     const reportDate =
       role === "ceo" && this.config.reporting?.enabled ? scheduledReport(this.directory, task) : undefined;
-    if (reportDate && reportDate !== modelDay(now)) return false;
+    if (reportDate) return reportDate === modelDay(now);
     if (!limits) return true;
-    const reserved =
-      this.config.reporting?.enabled &&
-      !reportDate &&
-      !this.db.prepare("SELECT 1 FROM journal WHERE id=?").get(`report-started:${modelDay(now)}`)
-        ? 1
-        : 0;
-    if (
-      s.total >= (limits.total ?? Infinity) - reserved ||
-      (role === "ceo" && (s.roles.ceo ?? 0) >= (limits.ceo ?? Infinity) - reserved)
-    )
-      return false;
     if (s.total >= (limits.total ?? Infinity) || (s.roles[role] ?? 0) >= (limits[role] ?? Infinity)) return false;
     if (role !== "ceo" && limits.employee !== undefined) {
       const employee = this.employee(role, task);
@@ -152,8 +187,6 @@ export class ModelBudget {
       const allowed = owner || this.available(role, now, task);
       if (allowed) {
         this.record(key, "started", now, role);
-        if (role === "ceo" && this.config.reporting?.enabled && scheduledReport(this.directory, task) === modelDay(now))
-          this.record(`report-started:${modelDay(now)}`, "report-started", now, role);
         const employee = this.employee(role, task);
         if (employee) this.record(key + ":employee", "employee-started", now, employee);
       }
@@ -164,6 +197,10 @@ export class ModelBudget {
       this.db.exec("ROLLBACK");
       throw error;
     }
+  }
+  // Append a compensating fact; original starts remain available for audit and replay.
+  refund(key: string, now = new Date()) {
+    this.record(key + ":refunded", "refunded", now);
   }
   close() {
     this.db.close();

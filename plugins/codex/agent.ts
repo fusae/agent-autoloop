@@ -38,6 +38,8 @@ export default {
       finished?: boolean;
       completed?: boolean;
     } = {};
+    let worked = false,
+      authFailure = false;
     for (const line of stdout.split("\n")) {
       let event: any;
       try {
@@ -45,6 +47,8 @@ export default {
       } catch {
         continue;
       }
+      if (typeof event.type === "string" && (event.type.startsWith("item.") || event.type === "turn.completed"))
+        worked = true;
       if (event.type === "thread.started") seen.session = event.thread_id;
       else if (event.type === "item.completed" && event.item?.type === "agent_message") seen.text = event.item.text;
       else if (event.type === "turn.completed") {
@@ -56,6 +60,10 @@ export default {
       } else if (event.type === "turn.failed") {
         seen.finished = true;
         seen.error = event.error?.message || "Codex 没跑完这一轮";
+        authFailure =
+          /^(?:Your access token could not be refreshed because your refresh token was already used\. Please log out and sign in again|Not logged in\b|Unauthorized\b|401 Unauthorized\b)/.test(
+            seen.error!,
+          );
       } else if (event.type === "error") seen.error = event.message;
     }
     const { completed, ...reading } = seen;
@@ -63,7 +71,7 @@ export default {
     if (!completed) delete reading.text;
     if (code !== null && !completed && !reading.error) reading.error = tail(stderr) || "Codex 没有完成并留下实际结果";
     if (completed && !reading.text?.trim()) reading.error = "Codex 没有完成并留下实际结果";
-    return reading;
+    return { ...reading, ...(code !== null && authFailure && !worked && { modelNotStarted: true }) };
   },
   link: (session) => `codex://threads/${session}`,
   check() {

@@ -1,5 +1,5 @@
 // Failure modes: daily close launches employee models, cards suppress the CEO report, restarts duplicate it,
-// Monday loses last week's goals, ordinary work steals the last CEO/total slot, or defaults change silently.
+// Monday loses last week's goals, exhausted quotas block registered reports, or defaults change silently.
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -173,26 +173,33 @@ test("work results carry four daily fields and later work updates the same day's
     assert.equal(get()[0].entries.length, 1);
     assert.throws(() => dailyReport({ ...fields, tomorrow: "" }));
   }));
-test("last CEO and total slot are reserved atomically for the registered evening task; owner bypass stays counted", () =>
+test("registered daily and weekly reports dispatch beyond exhausted quotas; owner bypass stays counted", () =>
   fixture((f: any) => {
-    const cfg = { ...f.cfg, dailyModelRuns: { total: 3, ceo: 2 } };
+    const cfg = { ...f.cfg, dailyModelRuns: { total: 1, ceo: 1 } };
+    const office = new Company(cfg);
     const budget = new ModelBudget(f.dir, cfg);
     try {
       assert.ok(budget.start("ceo", "regular", false, afternoon));
-      assert.equal(budget.start("ceo", "too-many", false, afternoon), false);
-      assert.ok(budget.start("growth", "employee", false, afternoon));
-      assert.equal(budget.start("growth", "steal-total", false, afternoon), false);
+      assert.equal(budget.start("growth", "over-limit", false, afternoon), false);
       assert.equal(budget.available("ceo", evening, "REPORT-2026-11-08"), false, "prefix is not authorization");
-      const report = f.work(f.tick(evening))[0];
-      assert.ok(budget.start("ceo", "evening", false, evening, report.subject));
-      assert.equal(budget.snapshot(evening).total, 3);
-      assert.equal(budget.start("ceo", "repair-over-limit", false, evening, report.subject), false);
       assert.ok(budget.start("ceo", "owner", true, evening));
-      assert.equal(budget.snapshot(evening).total, 4);
-      assert.equal(budget.available("ceo", new Date("2026-11-09T01:00:00Z"), report.subject), false);
-      assert.ok(budget.available("ceo", new Date("2026-11-09T01:00:00Z")));
+      for (const at of [evening, new Date("2026-11-09T13:00:00Z")]) {
+        budget.start("ceo", "owner-" + at.toISOString(), true, at);
+        const report = f.work(f.tick(at))[0];
+        const dispatched = office.process(
+          { events: [{ ...report, id: 99, source: "company-inbox" }], answers: [] },
+          at,
+        );
+        assert.ok(dispatched.events?.some((e: any) => e.type === "company.work.ceo"));
+        assert.ok(budget.start("ceo", "report-" + report.subject, false, at, report.subject));
+        assert.ok(budget.start("ceo", "repair-" + report.subject, false, at, report.subject));
+        assert.equal(budget.available("ceo", at), false);
+        assert.equal(budget.available("ceo", new Date(at.getTime() + 86400_000), report.subject), false);
+      }
+      assert.equal(budget.snapshot(evening).roles.ceo, 5);
     } finally {
       budget.close();
+      office.close();
     }
   }));
 test("disabled reporting keeps old scheduling and no extra report data", () =>

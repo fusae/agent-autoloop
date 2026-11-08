@@ -122,3 +122,5 @@ agent-autoloop uninstall
 公司文字配图需另装 Chrome for Testing chrome-headless-shell 与 Noto CJK/Emoji 系统字体，并以员工实际身份、沙箱验收；知识模板部署到 workspace/knowledge，见[文字配图](docs/xiaohongshu.md#内容质量与文字配图)。
 
 Claude Code 需 2.1.317 或更新版本；Linux 安装 `bubblewrap`、`socat`。服务 OAuth 仅放在 root:root 0600 的环境文件，通过 systemd `EnvironmentFile` 加载，不与 `ANTHROPIC_API_KEY` 共存。切换公司模型前必须以实际 worker 身份验证 sudo、旧机网络、私钥/环境文件读取及目录外写入均被拒绝，并确认正常认证调用成功；未通过就保持 Codex。详见[权限边界](docs/plugins.md#access-实际能做什么)。
+
+公司额度升级需同步公司模型包装器、模型适配器与 `worker/agents.ts`；当天已登记日报/周报不受额度阻挡，确认未开始模型工作的失败自动冲回，旧启动账目不改写，详见[模型调用控制](docs/company.md#模型调用控制)。

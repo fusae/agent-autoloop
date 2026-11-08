@@ -47,12 +47,32 @@ if (!allowed) {
   );
 } else {
   process.stdout.write(JSON.stringify({ companyModel: engine }) + "\n");
-  const child = spawn(command[0], command.slice(1), { cwd: turn.cwd, stdio: ["ignore", "inherit", "inherit"] });
+  const refund = () => {
+    const ledger = new ModelBudget(dirname(configFile), config);
+    try {
+      ledger.refund(key);
+    } finally {
+      ledger.close();
+    }
+  };
+  const child = spawn(command[0], command.slice(1), { cwd: turn.cwd, stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "",
+    stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+    stdout += chunk;
+    process.stdout.write(chunk);
+  });
+  child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+    stderr += chunk;
+    process.stderr.write(chunk);
+  });
   child.on("error", (error) => {
+    refund();
     console.error(error.message);
     process.exitCode = 1;
   });
-  child.on("exit", (code) => {
-    process.exitCode = code ?? 1;
+  child.on("close", (code) => {
+    if (adapter.read(stdout, code, stderr).modelNotStarted) refund();
+    process.exitCode = code !== null && code >= 0 ? code : 1;
   });
 }

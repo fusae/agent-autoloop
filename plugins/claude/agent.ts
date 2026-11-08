@@ -126,7 +126,29 @@ export default {
       const said = String(result.result ?? "");
       if (result.is_error || result.subtype !== "success") {
         const error = said.split("\n")[0] || result.subtype || "没留下结果";
-        return { session: result.session_id, usage, finished: true, error };
+        const noUsage =
+          result.usage &&
+          result.usage.input_tokens === 0 &&
+          result.usage.output_tokens === 0 &&
+          (result.usage.cache_read_input_tokens ?? 0) === 0 &&
+          (result.usage.cache_creation_input_tokens ?? 0) === 0 &&
+          result.total_cost_usd === 0 &&
+          Object.values(result.modelUsage ?? {}).every((u: any) =>
+            [u.inputTokens, u.outputTokens, u.cacheReadInputTokens, u.cacheCreationInputTokens, u.costUSD].every(
+              (n) => n === undefined || n === 0,
+            ),
+          );
+        const authFailure =
+          /^(?:API Error: 401\b|Not logged in\b|Invalid API key\b|OAuth token (?:has expired|refresh failed)\b)/.test(
+            error,
+          );
+        return {
+          session: result.session_id,
+          usage,
+          finished: true,
+          error,
+          ...(code !== null && noUsage && authFailure && { modelNotStarted: true }),
+        };
       }
       return { text: said, session: result.session_id, usage, finished: true };
     }

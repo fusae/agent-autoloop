@@ -268,6 +268,12 @@ test("employee quota preserves six rounds for the other project, owner messages 
       for (let i = 0; i < 6; i++) assert.ok(budget.start("growth", `b${i}`, false, now, shifts[1].subject));
       for (let i = 0; i < 10; i++) assert.ok(budget.start("ceo", `owner${i}`, true, now));
       assert.equal(budget.snapshot(now).total, 22);
+      budget.refund("a0", new Date("2026-11-09T16:00:00Z"));
+      budget.refund("a0", now);
+      assert.equal(budget.snapshot(now).total, 21);
+      assert.equal(budget.snapshot(now).roles.growth, 11);
+      assert.equal(budget.snapshot(now).employees["app:growth"], 5);
+      assert.equal(budget.snapshot(now).employees["other:growth"], 6);
       assert.equal(budget.available("ceo", now), false);
       assert.ok(budget.available("growth", new Date("2026-11-09T16:00:00Z"), shifts[0].subject));
       assert.equal(budget.available("growth", now, "unknown"), false);

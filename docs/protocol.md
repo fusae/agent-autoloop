@@ -183,12 +183,14 @@ POST /v1/runs/12/result    Authorization: Bearer <token>   Result
 ```ts
 export default {
   command: (run) => [...],                                // 这一轮的命令行，run.resume 是要接着的会话
-  read: (output) => ({ text, session, usage, finished, receiptProblem }), // 从输出里读出最后一条消息和会话
+  read: (output) => ({ text, session, usage, finished, receiptProblem, modelNotStarted }), // 从输出里读出最后一条消息和会话
   link: (session) => "…",                                 // 可选：打开这个会话的链接
 };
 ```
 
 `read` 可选返回 `receiptProblem`，表示业务已完成但插件自有回执格式不合法。接单程序按同一会话最多重写两次；耗尽后保留原首行结局、丢弃整份无效回执并通知本人，所有尝试的用量累加。它不是进程失败的 `error`。这是插件读取接口的可选扩展，不增加 HTTP 字段；未提供它的旧插件行为不变，使用它的插件须与新版接单程序一起部署。
+
+`read` 的可选 `modelNotStarted:true` 仅用于适配器确认失败进程未进行模型工作的情况，未知失败不设置。公司插件据此追加额度冲回事实；不进入内核回执或改变 HTTP 协议，旧插件缺省仍计数。
 
 专用插件的 `access` 三档，翻译成各自 CLI 的权限：`read` 只读，`edit` 只改工作目录（默认），`full` 按插件约定跳过工具审批。Claude 三档都强制启用自身沙箱，`full` 不再解除目录、网络与凭据限制；`read` 保持 plan 并禁止模型文件写入。这是 Claude 适配器的权限收紧，不改变 HTTP 协议；Codex 行为不变。只读不等于读不到密钥，要隔离密钥请用系统账号或容器。`command` 只传命令参数，不替任意程序限制权限。
 
