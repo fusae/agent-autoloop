@@ -83,3 +83,35 @@ export function nextWorkday(now: Date, after: string, issued?: string, startDate
 }
 export const goalApproval = (goal: WeeklyGoal) =>
   "weekly:" + createHash("sha256").update(JSON.stringify(goal)).digest("hex");
+
+export const production = (operation?: string) => ["write", "image", "revise", "package"].includes(operation ?? "");
+export function draftStock(
+  plans: import("./operations.ts").Plan[],
+  goal: WeeklyGoal | undefined,
+  results: import("./publication.ts").Publication[],
+  now: Date,
+) {
+  const published = new Set(results.map((r) => r.key));
+  const content = plans.filter(
+    (p) => p.kind === "content" && p.owner === "growth" && (production(p.operation) || !p.operation),
+  );
+  const ready = content.filter(
+    (p) => ["delivered", "publishing"].includes(p.status) && !published.has(p.publicationKey ?? ""),
+  ).length;
+  const making = content.filter((p) => ["planned", "working"].includes(p.status)).length;
+  const thisWeek = results.filter(
+    (r) =>
+      localDay(new Date(r.publishedAt)) >= weekOf(now) &&
+      localDay(new Date(r.publishedAt)) <= localDay(now) &&
+      plans.some((p) => p.publicationKey === r.key),
+  ).length;
+  const target = goal?.week === weekOf(now) ? (goal.metrics.find((m) => m.unit === "篇")?.target ?? null) : null;
+  return {
+    published: thisWeek,
+    ready,
+    making,
+    target,
+    limit: 2,
+    needsProduction: target !== null && thisWeek + ready < target && ready + making < 2,
+  };
+}

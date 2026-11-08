@@ -12,6 +12,7 @@ export type ActionProposal = {
   measure: string;
 };
 export type Inspection = {
+  noProductionReason?: string;
   state: "idle" | "action" | "blocked";
   actions: ActionProposal[];
   questions?: { key: string; question: string; context: string }[];
@@ -78,5 +79,11 @@ export function inspection(value: unknown): Inspection {
     const q = obj(v);
     return { key: key(q.key), question: str(q.question, 300), context: str(q.context, 300) };
   });
-  return { state: d.state, actions, reviews, ...(questions.length ? { questions } : {}) };
+  return {
+    ...(d.noProductionReason !== undefined ? { noProductionReason: str(d.noProductionReason, 180) } : {}),
+    state: d.state,
+    actions,
+    reviews,
+    ...(questions.length ? { questions } : {}),
+  };
 }

@@ -106,39 +106,46 @@ export function interactiveCard(card: Card, media?: PublicationMedia) {
   }
   if (card.kind === "ask" && card.state === "open") {
     elements.push(
-      ...card.options.map((label, choice) => ({
-        tag: "button",
-        text: { tag: "plain_text", content: `${choice + 1}. ${label}` },
-        type: choice === card.recommend ? "primary" : "default",
-        width: "fill",
-        behaviors: [{ type: "callback", value: { card: card.id, version: card.version, choice } }],
-      })),
+      ...card.options.flatMap((label, choice) =>
+        card.title === "发布预告" && choice !== 0
+          ? []
+          : [
+              {
+                tag: "button",
+                text: { tag: "plain_text", content: card.title === "发布预告" ? label : `${choice + 1}. ${label}` },
+                type: choice === card.recommend ? "primary" : "default",
+                width: "fill",
+                behaviors: [{ type: "callback", value: { card: card.id, version: card.version, choice } }],
+              },
+            ],
+      ),
     );
-    elements.push({
-      tag: "form",
-      name: "owner_reply",
-      elements: [
-        {
-          tag: "input",
-          name: "reply",
-          label: { tag: "plain_text", content: "补充意见" },
-          placeholder: { tag: "plain_text", content: "输入你的决定或补充说明" },
-          input_type: "multiline_text",
-          rows: 3,
-          width: "fill",
-          max_length: 1000,
-          required: true,
-        },
-        {
-          tag: "button",
-          name: "submit_reply",
-          text: { tag: "plain_text", content: "提交" },
-          type: "primary",
-          form_action_type: "submit",
-          behaviors: [{ type: "callback", value: { card: card.id, version: card.version, action: "reply" } }],
-        },
-      ],
-    });
+    if (card.title !== "发布预告")
+      elements.push({
+        tag: "form",
+        name: "owner_reply",
+        elements: [
+          {
+            tag: "input",
+            name: "reply",
+            label: { tag: "plain_text", content: "补充意见" },
+            placeholder: { tag: "plain_text", content: "输入你的决定或补充说明" },
+            input_type: "multiline_text",
+            rows: 3,
+            width: "fill",
+            max_length: 1000,
+            required: true,
+          },
+          {
+            tag: "button",
+            name: "submit_reply",
+            text: { tag: "plain_text", content: "提交" },
+            type: "primary",
+            form_action_type: "submit",
+            behaviors: [{ type: "callback", value: { card: card.id, version: card.version, action: "reply" } }],
+          },
+        ],
+      });
   } else {
     if (answer) elements.push({ tag: "div", text: { tag: "plain_text", content: `你的决定：${answer}` } });
     const result = card.result?.trim();

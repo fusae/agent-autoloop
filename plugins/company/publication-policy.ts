@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { publication, type Publication } from "./publication.ts";
 import type { CompanyConfig } from "./company.ts";
@@ -17,6 +18,8 @@ export const publishDay = (date: Date) => new Date(date.getTime() + 8 * 3600_000
 export const nextPublishDay = (date: Date) =>
   new Date(Date.parse(`${publishDay(date)}T00:00:00+08:00`) + 86400_000).toISOString();
 export function validatePublishPolicy(config: Partial<CompanyConfig>) {
+  if (config.publishApproval?.preview !== undefined && typeof config.publishApproval.preview !== "boolean")
+    throw Error("发布预告开关不正确");
   if (config.publishVerification !== undefined && !["qa", "program"].includes(config.publishVerification))
     throw Error("发布核验配置无效");
   if (
@@ -75,4 +78,57 @@ export function publicationPreview(directory: string, key: string, business: str
   if (typeof draft.title !== "string" || typeof draft.content !== "string" || !Array.isArray(draft.images))
     throw Error("已审核稿件缺少标题、正文或图片");
   return `APP：${business}\n标题：${draft.title}\n正文：${draft.content}\n图片数：${draft.images.length}\n只发布本次已冻结的审核稿；可补充文字意见。\n发布稿件：${key}`;
+}
+
+export type PublishPreview = { key: string; about: string; createdAt: string; publishAt: string };
+export function previewEnabled(config: Partial<CompanyConfig>, successes: number) {
+  return config.publishApproval?.preview === true && successes >= Math.max(5, config.publishApproval.confirmFirst);
+}
+export function publicationTeaser(directory: string, key: string, business: string, at: string) {
+  publicationPreview(directory, key, business);
+  const request = JSON.parse(readFileSync(join(directory, "publications", `${key}.json`), "utf8"));
+  const xhs = request.artifacts.find((a: any) => /(^|\/)xiaohongshu\.json$/.test(a.path));
+  const draft = xhs
+    ? JSON.parse(xhs.content)
+    : { title: "已审核正文", content: request.artifacts.map((a: any) => a.content).join("\n") };
+  return `APP：${business}\n标题：${draft.title}\n正文：${Array.from(draft.content as string)
+    .slice(0, 200)
+    .join(
+      "",
+    )}\n预计发布时间：${new Date(at).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false })}（北京时间）\n一小时内可取消；送达延迟则顺延，未取消由固定程序发布。`;
+}
+// Read only hub facts: a delayed callback must still cancel before a publisher starts.
+export function previewDelivery(directory: string, preview: PublishPreview) {
+  const file = join(directory, "hub/hub.db");
+  if (!existsSync(file)) return { deliveredAt: undefined, cancelled: false };
+  const db = new DatabaseSync(file, { readOnly: true });
+  try {
+    const row = db
+      .prepare(
+        "SELECT data FROM projections WHERE collection='cards' AND json_extract(data,'$.agent')='company-business' AND json_extract(data,'$.grp')='company-business' AND json_extract(data,'$.about')=? ORDER BY json_extract(data,'$.id') DESC LIMIT 1",
+      )
+      .get(preview.about);
+    if (!row) return { deliveredAt: undefined, cancelled: false };
+    const card = JSON.parse(row.data as string);
+    const fact = db
+      .prepare(
+        "SELECT json_extract(fact,'$.at') AS at FROM facts, json_each(fact,'$.changes') AS change WHERE json_extract(change.value,'$.table')='deliveries' AND json_extract(change.value,'$.row.card_id')=? AND json_extract(change.value,'$.row.channel')='company-feishu' AND json_extract(change.value,'$.row.ref') IS NOT NULL ORDER BY seq LIMIT 1",
+      )
+      .get(card.id);
+    const deliveredAt = fact ? new Date(fact.at as number).toISOString() : undefined;
+    const deadline = Math.max(
+      Date.parse(preview.publishAt),
+      deliveredAt ? Date.parse(deliveredAt) + 3600_000 : Infinity,
+    );
+    return {
+      card: card.id as number,
+      deliveredAt,
+      cancelled:
+        card.state === "decided" &&
+        (card.choice === 0 || card.answer?.trim() === "取消") &&
+        Date.parse(card.decided_at) <= deadline,
+    };
+  } finally {
+    db.close();
+  }
 }

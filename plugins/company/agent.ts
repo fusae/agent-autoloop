@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { readMessage, resultFrom } from "../../worker/contract.ts";
 import { executiveDecision } from "./executive.ts";
+import { dailyReport } from "./reporting.ts";
 import { inspection } from "./inspection.ts";
 
 // Session tags survive worker restarts without a mutable, cross-run engine lookup.
@@ -21,6 +22,7 @@ function modelReading(engine: "codex" | "claude", stdout: string, code: number |
       if (!["company.ceo.decision", "company.result"].includes(event.type)) continue;
       const detail = JSON.parse(event.detail ?? "{}");
       if (event.type === "company.ceo.decision" || detail.executive !== undefined) executiveDecision(detail.executive);
+      if (detail.dailyReport !== undefined) dailyReport(detail.dailyReport);
       if (detail.inspection !== undefined) inspection(detail.inspection);
     }
   } catch (error) {

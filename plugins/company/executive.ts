@@ -12,6 +12,7 @@ export type StaffPlan = {
   reviewAt: string;
 };
 export type ExecutiveDecision = {
+  report?: string;
   weeklyGoals?: WeeklyGoal[];
   manualMetrics?: { publication: string; event: number; reads: number }[];
   staffPlans?: StaffPlan[];
@@ -71,6 +72,7 @@ export type Knowledge = {
   at: string;
 };
 export type Leadership = {
+  eveningReports?: { date: string; task: string; processed?: boolean; failureNotified?: boolean }[];
   manualMetrics?: import("./feedback.ts").ManualMetric[];
   enabled: boolean;
   lastTask: string | null;
@@ -118,6 +120,7 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
     return d[key].map(object);
   };
   return {
+    ...(d.report !== undefined ? { report: text(d.report, 1800, "report") } : {}),
     ...(d.weeklyGoals !== undefined ? { weeklyGoals: list("weeklyGoals", 6).map(weeklyGoal) } : {}),
     ...(d.manualMetrics !== undefined
       ? {

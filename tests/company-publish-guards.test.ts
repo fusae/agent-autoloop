@@ -1,5 +1,7 @@
 // Failure modes: shared accounts exceed the Beijing daily cap, CEO bypasses owner approval,
 // stale/replayed answers publish a revision, or pending/failed posts are mistaken for successes.
+import { DatabaseSync } from "node:sqlite";
+import { interactiveCard } from "../plugins/company/channel.ts";
 import assert from "node:assert/strict";
 import { initialize, ensureBusinessRules } from "../plugins/company/setup.ts";
 import { test } from "node:test";
@@ -304,3 +306,130 @@ test("publication rule upgrade is conditional, idempotent and reversible", () =>
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+function deliveredPreview(dir: string, about: string, at: string, answer?: { at: string; choice: number }) {
+  mkdirSync(join(dir, "hub"), { recursive: true });
+  const db = new DatabaseSync(join(dir, "hub/hub.db"));
+  try {
+    db.exec(
+      "CREATE TABLE IF NOT EXISTS projections(collection TEXT,key TEXT,data TEXT); CREATE TABLE IF NOT EXISTS facts(seq INTEGER PRIMARY KEY,fact TEXT);",
+    );
+    db.prepare("DELETE FROM projections WHERE collection='cards' AND key='901'").run();
+    db.prepare("INSERT INTO projections VALUES ('cards','901',?)").run(
+      JSON.stringify({
+        id: 901,
+        agent: "company-business",
+        grp: "company-business",
+        about,
+        state: answer ? "decided" : "open",
+        choice: answer?.choice ?? null,
+        decided_at: answer?.at ?? null,
+      }),
+    );
+    if (!db.prepare("SELECT 1 FROM facts WHERE seq=1").get())
+      db.prepare("INSERT INTO facts VALUES (1,?)").run(
+        JSON.stringify({
+          at: Date.parse(at),
+          changes: [
+            {
+              table: "deliveries",
+              key: "901:company-feishu",
+              row: { card_id: 901, channel: "company-feishu", ref: "om_test", version: 1 },
+            },
+          ],
+        }),
+      );
+  } finally {
+    db.close();
+  }
+}
+test("preview stays off below five successes, displays 200 characters, and waits an hour after delivery across restart", () => {
+  for (const count of [4, 5])
+    fixture(
+      ({ dir, approve, proof, publishes, now, tick, restart, plans }: any) => {
+        mkdirSync(join(dir, "publications"), { recursive: true });
+        for (let i = 0; i < count; i++) proof(String(i + 1).padStart(32, "0"), "2026-11-06T00:00:00Z");
+        now("2026-11-08T02:00:00Z");
+        const r = approve(0),
+          card = r.ask?.find((a: any) => a.title === "发布预告");
+        assert.equal(!!card, count === 5);
+        assert.equal(publishes(r).length, 0);
+        if (!card) return;
+        assert.ok(card.text.includes("文".repeat(200)));
+        assert.ok(!card.text.includes("文".repeat(201)));
+        assert.match(card.text, /审核标题/);
+        assert.match(card.text, /记住/);
+        assert.match(card.text, /预计发布时间/);
+        now("2026-11-08T04:00:00Z");
+        assert.equal(publishes(tick()).length, 0, "unsent card cannot publish");
+        deliveredPreview(dir, card.about, "2026-11-08T04:00:00Z");
+        restart();
+        now("2026-11-08T04:59:59Z");
+        assert.equal(publishes(tick()).length, 0);
+        assert.equal(plans()[0].publishPreview.publishAt, "2026-11-08T05:00:00.000Z");
+        now("2026-11-08T05:00:00Z");
+        assert.equal(publishes(tick()).length, 1);
+        assert.equal(publishes(tick()).length, 0);
+      },
+      { publishDailyLimit: 1, publishApproval: { confirmFirst: 5, preview: true } },
+    );
+});
+test("a timely cancellation read from hub facts returns the draft to operations even if callback processing is late", () =>
+  fixture(
+    ({ dir, approve, proof, tick, now, publishes, plans }: any) => {
+      mkdirSync(join(dir, "publications"), { recursive: true });
+      for (let i = 0; i < 5; i++) proof(String(i + 1).padStart(32, "0"), "2026-11-06T00:00:00Z");
+      now("2026-11-08T02:00:00Z");
+      const card = approve(0).ask.find((a: any) => a.title === "发布预告");
+      deliveredPreview(dir, card.about, "2026-11-08T02:00:00Z", { at: "2026-11-08T02:59:00Z", choice: 0 });
+      now("2026-11-08T03:05:00Z");
+      const r = tick();
+      assert.equal(publishes(r).length, 0);
+      assert.equal(plans()[0].revision, 1);
+      assert.equal(plans()[0].publicationKey, undefined);
+      assert.match(plans()[0].result, /取消发布/);
+      assert.ok(r.events.some((e: any) => JSON.parse(e.detail).kind === "internal-content"));
+      assert.equal(publishes(tick([{ card: 901, about: card.about, choice: 0 }])).length, 0);
+    },
+    { publishDailyLimit: 1, publishApproval: { confirmFirst: 5, preview: true } },
+  ));
+test("a stale publisher cannot bypass newly enabled preview and the card only shows cancellation", () =>
+  fixture(({ dir, c, approve, proof, publishes }: any) => {
+    mkdirSync(join(dir, "publications"), { recursive: true });
+    for (let i = 0; i < 5; i++) proof(String(i + 1).padStart(32, "0"), "2026-11-06T00:00:00Z");
+    const event = publishes(approve(0))[0];
+    const receipt = c.process({ events: [{ ...event, id: "dispatch", source: "company-inbox" }], answers: [] });
+    const cfg = JSON.parse(readFileSync(join(dir, "company.json"), "utf8"));
+    cfg.publishApproval = { confirmFirst: 5, preview: true };
+    writeFileSync(join(dir, "company.json"), JSON.stringify(cfg));
+    writeFileSync(
+      join(dir, "context.json"),
+      JSON.stringify({ events: receipt.events.map((e: any) => ({ ...e, source: "company-office" })) }),
+    );
+    const r = spawnSync(
+      process.execPath,
+      [
+        join(import.meta.dirname, "../plugins/company/publish-run.ts"),
+        join(dir, "company.json"),
+        join(dir, "context.json"),
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /尚未发送发布预告/);
+    const card = interactiveCard({
+      id: 1,
+      kind: "ask",
+      state: "open",
+      title: "发布预告",
+      text: "预告",
+      options: ["取消", "保留安排"],
+      choice: null,
+      answer: null,
+      recommend: null,
+      version: 1,
+    } as any);
+    const buttons = card.body.elements.filter((e: any) => e.tag === "button");
+    assert.equal(buttons.length, 1);
+    assert.equal(buttons[0].text.content, "取消");
+  }, {}));

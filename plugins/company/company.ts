@@ -1,3 +1,4 @@
+import { dailyReport, scheduledReport, validateReporting, validateDraftPlan, type DailyReport } from "./reporting.ts";
 import { validateWorkday, type permissions } from "./workday.ts";
 import { validatePublishPolicy } from "./publication-policy.ts";
 import { ModelBudget } from "./model-budget.ts";
@@ -44,17 +45,20 @@ export type CompanyConfig = {
   inspections?: boolean;
   ceoWake?: "legacy" | "events";
   dailyModelRuns?: Partial<Record<Role | "total" | "employee", number>>;
-  workday?: { enabled: boolean; after: string; startDate?: string };
+  workday?: { enabled: boolean; after: string; startDate?: string; prepareDrafts?: boolean };
+  reporting?: { enabled: boolean };
   permissions?: typeof permissions;
   publishVerification?: "qa" | "program";
   publishDailyLimit?: number;
-  publishApproval?: { confirmFirst: number };
+  publishApproval?: { confirmFirst: number; preview?: boolean };
 };
 export type Context = {
   events: { id: string | number; source: string; type: string; subject: string; detail: string; hops?: number }[];
-  answers: { card: number; choice: number | null; about: string; text?: string | null }[];
+  answers: { at?: string; card: number; choice: number | null; about: string; text?: string | null }[];
 };
 export type Report = {
+  at?: string;
+  dailyReport?: DailyReport;
   assignment: number;
   verdict: "pass" | "reject" | "blocked";
   summary: string;
@@ -162,6 +166,7 @@ export class Company {
       throw new CompanyInputError("每日模型次数需要非负整数及正确岗位");
     validatePublishPolicy(config);
     validateWorkday(config);
+    validateReporting(config);
     this.config = config;
     mkdirSync(dirname(config.database), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(config.database);
@@ -336,6 +341,7 @@ export class Company {
       if (!["pass", "reject", "blocked"].includes(data.verdict as string))
         throw new CompanyInputError("结果必须是 pass、reject 或 blocked");
       report = {
+        ...(this.config.reporting?.enabled ? { at: now.toISOString() } : {}),
         assignment: task.assignment,
         verdict: data.verdict as Report["verdict"],
         summary: words(data.summary, 400, "结果摘要"),
@@ -348,9 +354,18 @@ export class Company {
             : [],
         evidence: list(data.evidence, "核验依据", 150),
       };
+      if (data.dailyReport !== undefined) {
+        try {
+          report.dailyReport = dailyReport(data.dailyReport);
+        } catch (error) {
+          throw new CompanyInputError((error as Error).message);
+        }
+      }
       if ((task.kind.startsWith("check-") || task.kind.startsWith("workday-")) && data.verdict === "pass") {
         try {
           report.inspection = inspection(data.inspection);
+          if (this.config.workday?.prepareDrafts && task.kind.startsWith("workday-"))
+            validateDraftPlan(dirname(this.config.database), task.id, report.inspection, now);
         } catch (error) {
           throw new CompanyInputError((error as Error).message);
         }
@@ -358,6 +373,12 @@ export class Company {
       if (task.kind === "ceo" && data.verdict === "pass") {
         try {
           report.executive = executiveDecision(data.executive);
+          if (
+            this.config.reporting?.enabled &&
+            scheduledReport(dirname(this.config.database), task.id) &&
+            !report.executive.report
+          )
+            throw Error("晚间汇报必须提供executive.report完整日报或周报");
         } catch (error) {
           throw new CompanyInputError((error as Error).message);
         }

@@ -1,3 +1,4 @@
+import { scheduledReport } from "./reporting.ts";
 import { chmodSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -119,7 +120,21 @@ export class ModelBudget {
   available(role: Role, now = new Date(), task?: string) {
     const s = this.snapshot(now),
       limits = this.config.dailyModelRuns;
+    const reportDate =
+      role === "ceo" && this.config.reporting?.enabled ? scheduledReport(this.directory, task) : undefined;
+    if (reportDate && reportDate !== modelDay(now)) return false;
     if (!limits) return true;
+    const reserved =
+      this.config.reporting?.enabled &&
+      !reportDate &&
+      !this.db.prepare("SELECT 1 FROM journal WHERE id=?").get(`report-started:${modelDay(now)}`)
+        ? 1
+        : 0;
+    if (
+      s.total >= (limits.total ?? Infinity) - reserved ||
+      (role === "ceo" && (s.roles.ceo ?? 0) >= (limits.ceo ?? Infinity) - reserved)
+    )
+      return false;
     if (s.total >= (limits.total ?? Infinity) || (s.roles[role] ?? 0) >= (limits[role] ?? Infinity)) return false;
     if (role !== "ceo" && limits.employee !== undefined) {
       const employee = this.employee(role, task);
@@ -137,6 +152,8 @@ export class ModelBudget {
       const allowed = owner || this.available(role, now, task);
       if (allowed) {
         this.record(key, "started", now, role);
+        if (role === "ceo" && this.config.reporting?.enabled && scheduledReport(this.directory, task) === modelDay(now))
+          this.record(`report-started:${modelDay(now)}`, "report-started", now, role);
         const employee = this.employee(role, task);
         if (employee) this.record(key + ":employee", "employee-started", now, employee);
       }

@@ -1,4 +1,6 @@
 import {
+  previewEnabled,
+  previewDelivery,
   validatePublishPolicy,
   publicationChannel,
   publicationResults,
@@ -59,6 +61,21 @@ for (const event of context.events) {
           (approved.publishApproval?.state !== "approved" || approved.publishApproval.key !== data.publication)
         )
           throw Error("本篇发布尚未取得负责人确认，禁止执行");
+        if (
+          previewEnabled(config, usage.successes) &&
+          !approved.publishApproval &&
+          !results.some((p) => p.key === data.publication)
+        ) {
+          const preview = approved.publishPreview;
+          if (!preview || preview.key !== data.publication) throw Error("本篇尚未发送发布预告，禁止执行");
+          const delivery = previewDelivery(directory, preview);
+          if (
+            !delivery.deliveredAt ||
+            delivery.cancelled ||
+            Date.now() < Math.max(Date.parse(preview.publishAt), Date.parse(delivery.deliveredAt) + 3600_000)
+          )
+            throw Error("发布预告未送达满一小时或已取消，禁止执行");
+        }
         if (
           config.publishDailyLimit !== undefined &&
           !results.some((p) => p.key === data.publication) &&

@@ -16,6 +16,9 @@ const workdayPrompt = `目标与自主上班 v1：workday.enabled=true时本规�
 员工每轮按派工项目读取 knowledge/staff/<项目>/<岗位>.json、knowledge/operations/<项目>.json、knowledge/feedback.json 和 feedback.md；周目标、昨日效果、未完成事项、CEO今日安排都是资料。workday=true表示上班规划轮，以company.result交inspection（沿用检查协议结构），artifacts可为空；提出1–3件具体今日工作，稳定key复用已有事项，固定程序保存今日计划后逐件单独派轮。已有工作优先，确实无事或受阻写明原因，不为凑数造文档；本轮不直接做全部事情。
 每个actions或directives.action添加operation：write写稿、image做图、revise改稿、package打包小红书发布稿、data查数据、review效果复盘、plan定自己计划。这些本地工作在岗员工自己提出即自动开工，无需CEO逐项批准；软件代码任务不能冒用这些operation。权限表：员工只能自己做上述工作；publish发帖须CEO成果审核，前5篇董事长飞书确认及两APP每天合计1篇保持；activate-staff让停岗员工干活、weekly-target改周指标、reply对外回复须CEO，回复接口未接入不得执行。weekly-direction改方向、deploy改APP并上线、spend花钱、account换账号平台必须升级董事长，未接执行入口不能以文字授权执行。员工提议修改目标只交CEO问题，只有CEO的weeklyGoals可变更目标。停止岗位仅CEO明确指令或批准的具体内部任务可临时工作。运营负责效果复盘，QA停岗。员工每件交付一轮，系统串行，不在模型里等待下一件。今日计划与周目标持久保存在岗位资料中。
 员工对数据、复盘等本地工作的kind可用content，自动工作只派提出者；内部交付等待CEO成果审核，发布只能用deliveries.publish及固定程序，不自行发帖。额度按北京时间自然日，total20、ceo6、growth12且每位员工6；超额保留次日，董事长消息仍处理并计数。自主上班规范结束。`;
+const reportingRhythmPrompt = `汇报节奏 v1：员工在每个已有工作轮次的company.result.detail中顺带提交dailyReport:{"done":"做了什么","result":"实际结果","blockers":"卡点或无","tomorrow":"明天打算"}，四项各180字内，整个员工报告仍1900字内。不为日报另开任务或调用模型；固定程序在北京时间20:30收口，无工作也留记录。CEO每天北京时间21:00单独一轮汇总，读取knowledge/reporting.json和knowledge/feedback.json、feedback.md；executive.report写今日各员工进展、发布及效果数据、周目标进度、明日安排、风险，1800字内；周一改为上周目标达成、效果汇总、本周目标。员工日报保留原周目标供周报对照，缺失数据明确说明。决策卡照常单独发，不挤占日报；不自行发日报notice，由固定程序去重发送。普通管理轮不提前代发21:00日报；日报计入CEO和总额度，最后一次为日报保留。汇报节奏规范结束。`;
+const draftPreparationPrompt = `提前备稿 v1：上班读取岗位资料draftStock，对照本周已发布+已备好待发与周目标。未达目标且备稿不足2篇时，当天提前写稿、做图、打包备用，不必等发布名额；今日发布额度用完、前稿等待确认不构成停止制作的理由。每个项目待发与制作中合计最多2篇，满了才暂停新稿；同一稿件的写稿、做图和打包尽量合成一项完整制作任务，已有稿沿用key，不重复造稿。计划没有write/image/revise/package制作动作、也没有在制稿且未达备稿上限时，用inspection.noProductionReason说明具体理由（180字内），不能无解释idle；程序校验。提前备稿规范结束。`;
+const previewPrompt = `发布预告 v1：累计成功满5篇且confirmFirst自动停用后，新稿由固定程序先发飞书预告，展示标题、正文前200字、APP和预计时间，送达满一小时未取消才发布；董事长取消则退回运营。保留安排不会提前发布。仍需确认的旧卡必须先答复；模型不得绕过预告或固定发布入口。发布预告规范结束。`;
 const dailyPlanningPrompt = `员工目标与每日规划 v1：公司已启用真实的每日规划调度。CEO要把项目目标落实到每位启用员工的岗位目标和今日安排，不能只发项目口号或让所有人反复查同一份资料。读取knowledge/ceo.json的planningDate、missingDailyPlans和各员工daily；每天北京时间09:00管理轮更新，白天完成、受阻或到达reviewAt会再次处理。
 CEO在executive增加staffPlans，每轮最多6项：[{"business":"项目id","role":"product|engineering|qa|growth|support|finance","date":"当天YYYY-MM-DD","goal":"岗位长期目标，120字内","focus":"今日具体工作，160字内","doneWhen":"可检查的完成标准，120字内","mode":"work|followup|standby","plan":"已有计划id或本轮directives.action.key；work必填","reviewAt":"带时区的未来复查时间，如2026-11-06T17:00:00+08:00"}]。只关联该计划负责人所属岗位；复查时间不超过未来7天。当天同岗位只保留一项主要安排。补齐全部启用岗位；一轮放不下分批，缺少安排系统会再唤醒CEO，不要让员工等老板派工。整个CEO回执仍遵守3500字限制。
 work必须关联可执行计划；已有工作优先复用id，新工作同时提交directives（每轮最多3项），不能只写安排却不派实际任务。研发和QA按已有软件任务接力，不要为每个岗位再造一份重复计划；没有自己主责的工作可设followup跟进明确依赖。followup用于核对已交接成果、实际发布、数据或依赖，standby用于暂无必要工作；两者可省plan，必须写何时核对什么，系统到点真实唤醒，无变化不提前重复检查。
@@ -529,6 +532,35 @@ export function ensureBusinessRules(directory: string) {
     const before = readFileSync(book, "utf8");
     let text = before.replace(/\n目标与自主上班 v1：[\s\S]*?自主上班规范结束。/g, "");
     if (company.workday?.enabled) text += "\n" + workdayPrompt;
+    if (text !== before) writeFileSync(book, text);
+  }
+  const refreshRhythm = (text: string) => {
+    text = text
+      .replace(/\n汇报节奏 v1：[\s\S]*?汇报节奏规范结束。/g, "")
+      .replace(/\n提前备稿 v1：[\s\S]*?提前备稿规范结束。/g, "")
+      .replace(/\n发布预告 v1：[\s\S]*?发布预告规范结束。/g, "");
+    if (company.reporting?.enabled) text += "\n" + reportingRhythmPrompt;
+    if (company.workday?.enabled && company.workday.prepareDrafts) text += "\n" + draftPreparationPrompt;
+    if (company.publishApproval?.preview) text += "\n" + previewPrompt;
+    return text;
+  };
+  let rhythmChanged = false;
+  for (const rule of rules.rules.filter((r: any) => r.name.startsWith("公司部门-") || r.name === "CEO · 业务答复")) {
+    const text = refreshRhythm(rule.prompt);
+    if (text !== rule.prompt) {
+      rule.prompt = text;
+      rhythmChanged = true;
+    }
+  }
+  if (rhythmChanged) {
+    writeFileSync(path + ".tmp", JSON.stringify(rules, null, 2) + "\n", { mode: 0o600 });
+    renameSync(path + ".tmp", path);
+  }
+  for (const role of Object.keys(departments)) {
+    const book = join(directory, "workspace/handbook", role + ".md");
+    if (!existsSync(book)) continue;
+    const before = readFileSync(book, "utf8"),
+      text = refreshRhythm(before);
     if (text !== before) writeFileSync(book, text);
   }
 }

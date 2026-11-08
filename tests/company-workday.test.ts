@@ -10,7 +10,7 @@ import { Businesses } from "../plugins/company/business.ts";
 import { Company, type CompanyConfig, type Receipt } from "../plugins/company/company.ts";
 import { Operations } from "../plugins/company/operations.ts";
 import { ModelBudget } from "../plugins/company/model-budget.ts";
-import { permissions, weeklyGoal } from "../plugins/company/workday.ts";
+import { draftStock, permissions, weeklyGoal } from "../plugins/company/workday.ts";
 import { ensureBusinessRules, initialize } from "../plugins/company/setup.ts";
 const now = new Date("2026-11-09T01:05:00Z");
 const goal = (business = "app", more = {}) => ({
@@ -378,3 +378,84 @@ test("employee daily plan reuses CEO work instead of creating a duplicate", () =
     const knowledge = JSON.parse(readFileSync(join(dir, "workspace/knowledge/staff/app/growth.json"), "utf8"));
     assert.deepEqual(knowledge.workday.actions, [plans[0].id]);
   }));
+
+test("under-target workday must make drafts or give a reason; today's publishing cap is no excuse for silent idle", () =>
+  fixture(
+    ({ decide, daily, work, send, c, tick, dir }: any) => {
+      const shift = work(
+        decide({ briefs: [{ business: "app", objective: "推广" }], staffPlans: [daily()] }),
+        "workday-growth",
+      )[0];
+      send("company-inbox", shift.type, shift.subject, JSON.parse(shift.detail));
+      send("company-growth", "company.result", shift.subject, {
+        assignment: 1,
+        verdict: "pass",
+        summary: "今日不制作",
+        artifacts: [],
+        evidence: ["发布名额用完"],
+        inspection: { state: "idle", actions: [], reviews: [] },
+      });
+      assert.equal(c.task(shift.subject).status, "blocked");
+      assert.match(c.task(shift.subject).reason, /noProductionReason/);
+      const knowledge = JSON.parse(readFileSync(join(dir, "workspace/knowledge/staff/app/growth.json"), "utf8"));
+      assert.equal(knowledge.draftStock.needsProduction, true);
+      send("company-inbox", "company.task.retry", shift.subject, {});
+      send("company-growth", "company.result", shift.subject, {
+        assignment: 2,
+        verdict: "pass",
+        summary: "等真实产品截图",
+        artifacts: [],
+        evidence: ["缺少截图"],
+        inspection: { state: "blocked", actions: [], reviews: [], noProductionReason: "没有真实截图，已向CEO报告" },
+      });
+      assert.equal(c.task(shift.subject).status, "completed");
+      tick();
+    },
+    { workday: { enabled: true, after: "09:00", prepareDrafts: true } },
+  ));
+
+test("draft planning refuses three new articles and allows two complete local packages", () =>
+  fixture(
+    ({ decide, daily, work, deliver, c, send, tick }: any) => {
+      const shift = work(
+        decide({ briefs: [{ business: "app", objective: "推广" }], staffPlans: [daily()] }),
+        "workday-growth",
+      )[0];
+      deliver(shift, [action("one"), action("two"), action("three")]);
+      assert.equal(c.task(shift.subject).status, "blocked");
+      assert.match(c.task(shift.subject).reason, /最多2篇/);
+      send("company-inbox", "company.task.retry", shift.subject, {});
+      send("company-growth", "company.result", shift.subject, {
+        assignment: 2,
+        verdict: "pass",
+        summary: "制作两篇完整稿",
+        artifacts: [],
+        evidence: ["周目标未达"],
+        inspection: { state: "action", actions: [action("one", "package"), action("two", "package")], reviews: [] },
+      });
+      assert.equal(c.task(shift.subject).status, "completed");
+      assert.equal(work(tick(), "staff-growth").length, 1, "only the first package launches");
+    },
+    { workday: { enabled: true, after: "09:00", prepareDrafts: true } },
+  ));
+
+test("draft stock counts actual publications this week and ready drafts, excluding research and old posts", () => {
+  const make = (id: string, status: string, more = {}) =>
+    ({ id, kind: "content", owner: "growth", operation: "package", status, ...more }) as any;
+  const plans = [
+    make("a", "observing", { publicationKey: "a" }),
+    make("b", "publishing", { publicationKey: "b" }),
+    make("c", "delivered"),
+    make("d", "delivered", { operation: "data" }),
+    make("e", "observing", { publicationKey: "e" }),
+  ];
+  const results = [
+    { key: "a", publishedAt: "2026-11-09T02:00:00Z" },
+    { key: "e", publishedAt: "2026-11-08T02:00:00Z" },
+  ] as any;
+  const stock = draftStock(plans, goal(), results, new Date("2026-11-09T03:00:00Z"));
+  assert.equal(stock.published, 1);
+  assert.equal(stock.ready, 2);
+  assert.equal(stock.needsProduction, false);
+  assert.equal(draftStock(plans.slice(0, 2), goal(), results, now).needsProduction, true);
+});
