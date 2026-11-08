@@ -42,7 +42,7 @@ node plugins/xiaohongshu/manage.ts pack post.json tasks/原任务/xiaohongshu.js
 
 每次操作先确认登录和绑定账号，查询本人笔记；提交前写入并刷盘原发布编号、稿件指纹和开始时间。超时、断连、审核中、查不到笔记均保留原任务，不盲目重发。进程级锁防止同账号并发发布；异常退出遗留锁必须先核对平台再清理。
 
-上游返回“发布完成”没有笔记编号，不能当作成功。本适配器再查本人笔记和详情，核对账号、唯一标题、正文、图片数量、笔记编号和平台时间，才返回真实 HTTPS 链接交给 QA。图片数量核验不等于图片像素一致性或业务效果验收；QA 还需查看实际帖子。列表未展示、同名歧义或正文经平台改写时保留待核验，不能编造链接或再次提交。
+上游返回“发布完成”没有笔记编号，不能当作成功。本适配器再查本人笔记和详情，核对账号、唯一标题、正文、图片数量、笔记编号和平台时间，才返回真实 HTTPS 链接交给配置指定的核验入口。图片数量核验不等于图片像素一致性或业务效果验收；缺省QA仍查看实际帖子；program模式由独立只读程序回读核对。列表未展示、同名歧义或正文经平台改写时保留待核验，不能编造链接或再次提交。
 
 账号未绑定、图文未交付和登录过期给 CEO 返回具体原因。外部发布只有在平台可读回后才记完成；模拟测试不代表生产发布验证完成。
 
@@ -61,3 +61,12 @@ node plugins/xiaohongshu/manage.ts pack post.json tasks/原任务/xiaohongshu.js
 `sudo` 是唯一允许省略绝对路径的入口名，固定解析为 `/usr/bin/sudo`，不通过 PATH 查找。私有 `company.json` 设置 `"publishDailyLimit":1,"publishApproval":{"confirmFirst":5}`，具体计数、卡片与延期语义见[发布护栏](company.md#发布护栏)。通道安装不等于授权开帖；`enabled` 保持 false，首次真实发布前由负责人确认稿件、核实登录及绑定账号后再开启。
 
 上线必须用员工实际 Codex 身份、工作目录和沙箱模式执行只读探测：sudo 不可提权、旧机网络不可达、发布私钥不可读；任一绕过即停止启用。另在固定程序所在宿主环境仅发送 `lookup` 验证链路。模型沙箱与系统账号是边界，岗位提示词不是权限控制。
+
+
+## 效果只读窄通道
+
+第3批另设 `company-reader` 系统账号、独立SSH密钥、known_hosts和root拥有的 `/usr/local/libexec/company-xhs-read`；不复用发布账号或发布sudo权限。sudoers只允许无参数的该命令，SSH固定主机、密钥、空环境、禁转发并校验主机公钥。旧机授权行使用来源IP限制和 `restrict,command="/absolute/node /absolute/app/plugins/xiaohongshu/read-run.ts /private/connector.json"`，固定入口忽略请求的远程命令，只解析最多10KB JSON。
+
+输入只能是 `{"action":"read","notes":["24位笔记id"]}`，禁止额外字段或publish。服务只调用只读登录状态（用于缺少账号id的旧版profile）、`/api/v1/user/me` 和 `/api/v1/feeds/detail`；详情固定 `load_all_comments:false`，不翻评论、不搜索。账号必须匹配绑定id，笔记必须属于本人；列表token私有缓存用于读取旧笔记，不向模型暴露。与原发布程序共用同账号锁，防止浏览器并发。响应仅含核验文字、图片数、时间和互动指标，没有cookies、token或任意文件读取。
+
+先以宿主身份实读首篇和本人资料，再开启 `publishVerification:"program"` 与 `feedback.json.enabled:true`；员工模型沙箱须不能提权执行通道、读取私钥或直连旧机。每天09:35一次采集，阻塞暂停与恢复规则见[效果数据回流](company.md#效果数据回流)。发布核验未知时15分钟、再1小时有限复查，不调用QA模型。部署验证只走read，不走真实publish，不发送测试飞书消息。

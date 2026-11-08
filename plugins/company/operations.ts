@@ -1,3 +1,4 @@
+import { verifiedPublication } from "./publication.ts";
 import {
   validatePublishPolicy,
   publicationChannel,
@@ -659,6 +660,20 @@ export class Operations {
     } catch (error) {
       return `答复未记录：${(error as Error).message}`;
     }
+    const manualMetrics: import("./feedback.ts").ManualMetric[] = [];
+    try {
+      for (const metric of d.manualMetrics ?? []) {
+        const proof = verifiedPublication(this.directory, metric.publication);
+        const evidence = ownerReplyEvidence(this.directory, metric.event, proof.publishedAt);
+        const old = [...(c.manualMetrics ?? []), ...manualMetrics].find(
+          (m) => m.event === metric.event && m.publication === metric.publication,
+        );
+        if (old && old.reads !== metric.reads) throw Error("同一消息的阅读量不能改写，请引用新的本人消息");
+        if (!old) manualMetrics.push({ ...metric, source: "董事长", text: evidence.text, at: evidence.at });
+      }
+    } catch (error) {
+      return `人工指标未记录：${(error as Error).message}`;
+    }
     const deliveries = d.deliveries ?? [];
     if (new Set(deliveries.map((a) => `${a.business}:${a.plan}`)).size !== deliveries.length)
       return "同一成果不能重复审核";
@@ -705,6 +720,7 @@ export class Operations {
     if (this.config.ceoWake === "events") {
       delete c.nextReviewAt;
     } else c.nextReviewAt = new Date(now.getTime() + 30 * 60000).toISOString();
+    if (manualMetrics.length) (c.manualMetrics ??= []).push(...manualMetrics);
     c.decisions.push({ task: decisionId, summary, at: now.toISOString(), decision: d });
     for (const brief of d.briefs) c.briefs[brief.business] = brief.objective;
     for (const directive of d.directives) {

@@ -17,6 +17,8 @@ export const publishDay = (date: Date) => new Date(date.getTime() + 8 * 3600_000
 export const nextPublishDay = (date: Date) =>
   new Date(Date.parse(`${publishDay(date)}T00:00:00+08:00`) + 86400_000).toISOString();
 export function validatePublishPolicy(config: Partial<CompanyConfig>) {
+  if (config.publishVerification !== undefined && !["qa", "program"].includes(config.publishVerification))
+    throw Error("发布核验配置无效");
   if (
     config.publishDailyLimit !== undefined &&
     (!Number.isSafeInteger(config.publishDailyLimit) || config.publishDailyLimit < 0)

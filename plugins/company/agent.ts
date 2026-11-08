@@ -56,9 +56,11 @@ export default {
         import.meta.dirname,
         turn.command?.[1] === "business"
           ? "business-run.ts"
-          : turn.command?.[1] === "publish"
-            ? "publish-run.ts"
-            : "run.ts",
+          : turn.command?.[1] === "verify"
+            ? "verify-run.ts"
+            : turn.command?.[1] === "publish"
+              ? "publish-run.ts"
+              : "run.ts",
       ),
       config,
       turn.contextFile,

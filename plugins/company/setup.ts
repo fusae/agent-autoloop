@@ -43,6 +43,8 @@ const publishApprovalPrompt = `负责人发布确认协议 v1：当前公司已�
 const deliveryReviewPrompt = `成果审核与发布协议 v1：本协议补充并覆盖旧规范中“内部交付后直接观察”的约定。计划 delivered 表示员工及 QA 已交付，必须由 CEO 读取交付正文审核，提交 executive.deliveries:[{"business":"项目编号","plan":"计划id","task":"当前交付任务id","verdict":"revise|accept|publish","reason":"具体意见","files":["发布时必填：本次验收交付中的正文文件路径"]}]。revise 退回原岗位修改并重新验收；accept 仅用于基线、账目、内部参考资料并关闭本项，不宣称产生外部效果；publish 用于可直接发布的运营内容，files 只选择最终正文，不得把事实表、内部报告等一并发布；审核后固定入口执行，不能再仅说“观察效果”。内容不合格要指出修改项，不另建同名计划。内部资料验收后仍需围绕业务目标安排下一项实际工作，不重复制作相同清单。
 发布由固定程序执行，普通模型员工不自行运行发布命令、不修改发布配置；仅允许私有 publishing.json 里已接入的项目渠道和账号。没有渠道或账号、登录失效、发布失败会回到 CEO；CEO 无法自行解除的在本轮 escalations 提出具体问题（哪个项目、哪篇内容、缺哪个发布条件、需要负责人做什么），不要用等待观察或重复检查代替处理，也不要让负责人重新审批已审核正文。不要把对既有测试问题的等待当成禁止上报新发布阻塞。
 publish-content 的 QA 回执须原样带上 previous.publication（key/channel/remoteId/url/publishedAt），核对发布链接及正文；无法核验则 blocked，不能仅复述文件。只有平台发布确认且 QA 通过，系统才开始效果观察。`;
+const feedbackPrompt = `效果回流协议 v1：publishVerification=program 时，发布后由固定程序通过独立只读通道核对作者、标题、正文、图片数；未知在15分钟、再1小时有限复查，仍未知交CEO。禁止为发布核验派QA；效果复盘由运营负责。读取 knowledge/feedback.json 与 knowledge/feedback.md，阅读量只由董事长告知；设备数是新增设备、注册数是注册、下载点击不等于安装。比较北京时间发布前后各3个完整自然日，重叠不单篇归因，基线0不算百分比。
+董事长用普通话提供阅读量时，CEO语义匹配已发布笔记，在executive增加 manualMetrics:[{"publication":"冻结稿key","event":本人消息真实数字事件id,"reads":120}]，不要求固定格式；不明确是哪篇就问一句，不能猜。系统核对本人消息来源并保留原话和时间，不把阅读量当自动采集。`;
 const ownerReplyPrompt = `负责人答复落账协议 v1：普通消息、引用卡片的回复与卡片按钮都是有效沟通入口。负责人补充既有问题的答案时，不得仅发“答复已记录”notice；先读 execution 的 conversation.questions 和 knowledge 中的 questions，确认原话对应的问题，然后在 executive 中提交可选 ownerReplies:[{"question":"原问题id","event":负责人消息的真实事件数字id}]，每轮最多5项。事件编号取 execution.conversation.questions[].id，不使用 events[].id 的字符串去重键。事件必须来自提问后收到的本人完整消息，不能填写自己总结的文字或别的事件id；系统保留原话和引用背景，更新原问题并同步卡片。若存在歧义先追问，不猜测批准。已暂缓或旧卡片已关闭也可补充新事实。
 同时给该问题关联的员工 issues 提交 answers，说明如何使用答案继续原任务；若仍缺条件只询问新增缺口。负责人确认测试通过应按原确认范围采纳，不再重复索要同一确认，不扩展为其他功能已测试。管理轮有待答或暂缓问题时，必须读取 execution 检查是否已有负责人消息；发现历史本人答复尚未落账时也用此协议补齐，不能只在总结中引用。
 返工与恢复协议 v1：当前计划 blocked 且 QA 驳回时，可以 deliveries.verdict=revise 退回原岗位生成新一版；不要只说“交研发/运营修改”却不提交决定。旧版仅留历史，不继续重试。publish-content 已发布后 QA 临时无法核验，给出解决办法后重试原任务，只重新验收，不重复发布；内容本身不合格则退回新一版审核。没有新增证据时不得编造成功。`;
@@ -230,6 +232,35 @@ export function ensureBusinessRules(directory: string) {
       changed = true;
     }
   }
+  if (company.publishVerification === "program") {
+    for (const rule of rules.rules.filter(
+      (r: any) => r.to === "company-ceo" || r.to === "company-growth" || r.to === "company-qa",
+    )) {
+      const prompt = rule.prompt.replace(
+        /publish-content 的 QA 回执须原样带上[\s\S]*?系统才开始效果观察。/g,
+        "发布后由固定程序回读核验，通过后进入效果观察。",
+      );
+      const next = prompt.includes("效果回流协议 v1") ? prompt : prompt + "\n" + feedbackPrompt;
+      if (next !== rule.prompt) {
+        rule.prompt = next;
+        changed = true;
+      }
+    }
+  }
+  const verification = verificationRules(directory, rules.agents["company-office"].worker);
+  if (!rules.agents["company-verifier"]) {
+    rules.agents["company-verifier"] = verification.agent;
+    changed = true;
+  }
+  if (!rules.sources["company-verifier"]) {
+    rules.sources["company-verifier"] = { name: "程序核验" };
+    changed = true;
+  }
+  for (const rule of verification.rules)
+    if (!rules.rules.some((r: any) => r.name === rule.name)) {
+      rules.rules.push(rule);
+      changed = true;
+    }
   const publication = publicationRules(directory, rules.agents["company-office"].worker);
   if (!rules.agents["company-publisher"]) {
     rules.agents["company-publisher"] = publication.agent;
@@ -265,7 +296,7 @@ export function ensureBusinessRules(directory: string) {
         config.workers.push({ name, key, capacity: 2 });
         configChanged = true;
       }
-      for (const id of ["company-office", "company-business", "company-publisher"]) {
+      for (const id of ["company-office", "company-business", "company-publisher", "company-verifier"]) {
         if (rules.agents[id] && rules.agents[id].worker !== name) {
           rules.agents[id].worker = name;
           changed = true;
@@ -417,6 +448,19 @@ export function ensureBusinessRules(directory: string) {
     const content = readFileSync(book, "utf8");
     if (!content.includes("行动验收标准协议 v1")) writeFileSync(book, content + "\n\n" + acceptancePrompt + "\n");
   }
+  if (company.publishVerification === "program")
+    for (const role of ["ceo", "growth", "qa"]) {
+      const book = join(directory, "workspace/handbook", role + ".md");
+      if (existsSync(book)) {
+        const old = readFileSync(book, "utf8");
+        const next = old.replace(
+          /publish-content 的 QA 回执须原样带上[\s\S]*?系统才开始效果观察。/g,
+          "发布后由固定程序回读核验，通过后进入效果观察。",
+        );
+        const content = next.includes("效果回流协议 v1") ? next : next + "\n" + feedbackPrompt;
+        if (old !== content) writeFileSync(book, content);
+      }
+    }
   if (changed) {
     writeFileSync(path + ".tmp", JSON.stringify(rules, null, 2) + "\n", { mode: 0o600 });
     renameSync(path + ".tmp", path);
@@ -527,6 +571,39 @@ export function rolePrompt(role: Role) {
     (role === "growth" ? "\n" + leanContentPrompt : "")
   );
 }
+function verificationRules(directory: string, worker: string) {
+  return {
+    agent: {
+      name: "发布核验程序",
+      worker,
+      use: "company",
+      access: "read",
+      command: [join(directory, "company.json"), "verify"],
+    },
+    rules: [
+      {
+        name: "发布程序核验",
+        when: { source: "company-office", types: ["company.work.verify"] },
+        to: "company-verifier",
+        cwd: directory,
+        group: "company-verification",
+        parallel: 1,
+        prompt: "只读核验已发布内容。",
+        emits: { source: "company-verifier", types: ["company.result"] },
+      },
+      {
+        name: "公司调度-verifier",
+        when: { source: "company-verifier", types: ["company.result"] },
+        to: "company-office",
+        cwd: directory,
+        group: "company-office",
+        parallel: 1,
+        prompt: "按本机公司配置推进任务。",
+        emits: { source: "company-office", types: ["company.work.*", "company.business.wake"] },
+      },
+    ],
+  };
+}
 function publicationRules(directory: string, worker: string) {
   return {
     agent: {
@@ -551,11 +628,15 @@ function publicationRules(directory: string, worker: string) {
 export function makeRules(directory: string, worker: string, agent: "codex" | "claude") {
   const business = businessRules(directory, worker);
   const publisher = publicationRules(directory, worker);
+  const verifier = verificationRules(directory, worker);
   const roles = Object.keys(departments) as Role[];
-  const sources = Object.fromEntries(["inbox", "office", ...roles].map((r) => [`company-${r}`, { name: `公司 ${r}` }]));
+  const sources = Object.fromEntries(
+    ["inbox", "office", "verifier", ...roles].map((r) => [`company-${r}`, { name: `公司 ${r}` }]),
+  );
   const agents: Record<string, object> = {
     "company-business": business.agent,
     "company-publisher": publisher.agent,
+    "company-verifier": verifier.agent,
     "company-office": {
       name: "公司调度",
       worker,
@@ -614,6 +695,7 @@ export function makeRules(directory: string, worker: string, agent: "codex" | "c
       ...controller,
       ...staff,
       publisher.rule,
+      ...verifier.rules,
       chatRule(directory),
       ...business.rules,
       {

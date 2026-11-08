@@ -1,3 +1,4 @@
+import { collectFeedback } from "./feedback.ts";
 import { ModelBudget } from "./model-budget.ts";
 import { workflows } from "./company.ts";
 import { syncOwnerReplyCards } from "./owner-replies.ts";
@@ -86,6 +87,18 @@ try {
       budget.close();
     }
   }
+  await collectFeedback(
+    dirname(configFile),
+    operations.executive(),
+    now,
+    undefined,
+    existsSync(hubFile)
+      ? async (key, text) => {
+          const cfg = JSON.parse(readFileSync(hubFile, "utf8"));
+          return hubClient(cfg.url, cfg.source.key).tell({ key, text });
+        }
+      : undefined,
+  );
   const events = [...(proactive.events ?? []), ...(legacy.events ?? []), ...failures, ...resumes].slice(0, 100);
   const receipt = { ...proactive, ...(events.length ? { events } : {}) };
   process.stdout.write(`经营周期已检查。\n\n\`\`\`agent-autoloop\n${JSON.stringify(receipt)}\n\`\`\`\n`);

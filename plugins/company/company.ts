@@ -39,6 +39,7 @@ export type CompanyConfig = {
   inspections?: boolean;
   ceoWake?: "legacy" | "events";
   dailyModelRuns?: Partial<Record<Role | "total", number>>;
+  publishVerification?: "qa" | "program";
   publishDailyLimit?: number;
   publishApproval?: { confirmFirst: number };
 };
@@ -198,7 +199,8 @@ export class Company {
       return;
     }
     const role = workflows[task.kind][task.stage];
-    if (this.config.dailyModelRuns && !(task.kind === "publish-content" && role === "growth")) {
+    const program = task.kind === "publish-content" && role === "qa" && this.config.publishVerification === "program";
+    if (this.config.dailyModelRuns && !(task.kind === "publish-content" && (role === "growth" || program))) {
       const budget = new ModelBudget(dirname(this.config.database), this.config);
       try {
         if (!budget.available(role, now)) {
@@ -233,7 +235,11 @@ export class Company {
     receipt.events ??= [];
     receipt.events.push({
       id: `company:${task.id}:${task.assignment}`,
-      type: task.kind === "publish-content" && role === "growth" ? "company.work.publish" : `company.work.${role}`,
+      type: program
+        ? "company.work.verify"
+        : task.kind === "publish-content" && role === "growth"
+          ? "company.work.publish"
+          : `company.work.${role}`,
       subject: task.id,
       summary: `${departments[role]}处理任务 ${task.id}`,
       detail,
@@ -304,8 +310,11 @@ export class Company {
       return;
     }
     const role = workflows[task.kind][task.stage];
-    if (event.type !== "company.result" || event.source !== `company-${role}`)
-      throw new CompanyInputError("来源不是当前负责部门");
+    const source =
+      task.kind === "publish-content" && role === "qa" && this.config.publishVerification === "program"
+        ? "company-verifier"
+        : `company-${role}`;
+    if (event.type !== "company.result" || event.source !== source) throw new CompanyInputError("来源不是当前负责部门");
     if (task.status !== "active" || data.assignment !== task.assignment)
       throw new CompanyInputError("结果已过期或任务已暂停");
     let report: Report;
