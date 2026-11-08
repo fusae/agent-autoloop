@@ -191,7 +191,10 @@ test("dashboard protects mutations, keeps keys server-side, handles offline stat
         200,
       );
     }
-    const managed = await (await fetch(dashboard.url + "/api/overview")).json();
+    const managed = {
+      ...(await (await fetch(dashboard.url + "/api/overview")).json()),
+      ...(await (await fetch(dashboard.url + "/api/operations")).json()),
+    };
     assert.equal(managed.operations[0].staff.length, 6);
     assert.equal(managed.operations[0].maxDailyTasks, 8);
     assert.equal(managed.operations[0].signals[0].title, "入口问题");

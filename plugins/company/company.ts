@@ -190,6 +190,19 @@ export class Company {
       .all()
       .map((r) => JSON.parse(r.body as string));
   }
+  taskPage(limit: number, before = Number.MAX_SAFE_INTEGER) {
+    // Creation journal sequences stay fixed when a task changes or newer tasks arrive.
+    const rows = this.db
+      .prepare(
+        `SELECT t.body, MIN(j.seq) AS created FROM tasks t JOIN journal j ON j.task=t.id
+        GROUP BY t.id HAVING created < ? ORDER BY created DESC LIMIT ?`,
+      )
+      .all(before, limit + 1);
+    return {
+      tasks: rows.slice(0, limit).map((r) => JSON.parse(r.body as string) as Task),
+      nextBefore: rows.length > limit ? Number(rows[limit - 1].created) : null,
+    };
+  }
   history(id: string) {
     return this.db.prepare("SELECT seq,kind,at,body FROM journal WHERE task=? ORDER BY seq").all(id);
   }

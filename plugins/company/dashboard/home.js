@@ -126,11 +126,13 @@ function homeGoal(stock) {
 
 function homeStaff(d, growth, stock) {
   const today = homeDay(d.at);
-  const c = d.leadership ?? {};
-  const ceoRun = (d.runs ?? [])
-    .filter((r) => r.agent === "company-ceo" && r.summary)
-    .sort((a, b) => String(b.finishedAt ?? b.createdAt).localeCompare(String(a.finishedAt ?? a.createdAt)))[0];
-  const openIssues = (c.issues ?? []).filter((i) => i.state === "open").length;
+  const c = d.home?.leadership ?? d.leadership ?? {};
+  const ceoRun =
+    d.home?.ceoRun ??
+    (d.runs ?? [])
+      .filter((r) => r.agent === "company-ceo" && r.summary)
+      .sort((a, b) => String(b.finishedAt ?? b.createdAt).localeCompare(String(a.finishedAt ?? a.createdAt)))[0];
+  const openIssues = c.openIssues ?? (c.issues ?? []).filter((i) => i.state === "open").length;
   const reportAt = growth[0]?.p.reporting?.ceoAt;
   const ceo = `<li class="person">
     <div class="person-name"><strong>CEO</strong><span>管全公司，向你汇报</span></div>
@@ -199,7 +201,7 @@ function homePosts(d) {
         ${last.at ? `<small class="post-note">互动数 ${homeShortDate(last.at)} ${homeClock(last.at)} 读取。前后对比只看时间先后，不代表一定是这篇带来的。</small>` : ""}
       </li>`;
     });
-  const waiting = (d.operations ?? []).flatMap((p) =>
+  const waiting = (d.home?.operations ?? d.operations ?? []).flatMap((p) =>
     (p.plans ?? [])
       .filter((a) => a.owner === "growth" && ["publishing", "delivered", "working", "planned"].includes(a.status))
       .map((a) => ({ p, a })),
@@ -222,10 +224,10 @@ function homePosts(d) {
 
 function homeReports(d, growth) {
   const today = homeDay(d.at);
-  const c = d.leadership ?? {};
-  const last = (c.eveningReports ?? []).slice().sort((a, b) => b.date.localeCompare(a.date))[0];
-  const task = last && d.tasks.find((t) => t.id === last.task);
-  const text = task?.reports?.at?.(-1)?.summary;
+  const c = d.home?.leadership ?? d.leadership ?? {};
+  const last = d.home?.ceoReport ?? (c.eveningReports ?? []).slice().sort((a, b) => b.date.localeCompare(a.date))[0];
+  const task = last && d.tasks?.find((t) => t.id === last.task);
+  const text = last?.summary ?? task?.reports?.at?.(-1)?.summary;
   const ceoAt = growth[0]?.p.reporting?.ceoAt;
   const staff = growth
     .map(({ p, s }) => {
@@ -249,7 +251,7 @@ function homeReports(d, growth) {
 
 function homeHTML(d) {
   const asks = (d.cards ?? []).filter((c) => c.kind === "ask");
-  const growth = (d.operations ?? []).flatMap((p) =>
+  const growth = (d.home?.operations ?? d.operations ?? []).flatMap((p) =>
     (p.staff ?? []).filter((s) => s.role === "growth" && s.onDuty !== false).map((s) => ({ p, s })),
   );
   const stock = d.home?.stock ?? {};
@@ -257,7 +259,7 @@ function homeHTML(d) {
     <section class="today">
       <p class="today-date">${homeDate(d.at)}</p>
       <p class="today-summary">${esc(homeSummary(d, asks, growth, stock))}</p>
-      <p class="today-sync">${d.connected ? "数据每 5 秒自动更新" : "公司服务暂时连不上，下面是最后一次的数据"}，最后同步 ${homeClock(d.at)}</p>
+      <p class="today-sync">${d.updating ? "更新中，暂时显示上次的数据" : d.connected ? "数据每 30 秒自动更新" : "公司服务暂时连不上，下面是最后一次的数据"}，最后同步 ${homeClock(d.at)}</p>
     </section>
     ${
       asks.length

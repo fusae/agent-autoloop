@@ -77,8 +77,84 @@ let live = null,
   lastRefresh = 0,
   refreshing = false,
   renderedState = "";
-const data = () => (isDemo ? demo : live);
-const taskFlow = (task) => data()?.contentReview === "ceo" && task.kind === "internal-content" && task.stage === 0 ? ["growth"] : routes[task.kind] ?? [];
+const overviewStorage = "company-overview-v2";
+const responses = new Map();
+const requests = new Map();
+const detailState = new Map();
+const detailRequests = new Map();
+const detailErrors = new Map();
+const resourceFor = {
+  tasks: "tasks",
+  ceo: "leadership",
+  employees: "operations",
+  plans: "operations",
+  businesses: "operations",
+  spending: "runs",
+};
+const currentView = () => (labels[location.hash.slice(1)] ? location.hash.slice(1) : "home");
+const data = () => {
+  if (isDemo) return demo;
+  if (!live) return null;
+  const detail = detailState.get(resourceFor[currentView()]);
+  return { ...live, ...detail, connected: live.connected && !!csrf };
+};
+const moreHTML = (resource) =>
+  !isDemo && detailState.get(resource)?.nextBefore != null
+    ? `<div class="load-more"><button class="secondary" data-more="${resource}">加载更早</button></div>`
+    : "";
+async function loadDetail(resource, more = false) {
+  if (!resource || isDemo) return;
+  if (detailRequests.has(resource)) return detailRequests.get(resource);
+  const promise = (async () => {
+    const old = detailState.get(resource);
+    if (more && old?.nextBefore == null) return;
+    const path = `/api/${resource}` + (more ? `?before=${encodeURIComponent(old.nextBefore)}` : "");
+    const result = await api(path);
+    if (more) {
+      if (resource === "leadership") {
+        const leadership = { ...old.leadership };
+        for (const key of ["decisions", "issues", "knowledge"])
+          leadership[key] = [...result.leadership[key], ...leadership[key]];
+        detailState.set(resource, { ...old, leadership, nextBefore: result.nextBefore });
+      } else {
+        const rows = [...old[resource], ...result[resource]];
+        const unique = [...new Map(rows.map((row) => [row.id, row])).values()];
+        detailState.set(resource, { ...old, [resource]: unique, nextBefore: result.nextBefore });
+      }
+    } else if (old?._first !== result) {
+      detailState.set(resource, { ...result, _first: result });
+    }
+  })();
+  detailRequests.set(resource, promise);
+  try {
+    await promise;
+    detailErrors.delete(resource);
+  } catch (error) {
+    detailErrors.set(resource, error.message);
+    throw error;
+  } finally {
+    detailRequests.delete(resource);
+  }
+}
+async function enterView() {
+  render();
+  const requested = currentView();
+  try {
+    await loadDetail(resourceFor[requested]);
+    if (currentView() === requested && !pending && !$("dialog[open]")) render();
+  } catch (error) {
+    if (currentView() === requested) {
+      render();
+      if (!detailState.has(resourceFor[requested]))
+        $("#view-content").innerHTML = `<p class="empty-line">${esc(error.message)}，请点击刷新重试。</p>`;
+      toast(error.message, true);
+    }
+  }
+}
+const taskFlow = (task) =>
+  data()?.contentReview === "ceo" && task.kind === "internal-content" && task.stage === 0
+    ? ["growth"]
+    : (routes[task.kind] ?? []);
 const signature = ({ at, ...state }) => JSON.stringify(state);
 const badge = (status) => `<span class="badge ${esc(status)}">${esc(names[status] ?? status)}</span>`;
 const time = (value) =>
@@ -101,15 +177,33 @@ function toast(message, error = false) {
   toast.timer = setTimeout(() => (node.hidden = true), 4500);
 }
 async function api(path, body) {
-  const response = await fetch(new URL(path.replace(/^\//, ""), location.href), {
-    method: body === undefined ? "GET" : "POST",
-    headers: body === undefined ? {} : { "Content-Type": "application/json", "X-Company-CSRF": csrf },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    signal: AbortSignal.timeout(body === undefined ? 30000 : 8000),
-  });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error ?? "操作未完成，请重试");
-  return result;
+  if (body === undefined && requests.has(path)) return requests.get(path);
+  const request = (async () => {
+    const previous = body === undefined ? responses.get(path) : null;
+    const response = await fetch(new URL(path.replace(/^\//, ""), location.href), {
+      method: body === undefined ? "GET" : "POST",
+      headers:
+        body === undefined
+          ? previous?.etag
+            ? { "If-None-Match": previous.etag }
+            : {}
+          : { "Content-Type": "application/json", "X-Company-CSRF": csrf },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(body === undefined ? 30000 : 8000),
+    });
+    if (response.status === 304 && previous) return previous.value;
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error ?? "操作未完成，请重试");
+    if (body === undefined && response.headers.get("ETag"))
+      responses.set(path, { value: result, etag: response.headers.get("ETag") });
+    return result;
+  })();
+  if (body === undefined) requests.set(path, request);
+  try {
+    return await request;
+  } finally {
+    if (body === undefined) requests.delete(path);
+  }
 }
 function demoData() {
   const base = {
@@ -265,12 +359,12 @@ function demoData() {
   };
 }
 function statsHTML(d) {
-  const active = d.tasks.filter((t) => t.status === "active").length,
+  const active = d.taskStats?.active ?? d.tasks.filter((t) => t.status === "active").length,
     approvals = d.cards.filter((c) => c.kind === "ask").length,
-    blocked = d.tasks.filter((t) => ["blocked", "rejected"].includes(t.status)).length;
-  const done = d.tasks.filter(
-      (t) => t.status === "completed" && !t.kind.startsWith("check-") && t.kind !== "ceo",
-    ).length,
+    blocked = d.taskStats?.blocked ?? d.tasks.filter((t) => ["blocked", "rejected"].includes(t.status)).length;
+  const done =
+      d.taskStats?.done ??
+      d.tasks.filter((t) => t.status === "completed" && !t.kind.startsWith("check-") && t.kind !== "ceo").length,
     today = d.spending?.today;
   return [
     {
@@ -278,7 +372,7 @@ function statsHTML(d) {
       icon: "↗",
       value: active,
       unit: "项任务",
-      foot: `已交付 ${done} 项 · 已检查 ${d.tasks.filter((t) => t.kind.startsWith("check-") && t.status === "completed").length} 项`,
+      foot: `已交付 ${done} 项 · 已检查 ${d.taskStats?.checked ?? d.tasks.filter((t) => t.kind.startsWith("check-") && t.status === "completed").length} 项`,
     },
     {
       label: "待审批",
@@ -320,10 +414,11 @@ function departmentHTML(d) {
     .map(([role, name]) => {
       const agent = d.agents.find((a) => a.id === `company-${role}`),
         running = d.runs.some((r) => r.agent === `company-${role}` && r.state === "claimed");
-      const tasks = d.tasks.filter((t) => t.status === "active" && taskFlow(t)[t.stage] === role);
-      const status =
-        !d.connected || !agent?.online ? "未连接" : running ? "执行中" : tasks.length ? "待接单" : "空闲中";
-      return `<button class="dept-card" data-department="${role}"><div class="dept-top"><span class="dept-icon">${roleInfo[role][0]}</span><span class="dept-status ${running ? "busy" : ""}">${status}</span></div><h3 class="dept-name">${name}${role === "ceo" ? "" : "部"}</h3><div class="dept-desc">${roleInfo[role][1]}</div><div class="dept-bottom"><span>${esc(agent?.use === "claude" ? "Claude Code" : agent?.use === "codex" ? "Codex" : (agent?.use ?? "待接入"))}</span><b>${tasks.length ? `${tasks.length} 项在途任务` : "等待新任务"}</b></div></button>`;
+      const taskCount =
+        d.taskStats?.departments?.[role] ??
+        d.tasks.filter((t) => t.status === "active" && taskFlow(t)[t.stage] === role).length;
+      const status = !d.connected || !agent?.online ? "未连接" : running ? "执行中" : taskCount ? "待接单" : "空闲中";
+      return `<button class="dept-card" data-department="${role}"><div class="dept-top"><span class="dept-icon">${roleInfo[role][0]}</span><span class="dept-status ${running ? "busy" : ""}">${status}</span></div><h3 class="dept-name">${name}${role === "ceo" ? "" : "部"}</h3><div class="dept-desc">${roleInfo[role][1]}</div><div class="dept-bottom"><span>${esc(agent?.use === "claude" ? "Claude Code" : agent?.use === "codex" ? "Codex" : (agent?.use ?? "待接入"))}</span><b>${taskCount ? `${taskCount} 项在途任务` : "等待新任务"}</b></div></button>`;
     })
     .join("")}</div></section>`;
 }
@@ -350,7 +445,7 @@ function taskRows(d) {
     .join("");
 }
 function tasksHTML(d) {
-  return `<section class="panel ${view === "overview" ? "tasks-panel" : ""}"><div class="panel-heading"><h2>任务列表 <small>${d.tasks.length} 项任务</small></h2>${view === "overview" ? '<a class="text-link" href="#tasks">查看全部 ↗</a>' : '<span class="text-link">每 5 秒自动同步</span>'}</div><div class="panel-toolbar"><div class="filters">${[
+  return `<section class="panel ${view === "overview" ? "tasks-panel" : ""}"><div class="panel-heading"><h2>任务列表 <small>${view === "tasks" && !isDemo ? `已加载 ${d.tasks.length} / ${d.taskStats?.total ?? d.tasks.length} 项` : `${d.taskStats?.total ?? d.tasks.length} 项任务`}</small></h2>${view === "overview" ? '<a class="text-link" href="#tasks">查看全部 ↗</a>' : '<span class="text-link">进入时更新 · 可手动刷新</span>'}</div><div class="panel-toolbar"><div class="filters">${[
     ["all", "全部"],
     ["active", "进行中"],
     ["awaiting_approval", "待审批"],
@@ -362,7 +457,7 @@ function tasksHTML(d) {
     )
     .join(
       "",
-    )}${filter.startsWith("dept:") ? `<button class="filter active" data-filter="all">${esc(roleNames[filter.slice(5)])}部 ×</button>` : ""}</div><label class="search"><span>⌕</span><input id="search" aria-label="搜索任务" placeholder="搜索任务…" value="${esc(search)}"></label></div><div class="task-list"><table class="task-table"><thead><tr><th>任务名称</th><th>当前状态</th><th>流转阶段</th><th></th></tr></thead><tbody id="task-rows">${taskRows(d)}</tbody></table></div>${!d.tasks.length ? `<div class="onboarding"><h3>任务模板</h3><div class="suggestions"><button class="suggestion" data-template="software">周报工具</button><button class="suggestion" data-template="content">内容选题</button><button class="suggestion" data-template="support">客户回复手册</button></div></div>` : ""}</section>`;
+    )}${filter.startsWith("dept:") ? `<button class="filter active" data-filter="all">${esc(roleNames[filter.slice(5)])}部 ×</button>` : ""}</div><label class="search"><span>⌕</span><input id="search" aria-label="搜索任务" placeholder="搜索任务…" value="${esc(search)}"></label></div><div class="task-list"><table class="task-table"><thead><tr><th>任务名称</th><th>当前状态</th><th>流转阶段</th><th></th></tr></thead><tbody id="task-rows">${taskRows(d)}</tbody></table></div>${view === "tasks" ? moreHTML("tasks") : ""}${!d.tasks.length ? `<div class="onboarding"><h3>任务模板</h3><div class="suggestions"><button class="suggestion" data-template="software">周报工具</button><button class="suggestion" data-template="content">内容选题</button><button class="suggestion" data-template="support">客户回复手册</button></div></div>` : ""}</section>`;
 }
 function approvalsHTML(d) {
   const cards = d.cards.filter((c) => c.kind === "ask");
@@ -386,6 +481,7 @@ function approvalsHTML(d) {
       <h3>${question ? (baseline ? "业务资料" : "资料补充") : esc(c.title)}</h3>
       <p class="reply-question">${esc(request)}</p>
       ${context.length ? `<details class="reply-context"><summary>补充说明</summary><p>${esc(context.join("\n\n"))}</p></details>` : ""}
+      ${draftButton(homeAskFields(c.text).key)}
       <div class="reply-editor"><label for="reply-${c.id}">你的回复</label>
       <textarea id="reply-${c.id}" aria-describedby="reply-help-${c.id}" maxlength="4000" rows="${baseline ? 10 : 4}" placeholder="${esc(placeholder)}" ${disabled}></textarea>
       <p id="reply-help-${c.id}" class="reply-help">${question ? "写已知情况即可，缺少的填“暂无”；链接或文件位置也可以。" : "可直接选择下方选项，或填写具体意见。"}</p></div>
@@ -417,14 +513,13 @@ function spendingHTML(d) {
     )}</div><div class="cost-help">每项任务最多派工 <strong>${d.maxAssignments}</strong> 次，返工计入额度。次数限制不包含失败重试和回执修复，也不是金额硬上限。未上报的费用保持未知，上方金额为中台总量。</div><section class="panel tasks-panel"><div class="panel-heading"><h2>最近执行记录</h2></div>${
     d.runs.length
       ? d.runs
-          .slice(0, 15)
           .map(
             (r) =>
               `<div class="latest-run"><div>${esc(roleNames[r.agent?.replace("company-", "")] ?? "公司调度")}<small>${esc(r.summary || r.error || "等待结果")}</small></div><span class="muted">${esc({ claimed: "执行中", queued: "待执行", done: "已完成", failed: "失败", cancelled: "已取消", nothing: "无需处理", unknown: "状态待确认" }[r.state] ?? r.state)}</span></div>`,
           )
           .join("")
       : '<div class="empty">还没有执行记录</div>'
-  }</section>`;
+  }${moreHTML("runs")}</section>`;
 }
 function render() {
   const d = data();
@@ -445,7 +540,7 @@ function render() {
   $("#demo-toggle").textContent = isDemo ? "返回我的公司" : "查看示例公司";
   $("#offline-banner").hidden = d.connected;
   $("#offline-banner").textContent = d.connectionError ?? "当前显示已保存的数据，任务引擎离线，提交与审批暂不可用。";
-  $("#nav-tasks").textContent = d.tasks.length;
+  $("#nav-tasks").textContent = d.taskStats?.total ?? d.tasks.length;
   $("#nav-approvals").textContent = d.cards.filter((c) => c.kind === "ask").length;
   $("#nav-approvals").hidden = !d.cards.some((c) => c.kind === "ask");
   $("#stats").innerHTML = statsHTML(d);
@@ -455,33 +550,58 @@ function render() {
     view === "home"
       ? homeHTML(d)
       : view === "ceo"
-      ? ceoHTML(d)
-      : view === "businesses"
-        ? businessesHTML(d)
-        : view === "overview"
-          ? `<div class="dashboard-grid"><div>${departmentHTML(d)}${tasksHTML(d)}</div><div class="right-column">${approvalsHTML(d)}</div></div>`
-          : view === "tasks"
-            ? tasksHTML(d)
-            : view === "approvals"
-              ? approvalsHTML(d)
-              : view === "departments"
-                ? departmentHTML(d)
-                : view === "employees"
-                  ? employeesHTML(d)
-                  : view === "plans"
-                    ? plansHTML(d)
-                    : spendingHTML(d);
+        ? ceoHTML(d)
+        : view === "businesses"
+          ? businessesHTML(d)
+          : view === "overview"
+            ? `<div class="dashboard-grid"><div>${departmentHTML(d)}${tasksHTML(d)}</div><div class="right-column">${approvalsHTML(d)}</div></div>`
+            : view === "tasks"
+              ? tasksHTML(d)
+              : view === "approvals"
+                ? approvalsHTML(d)
+                : view === "departments"
+                  ? departmentHTML(d)
+                  : view === "employees"
+                    ? employeesHTML(d)
+                    : view === "plans"
+                      ? plansHTML(d)
+                      : spendingHTML(d);
+  const resource = resourceFor[view];
+  if (!isDemo && resource && !detailState.has(resource))
+    $("#view-content").innerHTML =
+      `<p class="empty-line">${detailErrors.has(resource) ? esc(detailErrors.get(resource)) + "，请点击刷新重试。" : "正在加载…"}</p>`;
+  if (
+    view === "home" &&
+    typeof performance !== "undefined" &&
+    !performance.getEntriesByName("company-home-visible").length
+  )
+    performance.mark("company-home-visible", { detail: d.updating ? "cache" : "network" });
   $("#new-task").hidden = view === "home";
   $("#new-task").disabled = view !== "businesses" && !d.connected;
   $("#new-task").innerHTML = view === "businesses" ? "＋ 新建业务" : "<span>＋</span> 新建任务";
-  $("#last-updated").textContent = (isDemo ? "示例数据 · " : "最后同步 ") + time(d.at) + " · 北京时间";
+  $("#last-updated").textContent =
+    (isDemo ? "示例数据 · " : d.updating ? "更新中 · 上次同步 " : "最后同步 ") + time(d.at) + " · 北京时间";
 }
-async function refresh() {
+async function refresh(details = true) {
   if (refreshing) return;
   refreshing = true;
   try {
-    live = await api("/api/overview");
+    const overview = await api("/api/overview");
+    live = { ...overview, at: new Date().toISOString(), updating: false };
     lastRefresh = Date.now();
+    try {
+      localStorage.setItem(
+        overviewStorage,
+        JSON.stringify({ value: live, etag: responses.get("/api/overview")?.etag }),
+      );
+    } catch {}
+    if (details) {
+      try {
+        await loadDetail(resourceFor[currentView()]);
+      } catch (error) {
+        toast(error.message, true);
+      }
+    }
     if (
       !isDemo &&
       !pending &&
@@ -489,7 +609,7 @@ async function refresh() {
       document.activeElement?.id !== "search" &&
       !Array.from(document.querySelectorAll("textarea[id^=reply-]")).some((el) => el.value)
     ) {
-      if (renderedState !== signature(live)) render();
+      if (renderedState !== signature(data())) render();
       else $("#last-updated").textContent = "最后同步 " + time(live.at) + " · 北京时间";
     }
   } catch (error) {
@@ -565,6 +685,13 @@ document.addEventListener("click", (event) => {
     $("#" + button.dataset.close).close();
     return;
   }
+  if (button.dataset.more) {
+    action(button, async () => {
+      await loadDetail(button.dataset.more, true);
+      render();
+    });
+    return;
+  }
   if (operationsClick(button) || businessClick(button)) return;
   if (button.dataset.filter) {
     filter = button.dataset.filter;
@@ -593,6 +720,7 @@ document.addEventListener("click", (event) => {
       if (isDemo) demo.cards = demo.cards.filter((c) => c.id !== id);
       else {
         await api(`/api/cards/${id}/answer`, { text });
+        live.cards = live.cards.filter((c) => c.id !== id);
         await refresh();
       }
       toast("回复已提交");
@@ -717,11 +845,11 @@ function toggleDemo(force) {
   if (isDemo && !demo) demo = demoData();
   filter = "all";
   search = "";
-  render();
+  enterView();
 }
 $("#demo-toggle").addEventListener("click", () => toggleDemo());
 $("#exit-demo").addEventListener("click", () => toggleDemo(false));
-window.addEventListener("hashchange", render);
+window.addEventListener("hashchange", enterView);
 for (const dialog of document.querySelectorAll("dialog"))
   dialog.addEventListener("click", (e) => {
     if (e.target === dialog) {
@@ -730,19 +858,6 @@ for (const dialog of document.querySelectorAll("dialog"))
         dialog.close();
     }
   });
-(async () => {
-  try {
-    const session = await api("/api/session");
-    csrf = session.csrf;
-    $("#host-mode").textContent = session.remote ? "服务器" : "本机";
-    await refresh();
-  } catch (error) {
-    toast(error.message, true);
-  }
-  setInterval(() => {
-    if (!document.hidden && !pending && Date.now() - lastRefresh > 4000) refresh();
-  }, 5000);
-})();
 
 const businessStatus = { draft: "待启动", active: "经营中", paused: "已暂停" };
 const businessById = (id) => (data()?.businesses ?? []).find((b) => b.id === id);
@@ -975,17 +1090,19 @@ function employeesHTML(d) {
               .map((s) => {
                 const current = s.currentTask,
                   waiting = current && ["active", "blocked", "awaiting_approval", "rejected"].includes(current.status);
-                const status = s.workStatus ?? (!p.enabled
-                  ? "未启用"
-                  : !s.enabled
-                    ? "已停用"
-                    : p.status !== "active"
-                      ? businessStatus[p.status]
-                      : waiting
-                        ? (names[current.status] ?? "待派工")
-                        : s.lastTask && !current
-                          ? "待接单"
-                          : "待检查");
+                const status =
+                  s.workStatus ??
+                  (!p.enabled
+                    ? "未启用"
+                    : !s.enabled
+                      ? "已停用"
+                      : p.status !== "active"
+                        ? businessStatus[p.status]
+                        : waiting
+                          ? (names[current.status] ?? "待派工")
+                          : s.lastTask && !current
+                            ? "待接单"
+                            : "待检查");
                 return `<article class="panel employee-card"><div class="panel-heading"><h3>${roleNames[s.role]}${s.role === p.owner ? " · 项目负责人" : ""}</h3><span class="badge ${waiting && current.status === "blocked" ? "blocked" : ""}">${esc(status)}</span></div><p>${esc(s.daily?.goal ?? s.duty)}</p>${s.daily ? `<dl class="employee-facts"><div><dt>计划日期</dt><dd>${esc(s.daily.date)}</dd></div><div><dt>今日工作</dt><dd>${esc(s.daily.focus)}</dd></div><div><dt>完成标准</dt><dd>${esc(s.daily.doneWhen)}</dd></div><div><dt>复查时间</dt><dd>${time(s.daily.reviewAt)}</dd></div></dl>` : `<p class="note">今日安排：${s.onDuty === false ? "未在岗" : "待 CEO 制定"}</p>`}${s.followups?.length ? `<details><summary>后续跟进（${s.followups.length}）</summary><ul>${s.followups.map((f) => `<li>${time(f.reviewAt)} · ${esc(f.focus)}</li>`).join("")}</ul></details>` : ""}<details><summary>岗位职责与检查事项</summary><p>${esc(s.duty)}</p><ul>${s.checks.map((c) => `<li>${esc(c)}</li>`).join("")}</ul><dl class="employee-facts"><div><dt>检查周期</dt><dd>${s.cadence === "daily" ? "每天" : "每周"}</dd></div><div><dt>最近检查</dt><dd>${s.lastChecked ? time(s.lastChecked) : "尚未检查"}</dd></div><div><dt>下次检查</dt><dd>${s.onDuty === false || s.inspections === false || !s.enabled || !p.enabled || p.status !== "active" ? "—" : waiting ? "当前任务结束后" : time(s.nextAt)}</dd></div></dl></details>${!s.daily || waiting ? `<p class="employee-finding">${esc(s.nextAction ?? (waiting ? current.reason || "执行中" : s.finding))}</p>` : ""}<div class="business-actions"><button class="secondary" data-employee="${s.role}" data-project="${esc(p.business)}">责任档案</button>${current ? `<button class="text-button" data-task="${esc(current.id)}">${waiting ? "当前任务" : "最近任务"}</button>` : ""}</div></article>`;
               })
               .join("")}</div></section>`,
@@ -1136,7 +1253,7 @@ function ceoHTML(d) {
   const business = (id) => d.businesses?.find((b) => b.id === id)?.name ?? id;
   const state = { open: "CEO 处理中", owner: "待你回复", answered: "已解决" };
   const channel = d.channels?.find((v) => v.id === "company-feishu");
-  const latest = d.tasks.find((t) => t.id === c.lastTask),
+  const latest = c.latestTask ?? d.tasks.find((t) => t.id === c.lastTask),
     repair = c.repairs?.[c.lastTask];
   const management =
     latest?.status === "blocked"
@@ -1145,7 +1262,9 @@ function ceoHTML(d) {
         : "自动修复中"
       : latest?.status === "active"
         ? "处理中"
-        : c.stalled ? "管理停滞" : "等待业务变化";
+        : c.stalled
+          ? "管理停滞"
+          : "等待业务变化";
   return `<section class="panel"><div class="panel-heading"><h2>管理状态</h2><span class="badge">${channel?.online ? "飞书已连接" : "飞书未连接"}</span></div><div class="approval-list"><p>${management}${repair ? ` · 修复 ${repair.attempts} / 2 次` : ""}</p><p class="note">${c.stalled ? esc(c.stalled.reason) : c.nextReviewAt ? `下次管理复查 ${time(c.nextReviewAt)}；新结果和回复会提前唤醒` : "等待首次检查"}</p>${c.lastTask ? `<button class="text-button" data-task="${esc(c.lastTask)}">最近管理任务</button>` : ""}</div></section>
   <section class="panel"><div class="panel-heading"><h2>数据连接</h2></div><div class="approval-list">${(d.sources ?? []).map((s) => `<article class="report"><h3>${esc(business(s.business))}</h3><p>${{ ready: "已更新", partial: "部分读取失败", unavailable: "读取失败" }[s.status]} · ${time(s.checkedAt)}</p><p class="note">下次读取 ${time(s.nextAt)} · 只读汇总</p></article>`).join("") || '<p class="muted">未配置</p>'}</div></section>
   <section class="panel"><div class="panel-heading"><h2>业务目标</h2></div><div class="approval-list">${
@@ -1154,11 +1273,10 @@ function ceoHTML(d) {
       .join("") || '<p class="muted">等待 CEO 分配目标</p>'
   }</div></section>
   ${approvalsHTML(d)}
-  <section class="panel"><div class="panel-heading"><h2>员工问题</h2><span class="count-badge">${c.issues.filter((i) => i.state !== "answered").length}</span></div><div class="approval-list">${
+  <section class="panel"><div class="panel-heading"><h2>员工问题</h2><span class="count-badge">${c.openIssues ?? c.issues.filter((i) => i.state !== "answered").length}</span></div><div class="approval-list">${
     c.issues
       .slice()
       .reverse()
-      .slice(0, 20)
       .map(
         (i) =>
           `<article class="report"><span class="meta">${esc(business(i.business))} · ${esc(roleNames[i.role])} · ${state[i.state]}</span><h3>${esc(i.question)}</h3><p>${esc(i.answer || i.context)}</p></article>`,
@@ -1169,7 +1287,6 @@ function ceoHTML(d) {
     c.decisions
       .slice()
       .reverse()
-      .slice(0, 10)
       .map(
         (v) =>
           `<article class="report"><span class="meta">${time(v.at)}</span><p>${esc(v.summary)}</p><button class="text-button" data-task="${esc(v.task)}">决策详情</button></article>`,
@@ -1180,11 +1297,45 @@ function ceoHTML(d) {
     c.knowledge
       .slice()
       .reverse()
-      .slice(0, 20)
       .map(
         (k) =>
           `<article class="report"><span class="meta">${esc(business(k.business))} · ${k.source === "owner" ? "你的答复" : "CEO 答复"}</span><p>${esc(k.answer)}</p><small>${esc(k.evidence)}</small></article>`,
       )
       .join("") || '<p class="muted">暂无问答记录</p>'
-  }</div></section>`;
+  }</div></section>${moreHTML("leadership")}`;
 }
+
+// Cached content is read only until a fresh session and overview have arrived.
+(async () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(overviewStorage));
+    if (saved?.value?.home && Array.isArray(saved.value.cards) && Array.isArray(saved.value.tasks)) {
+      responses.set("/api/overview", { value: saved.value, etag: saved.etag });
+      live = { ...saved.value, connected: false, updating: true, connectionError: "更新中，暂时显示上次的数据。" };
+      render();
+    }
+  } catch {}
+  try {
+    const sessionRequest = api("/api/session").then((session) => {
+      csrf = session.csrf;
+      $("#host-mode").textContent = session.remote ? "服务器" : "本机";
+    });
+    await Promise.all([sessionRequest, refresh(false)]);
+    await enterView();
+  } catch (error) {
+    toast(error.message, true);
+  }
+})();
+setInterval(() => {
+  if (
+    !document.hidden &&
+    !isDemo &&
+    !pending &&
+    ["home", "approvals"].includes(currentView()) &&
+    Date.now() - lastRefresh >= 30000
+  )
+    refresh(false);
+}, 1000);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && !isDemo) refresh();
+});

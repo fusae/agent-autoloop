@@ -11,7 +11,7 @@ description: 配置 Agent 自动化中台：加规则、接新的事件插件、
 
 `agent-autoloop status` 列出谁在线、等用户什么、在做什么、做过什么，还有按完成时间统计的今天和最近 7 天的轮数、Token 和费用（同一轮重试的已报用量相加，没上报的轮数会写出来）。`agent-autoloop answer <卡片> <序号>` 回答，`agent-autoloop resolve <卡片> <结果>` 结案，`agent-autoloop stop <第几轮>` 停掉一轮，等整个进程组退出才报告已停。
 
-上游内核没有网页。本公司 fork 已提供本机工作台：`npm run company -- start "$HOME/.agent-company"`，包括业务、员工职责、项目计划、审批和费用，见 `docs/company.md`；不要重复搭建。需要其他客户端时，读 `GET /v1/state`，密钥是 `config.json` 的 `owner`，请求见 `docs/protocol.md` 的「本人」一节。
+上游内核没有网页。本公司 fork 已提供本机工作台：`npm run company -- start "$HOME/.agent-company"`，包括业务、员工职责、项目计划、审批和费用，见 `docs/company.md`；不要重复搭建。公司首页和审批可见时每 30 秒更新，详细视图按需读取并分页，服务端与网页一起升级。需要其他客户端时，读 `GET /v1/state`，密钥是 `config.json` 的 `owner`，请求见 `docs/protocol.md` 的「本人」一节。
 
 ## 改规则
 

@@ -339,13 +339,13 @@ export class Operations {
     this.save(p, "signal", now);
     return signal;
   }
-  snapshot(businesses: Portfolio, tasks: Task[], now = new Date()) {
+  snapshot(businesses: Portfolio, tasks: Task[], now = new Date(), leadership = this.executive()) {
     return businesses.map((b) => {
       const p = this.get(b.id, new Date(b.createdAt));
       return {
         ...p,
         owner: p.owner,
-        manager: this.executive().enabled ? "ceo" : null,
+        manager: leadership.enabled ? "ceo" : null,
         name: b.name,
         enabled: !!b.autonomy,
         status: b.status,
@@ -358,7 +358,7 @@ export class Operations {
                 p.staff.filter((s) => this.onDuty(s)).every((s) => s.reports?.some((r) => r.date === day(now))) &&
                   now.toISOString() >= reportTime(day(now), "20:30"),
               ),
-              ceoAt: nextReportTime(now, "21:00", !!this.executive().eveningReports?.some((r) => r.date === day(now))),
+              ceoAt: nextReportTime(now, "21:00", !!leadership.eveningReports?.some((r) => r.date === day(now))),
             }
           : null,
         todayTasks: p.activity.filter((a) => day(new Date(a.at)) === day(now)).length,
@@ -389,7 +389,7 @@ export class Operations {
             );
           const t = assigned ?? tasks.find((t) => t.id === (work?.task ?? s.lastTask));
           const currentTask = t ? (({ approval: _approval, ...safe }) => safe)(t) : null;
-          const issue = this.executive().issues.find(
+          const issue = leadership.issues.find(
             (i) => i.business === b.id && i.role === s.role && i.state !== "answered",
           );
           let workStatus = "等待新情况",

@@ -415,3 +415,5 @@ Ship 使用本引擎仓库的 `plugins/delivery/action.yml`，项目固定到发
 公司应用可选 `publishDailyLimit` 和 `publishApproval.confirmFirst` 复用现有 ask/answer 与发布事件；渠道预留、本人确认、顺延及成功计数均保留在 plugins/company 的经营日志与现有发布记录，不增加内核字段。默认兼容，见[发布护栏](company.md#发布护栏)。
 
 公司内容质量仅增加兼容的知识资料字段与可信岗位规范，文字配图在小红书插件和独立系统浏览器内执行，不变更内核或 HTTP 协议；见[内容质量](company.md#内容质量)。
+
+公司网页的按需读取、分页和 ETag 仅属于外部客户端 `/api/*`，不改变上述 `/v1/*`；网页与服务端须同步升级，详见[网页按需读取](company.md#网页按需读取)。

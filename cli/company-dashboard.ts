@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage } from "node:http";
 import { join, resolve, sep } from "node:path";
@@ -71,6 +71,21 @@ class HTTPError extends Error {
     this.status = status;
   }
 }
+const taskSummary = ({ id, title, kind, status, stage }: Task) => ({ id, title, kind, status, stage });
+function pageParams(url: URL, compound = false) {
+  for (const key of url.searchParams.keys()) {
+    if (!["limit", "before"].includes(key) || url.searchParams.getAll(key).length !== 1)
+      throw new HTTPError(400, "分页参数不正确");
+  }
+  const limit = url.searchParams.get("limit") ?? (compound ? "20" : "50");
+  const before = url.searchParams.get("before");
+  if (!/^[1-9]\d?$/.test(limit) || Number(limit) > 50) throw new HTTPError(400, "每页数量需要 1–50");
+  if (before !== null && !(compound ? /^\d{1,15}\.\d{1,15}\.\d{1,15}$/ : /^[1-9]\d{0,15}$/).test(before))
+    throw new HTTPError(400, "分页游标不正确");
+  if (before !== null && before.split(".").some((n) => !Number.isSafeInteger(Number(n))))
+    throw new HTTPError(400, "分页游标不正确");
+  return { limit: Number(limit), before };
+}
 const publicTask = ({ approval: _approval, ...task }: Task) => task;
 async function body(req: IncomingMessage) {
   if (!req.headers["content-type"]?.startsWith("application/json")) throw new HTTPError(415, "请求需要使用 JSON");
@@ -128,6 +143,20 @@ export async function startDashboard(directory: string, port = 3361, options: { 
       res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
       res.end(JSON.stringify(data));
     };
+    const cached = (data: unknown) => {
+      const json = JSON.stringify(data);
+      const etag = `"${createHash("sha256").update(json).digest("hex")}"`;
+      res.setHeader("ETag", etag);
+      res.setHeader("Cache-Control", "private, no-cache");
+      const matches = req.headers["if-none-match"]?.split(",").map((v) => v.trim().replace(/^W\//, ""));
+      if (matches?.includes(etag) || matches?.includes("*")) {
+        res.writeHead(304);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(json);
+    };
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Referrer-Policy", "no-referrer");
@@ -167,41 +196,184 @@ export async function startDashboard(directory: string, port = 3361, options: { 
           } catch (error) {
             connectionError = (error as Error).message;
           }
-          const tasks = company.tasks().map(publicTask);
-          const snapshot = operations.snapshot(businesses.list(), company.tasks());
-          return send(200, {
+          const tasks = company.tasks();
+          const portfolio = businesses.list();
+          const chief = operations.executive();
+          const now = new Date();
+          const snapshot = operations.snapshot(portfolio, tasks, now, chief);
+          const latestReport = chief.eveningReports?.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
+          const home = {
+            ...homeData(directory, companyConfig, snapshot),
+            leadership: { enabled: chief.enabled, openIssues: chief.issues.filter((i) => i.state === "open").length },
+            ceoRun:
+              (state?.runs ?? [])
+                .filter((r: any) => r.agent === "company-ceo" && r.summary)
+                .sort((a: any, b: any) =>
+                  String(b.finishedAt ?? b.createdAt).localeCompare(String(a.finishedAt ?? a.createdAt)),
+                )
+                .map(({ state, summary, finishedAt, createdAt }: any) => ({
+                  state,
+                  summary,
+                  finishedAt,
+                  createdAt,
+                }))[0] ?? null,
+            ceoReport: latestReport
+              ? {
+                  date: latestReport.date,
+                  summary: tasks.find((t) => t.id === latestReport.task)?.reports.at(-1)?.summary ?? null,
+                }
+              : null,
+            operations: snapshot.map((p) => ({
+              business: p.business,
+              workday: p.workday,
+              reporting: p.reporting,
+              staff: p.staff
+                .filter((s) => s.role === "growth" && s.onDuty)
+                .map((s) => ({
+                  role: s.role,
+                  onDuty: s.onDuty,
+                  workday: s.workday,
+                  daily: s.daily,
+                  nextAction: s.nextAction,
+                  workStatus: s.workStatus,
+                  nextWorkdayAt: s.nextWorkdayAt,
+                  reports: (s.reports ?? [])
+                    .filter((r) => r.date === modelDay(now))
+                    .map((r) => ({ date: r.date, entries: r.entries.slice(-1) })),
+                })),
+              plans: p.plans
+                .filter(
+                  (a) => a.owner === "growth" && ["publishing", "delivered", "working", "planned"].includes(a.status),
+                )
+                .map(({ owner, status, title, publicationKey, publishApproval }) => ({
+                  owner,
+                  status,
+                  title,
+                  publicationKey,
+                  publishApproval: publishApproval ? { state: publishApproval.state } : undefined,
+                })),
+            })),
+          };
+          return cached({
             name: companyConfig.name,
             maxAssignments: companyConfig.maxAssignments,
             contentReview: companyConfig.ceoMode ? (companyConfig.contentReview ?? "qa") : "qa",
             dailyPlanning: !!companyConfig.dailyPlanning && !!companyConfig.ceoMode,
             connected: !!state,
             connectionError,
-            at: new Date().toISOString(),
             departments,
             workflows,
-            tasks,
-            businesses: businesses.list(),
-            operations: snapshot,
-            leadership: operations.executive(),
-            home: homeData(directory, companyConfig, snapshot),
+            tasks: tasks.slice(-6).map(taskSummary),
+            taskStats: {
+              total: tasks.length,
+              active: tasks.filter((t) => t.status === "active").length,
+              blocked: tasks.filter((t) => ["blocked", "rejected"].includes(t.status)).length,
+              done: tasks.filter((t) => t.status === "completed" && !t.kind.startsWith("check-") && t.kind !== "ceo")
+                .length,
+              checked: tasks.filter((t) => t.kind.startsWith("check-") && t.status === "completed").length,
+              departments: Object.fromEntries(
+                Object.keys(departments).map((role) => [
+                  role,
+                  tasks.filter((t) => t.status === "active" && workflows[t.kind]?.[t.stage] === role).length,
+                ]),
+              ),
+            },
+            businesses: portfolio,
+            home,
+            cards: (state?.cards ?? [])
+              .filter((c: any) => c.kind === "ask")
+              .map((c: any) => ({
+                id: c.id,
+                kind: c.kind,
+                title: c.title,
+                text: c.text,
+                options: c.options ?? [],
+              })),
+            agents: (state?.agents ?? []).map(({ id, use, online }: any) => ({ id, use, online })),
+            runs: (state?.runs ?? [])
+              .filter((r: any) => r.state === "claimed")
+              .map(({ id, agent, state }: any) => ({ id, agent, state })),
+            spending: state?.spending ?? null,
+          });
+        }
+        if (url.pathname === "/api/tasks") {
+          const { limit, before } = pageParams(url);
+          const page = company.taskPage(limit, before === null ? undefined : Number(before));
+          return cached({ ...page, tasks: page.tasks.map(taskSummary) });
+        }
+        if (url.pathname === "/api/operations") {
+          pageParams(url);
+          const tasks = company.tasks();
+          return cached({
+            operations: operations.snapshot(businesses.list(), tasks).map((p) => ({
+              ...p,
+              staff: p.staff.map((s) => ({
+                ...s,
+                currentTask: s.currentTask
+                  ? { ...taskSummary(s.currentTask as Task), reason: s.currentTask.reason }
+                  : null,
+              })),
+            })),
+            tasks: tasks.map(taskSummary),
+          });
+        }
+        if (url.pathname === "/api/leadership") {
+          const { limit, before } = pageParams(url, true);
+          const chief = operations.executive();
+          const collections = [chief.decisions, chief.issues, chief.knowledge];
+          const ends = before === null ? collections.map((a) => a.length) : before.split(".").map(Number);
+          if (ends.some((n, i) => n > collections[i].length)) throw new HTTPError(400, "分页游标超出范围");
+          const starts = ends.map((n) => Math.max(0, n - limit));
+          const latest = chief.lastTask ? company.task(chief.lastTask) : null;
+          let channels: any[] = [];
+          try {
+            channels = (await hub("/v1/state")).channels ?? [];
+          } catch (error) {
+            if (!(error instanceof HTTPError) || error.status !== 503) throw error;
+          }
+          return cached({
+            leadership: {
+              enabled: chief.enabled,
+              lastTask: chief.lastTask,
+              nextReviewAt: chief.nextReviewAt,
+              stalled: chief.stalled ? { reason: chief.stalled.reason } : null,
+              briefs: chief.briefs,
+              repairs: chief.lastTask ? { [chief.lastTask]: chief.repairs?.[chief.lastTask] } : {},
+              latestTask: latest ? taskSummary(latest) : null,
+              openIssues: chief.issues.filter((i) => i.state !== "answered").length,
+              decisions: chief.decisions
+                .slice(starts[0], ends[0])
+                .map(({ task, summary, at }) => ({ task, summary, at })),
+              issues: chief.issues.slice(starts[1], ends[1]),
+              knowledge: chief.knowledge.slice(starts[2], ends[2]),
+            },
             sources: Object.values(sourceSnapshots(directory)).map((s) => ({
               business: s.business,
               status: s.status,
               checkedAt: s.attemptedAt,
               nextAt: s.nextAt,
-              errors: [s.release.error, s.database.error, s.repositories.error].filter(Boolean),
             })),
-            channels: state?.channels ?? [],
-            cards: (state?.cards ?? []).map((c: any) => ({
-              id: c.id,
-              kind: c.kind,
-              title: c.title,
-              text: c.text,
-              options: c.options ?? [],
+            channels: channels.map(({ id, online }: any) => ({ id, online })),
+            nextBefore: starts.some(Boolean) ? starts.join(".") : null,
+          });
+        }
+        if (url.pathname === "/api/runs") {
+          const { limit, before } = pageParams(url);
+          const state = await hub("/v1/state" + (before === null ? "" : `?before=${before}`));
+          const runs = (state.runs ?? []).sort((a: any, b: any) => b.id - a.id);
+          const page = runs.slice(0, limit);
+          return cached({
+            runs: page.map(({ id, agent, state, summary, error, createdAt, finishedAt }: any) => ({
+              id,
+              agent,
+              state,
+              summary,
+              error,
+              createdAt,
+              finishedAt,
             })),
-            agents: state?.agents ?? [],
-            runs: state?.runs ?? [],
-            spending: state?.spending ?? null,
+            nextBefore: runs.length > limit || state.nextBefore ? (page.at(-1)?.id ?? null) : null,
+            spending: state.spending ?? null,
           });
         }
         // Frozen (already reviewed) drafts: full text plus embedded images, so the owner can judge quality before approving.
@@ -252,7 +424,7 @@ export async function startDashboard(directory: string, port = 3361, options: { 
             if (content.includes("\0")) throw new HTTPError(415, "该文件不是可预览的文本");
             return send(200, { path, content });
           }
-          return send(200, {
+          return cached({
             task: publicTask(task),
             history: company.history(task.id).map((row) => ({
               seq: row.seq,

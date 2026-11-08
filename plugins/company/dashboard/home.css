@@ -724,3 +724,8 @@ body[data-view="home"] .page-heading {
   border: 1px solid var(--line);
   display: block;
 }
+
+.load-more {
+  padding: 20px;
+  text-align: center;
+}
