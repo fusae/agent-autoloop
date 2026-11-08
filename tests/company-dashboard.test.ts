@@ -1,5 +1,6 @@
 // Failure modes: a web page exposes owner keys, another origin can approve a task, offline data looks live,
-// an artifact path escapes the workspace, or manual posts inflate staff totals or inject markup. The fake hub records only explicit browser actions.
+// an artifact path escapes the workspace, frozen drafts lose content or serve unsafe image types,
+// or manual posts inflate staff totals or inject markup. The fake hub records only explicit browser actions.
 import assert from "node:assert/strict";
 import { createServer, get } from "node:http";
 import { readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
@@ -10,6 +11,67 @@ import { test } from "node:test";
 import { Company } from "../plugins/company/company.ts";
 import { initialize } from "../plugins/company/setup.ts";
 import { startDashboard } from "../cli/company-dashboard.ts";
+
+test("frozen publications expose full drafts and image bytes but reject invalid keys and unsafe MIME types", async () => {
+  const temp = mkdtempSync(join(tmpdir(), "company-draft-"));
+  const dir = join(temp, "office");
+  initialize(dir);
+  mkdirSync(join(dir, "hub"));
+  mkdirSync(join(dir, "publications"));
+  writeFileSync(
+    join(dir, "hub/config.json"),
+    JSON.stringify({ url: "http://127.0.0.1:1", owner: "test", source: { key: "test" } }),
+  );
+  const key = "a".repeat(32);
+  const bytes = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aY1sAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const content = "第一段完整正文。\n\n第二段 <script>原样保留的资料</script>。";
+  writeFileSync(
+    join(dir, "publications", `${key}.json`),
+    JSON.stringify({
+      business: "test-app",
+      artifacts: [
+        {
+          path: "tasks/draft/xiaohongshu.json",
+          content: JSON.stringify({
+            title: "冻结稿标题",
+            content,
+            images: ["image/png", "image/jpeg", "image/webp", "image/svg+xml", "text/html", "image/gif"].map(
+              (mime) => ({
+                mime,
+                base64: bytes.toString("base64"),
+              }),
+            ),
+          }),
+        },
+      ],
+    }),
+  );
+  const dashboard = await startDashboard(dir, 0);
+  try {
+    const endpoint = `${dashboard.url}/api/publications/${key}`;
+    const response = await fetch(endpoint);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { key, business: "test-app", title: "冻结稿标题", content, images: 6 });
+    for (const [index, mime] of ["image/png", "image/jpeg", "image/webp"].entries()) {
+      const image = await fetch(`${endpoint}/image/${index}`);
+      assert.equal(image.status, 200);
+      assert.equal(image.headers.get("content-type"), mime);
+      assert.deepEqual(Buffer.from(await image.arrayBuffer()), bytes);
+    }
+    for (const index of [3, 4, 5, 6]) assert.equal((await fetch(`${endpoint}/image/${index}`)).status, 404);
+    for (const invalid of ["bad-key", "g".repeat(32), "a".repeat(31), "a".repeat(33), "b".repeat(32)]) {
+      for (const suffix of ["", "/image/0"]) {
+        assert.equal((await fetch(`${dashboard.url}/api/publications/${invalid}${suffix}`)).status, 404);
+      }
+    }
+  } finally {
+    await dashboard.close();
+    rmSync(temp, { recursive: true, force: true });
+  }
+});
 
 test("dashboard protects mutations, keeps keys server-side, handles offline state and confines artifact reads", async () => {
   const temp = mkdtempSync(join(tmpdir(), "company-dashboard-"));

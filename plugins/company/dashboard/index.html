@@ -18,7 +18,9 @@
         >
         <nav class="primary-nav" aria-label="主导航">
           <a href="#home" data-view="home">首页</a>
-          <a href="#approvals" data-view="approvals">等你处理<span class="nav-count" id="nav-approvals" hidden>0</span></a>
+          <a href="#approvals" data-view="approvals"
+            >等你处理<span class="nav-count" id="nav-approvals" hidden>0</span></a
+          >
         </nav>
         <div class="masthead-right">
           <span id="connection" class="connection">正在连接</span
@@ -240,6 +242,13 @@
         <button class="close" data-close="artifact-dialog" aria-label="关闭">×</button>
       </div>
       <pre id="artifact-content"></pre>
+    </dialog>
+    <dialog id="draft-dialog" class="draft-dialog" aria-labelledby="draft-title">
+      <div class="dialog-heading">
+        <h2 id="draft-title">稿件全文</h2>
+        <button class="close" data-close="draft-dialog" aria-label="关闭">×</button>
+      </div>
+      <div id="draft-content"></div>
     </dialog>
     <div id="toast" class="toast" role="status" hidden></div>
   </body>

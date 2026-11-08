@@ -204,6 +204,34 @@ export async function startDashboard(directory: string, port = 3361, options: { 
             spending: state?.spending ?? null,
           });
         }
+        // Frozen (already reviewed) drafts: full text plus embedded images, so the owner can judge quality before approving.
+        const draft = /^\/api\/publications\/([a-f0-9]{32})(?:\/image\/(\d{1,2}))?$/.exec(url.pathname);
+        if (draft) {
+          const frozen = join(directory, "publications", `${draft[1]}.json`);
+          if (!existsSync(frozen)) throw new HTTPError(404, "没有找到这份稿件");
+          const request = JSON.parse(readFileSync(frozen, "utf8"));
+          const xhs = (request.artifacts ?? []).find((a: any) => /(^|\/)xiaohongshu\.json$/.test(a.path));
+          const parsed = xhs ? JSON.parse(xhs.content) : null;
+          const images: { mime: string; base64: string }[] = Array.isArray(parsed?.images) ? parsed.images : [];
+          if (draft[2] !== undefined) {
+            const image = images[Number(draft[2])];
+            if (!image || !/^image\/(png|jpeg|webp)$/.test(image.mime) || typeof image.base64 !== "string")
+              throw new HTTPError(404, "没有这张图片");
+            res.writeHead(200, { "Content-Type": image.mime });
+            res.end(Buffer.from(image.base64, "base64"));
+            return;
+          }
+          return send(200, {
+            key: draft[1],
+            business: request.business,
+            title: typeof parsed?.title === "string" ? parsed.title : "已审核正文",
+            content:
+              typeof parsed?.content === "string"
+                ? parsed.content
+                : (request.artifacts ?? []).map((a: any) => String(a.content ?? "")).join("\n\n"),
+            images: images.length,
+          });
+        }
         const match = /^\/api\/tasks\/([A-Za-z0-9_-]+)(\/artifact)?$/.exec(url.pathname);
         if (match) {
           const task = company.task(taskId(match[1]));

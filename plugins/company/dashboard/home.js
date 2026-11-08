@@ -54,19 +54,35 @@ function homeSummary(d, asks, growth, stock) {
   return `${first}${work.join("，")}；${you}`;
 }
 
+function homeAskFields(text) {
+  // Card text: "APP：…\n标题：…\n正文：<multi-line>\n图片数：…\n…\n发布稿件：<key>"
+  const t = String(text ?? "");
+  const pick = (label) => new RegExp(`^${label}[：:]\\s*(.*)$`, "m").exec(t)?.[1]?.trim();
+  const body = /^正文[：:]\s*([\s\S]*?)(?=^(?:图片数|只发布|发布稿件|预计发布时间|一小时内)[：:]?|$(?![\s\S]))/m
+    .exec(t)?.[1]
+    ?.trim();
+  return {
+    app: pick("APP"),
+    title: pick("标题"),
+    body,
+    images: pick("图片数"),
+    key: /发布稿件[：:]\s*([a-f0-9]{32})/.exec(t)?.[1],
+  };
+}
+const homeClip = (text, n = 110) => {
+  const chars = Array.from(String(text ?? "").replace(/\s+/g, " "));
+  return chars.length > n ? chars.slice(0, n).join("") + "…" : chars.join("");
+};
+const draftButton = (key, label = "查看全文和配图") =>
+  key ? `<button type="button" class="text-action" data-draft="${esc(key)}">${label}</button>` : "";
+
 function homeAsk(d, c) {
   const disabled = d.connected ? "" : "disabled";
-  const fields = Object.fromEntries(
-    String(c.text ?? "")
-      .split("\n")
-      .map((line) => /^(APP|标题|正文|预计发布)[：:]\s*(.*)$/.exec(line))
-      .filter(Boolean)
-      .map((m) => [m[1], m[2]]),
-  );
-  const structured = fields.标题 || fields.APP;
-  const body = structured
-    ? `<dl class="ask-fields">${fields.APP ? `<div><dt>APP</dt><dd>${esc(fields.APP)}</dd></div>` : ""}${fields.标题 ? `<div><dt>标题</dt><dd class="ask-headline">${esc(fields.标题)}</dd></div>` : ""}${fields.正文 ? `<div><dt>正文开头</dt><dd>${esc(fields.正文)}</dd></div>` : ""}</dl>`
-    : `<p class="ask-text">${esc(c.text)}</p>`;
+  const f = homeAskFields(c.text);
+  const body =
+    f.title || f.app
+      ? `<dl class="ask-fields">${f.app ? `<div><dt>APP</dt><dd>${esc(f.app)}</dd></div>` : ""}${f.title ? `<div><dt>标题</dt><dd class="ask-headline">${esc(f.title)}</dd></div>` : ""}${f.body ? `<div><dt>正文开头</dt><dd>${esc(homeClip(f.body))}</dd></div>` : ""}${f.images ? `<div><dt>配图</dt><dd>${esc(f.images)} 张</dd></div>` : ""}</dl>${f.key ? `<p class="ask-more">${draftButton(f.key)}</p>` : ""}`
+      : `<p class="ask-text">${esc(c.text)}</p>`;
   return `<article class="ask">
     <h3>${esc(c.title)}</h3>
     ${body}
@@ -78,6 +94,27 @@ function homeAsk(d, c) {
     </details>
   </article>`;
 }
+
+async function openDraft(key) {
+  const box = $("#draft-content");
+  $("#draft-title").textContent = "稿件全文";
+  box.innerHTML = '<p class="empty-line">正在读取稿件…</p>';
+  $("#draft-dialog").showModal();
+  try {
+    const draft = await api(`/api/publications/${encodeURIComponent(key)}`);
+    $("#draft-title").textContent = draft.title;
+    box.innerHTML = `<p class="draft-meta">${esc(homeBusiness(data() ?? {}, draft.business))}，正文 ${Array.from(draft.content).length} 字，配图 ${draft.images} 张</p>
+      <div class="draft-body">${esc(draft.content)}</div>
+      ${draft.images ? `<div class="draft-images">${Array.from({ length: draft.images }, (_, i) => `<a href="api/publications/${esc(key)}/image/${i}" target="_blank" rel="noopener"><img src="api/publications/${esc(key)}/image/${i}" alt="第 ${i + 1} 张配图" loading="lazy" /></a>`).join("")}</div>` : '<p class="empty-line">这份稿件没有配图。</p>'}`;
+  } catch (error) {
+    box.innerHTML = `<p class="empty-line">${esc(error.message)}</p>`;
+  }
+}
+if (typeof document !== "undefined")
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest?.("[data-draft]");
+    if (button) openDraft(button.dataset.draft);
+  });
 
 function homeGoal(stock) {
   if (!stock || stock.target == null) return '<span class="goal-none">本周还没定发帖目标</span>';
@@ -151,7 +188,7 @@ function homePosts(d) {
       const title = esc(last.title ?? "（标题未读到）");
       return `<li class="post">
         <div class="post-title"><h3>${proof?.url ? `<a href="${esc(proof.url)}" target="_blank" rel="noopener noreferrer">${title}</a>` : title} <span class="muted">系统发布</span></h3>
-          <span>${esc(homeBusiness(d, post.business))}，${homeShortDate(post.publishedAt)} ${homeClock(post.publishedAt)} 发布</span></div>
+          <span>${esc(homeBusiness(d, post.business))}，${homeShortDate(post.publishedAt)} ${homeClock(post.publishedAt)} 发布</span>${proof?.key ? " " + draftButton(proof.key, "看全文") : ""}</div>
         <dl class="post-stats">
           <div><dt>阅读</dt><dd>${reads == null ? '<em title="在飞书告诉 CEO 就会记上">待你告知</em>' : homeNum(reads)}</dd></div>
           <div><dt>点赞</dt><dd>${homeNum(last.likes)}</dd></div>
@@ -178,7 +215,7 @@ function homePosts(d) {
       ${followers ? `<p class="followers">账号粉丝 <b>${homeNum(followers.count)}</b>${followers.change ? `<small class="${followers.change > 0 ? "up" : "down"}">${followers.change > 0 ? "+" : ""}${followers.change}</small>` : ""}</p>` : ""}</div>
     ${cards.length ? `<ul class="posts">${cards.join("")}</ul>` : `<p class="empty-line">还没有发出去的帖子。${fb?.status ? esc(fb.status) + "。" : ""}</p>`}
     ${manual.length ? `<h3 class="sub-head">你自己发的</h3><ul class="queue">${manual.map((p) => `<li><span class="queue-app">首次看到 ${homeShortDate(p.firstSeen)}</span><span class="queue-title"><a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.title)}</a></span><span class="queue-state">点赞 ${homeNum(p.samples?.at?.(-1)?.likes)}</span></li>`).join("")}</ul>` : ""}
-    ${waiting.length ? `<h3 class="sub-head">还没发的稿子</h3><ul class="queue">${waiting.map(({ p, a }) => `<li><span class="queue-app">${esc(homeBusiness(d, p.business))}</span><span class="queue-title">${esc(homeTitle(a.title))}</span><span class="queue-state ${waitLabel(a) === "等你确认发布" ? "mark" : ""}">${esc(waitLabel(a))}</span></li>`).join("")}</ul>` : ""}
+    ${waiting.length ? `<h3 class="sub-head">还没发的稿子</h3><ul class="queue">${waiting.map(({ p, a }) => `<li><span class="queue-app">${esc(homeBusiness(d, p.business))}</span><span class="queue-title">${esc(homeTitle(a.title))}${a.publicationKey ? " " + draftButton(a.publicationKey, "看全文") : ""}</span><span class="queue-state ${waitLabel(a) === "等你确认发布" ? "mark" : ""}">${esc(waitLabel(a))}</span></li>`).join("")}</ul>` : ""}
     ${fb?.status ? `<p class="block-note">互动数据${esc(fb.status)}。</p>` : ""}
   </section>`;
 }
