@@ -1,5 +1,6 @@
 // Failure modes: deployment starts staff early; repeated ticks duplicate work; plans bypass approval,
-// direction changes skip the chairman; one project consumes both employees' model allowance.
+// direction changes skip the chairman; one project consumes both employees' model allowance;
+// initialization silently overwrites goals or a corrected week loses the CEO's rollover reference.
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -127,6 +128,33 @@ function fixture(fn: (f: any) => void, extra = {}) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+test("weekly goal correction requires explicit overwrite and preserves last week's CEO reference", () =>
+  fixture((f: any) => {
+    const goals = [goal("app", { week: "2026-11-02" }), goal("other", { week: "2026-11-02" })];
+    goals[1].metrics[0].target = 2;
+    const get = () =>
+      f.o
+        .snapshot(f.b.list(), f.c.tasks(), now)
+        .map((p: any) => p.staff.find((s: any) => s.role === "growth").weeklyGoal);
+    const before = get();
+    assert.throws(() => f.o.seedWeeklyGoals(goals, now), /已有周目标不能由初始化覆盖/);
+    assert.deepEqual(get(), before);
+    f.o.seedWeeklyGoals(goals, now, { overwrite: true });
+    f.restart();
+    assert.deepEqual(get(), goals);
+    f.tick();
+    const ceo = JSON.parse(readFileSync(join(f.dir, "workspace/knowledge/ceo.json"), "utf8"));
+    assert.equal(ceo.week, "2026-11-09");
+    assert.deepEqual(ceo.missingWeeklyGoals, [
+      { business: "app", role: "growth" },
+      { business: "other", role: "growth" },
+    ]);
+    assert.deepEqual(
+      ceo.projects.map((p: any) => p.staff.find((s: any) => s.role === "growth").weeklyGoal),
+      goals,
+    );
+    assert.throws(() => f.o.seedWeeklyGoals(goals, now), /已有周目标不能由初始化覆盖/);
+  }));
 test("workday waits for current CEO arrangement and starts once per employee even after restart", () =>
   fixture(({ dir, decide, daily, tick, work, deliver, restart, o, b, c }: any) => {
     assert.equal(work(tick(new Date("2026-11-08T06:00:00Z")), "workday-growth").length, 0);

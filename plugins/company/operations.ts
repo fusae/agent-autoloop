@@ -234,12 +234,12 @@ export class Operations {
       .prepare("INSERT INTO journal(project,kind,at,body) VALUES (?,?,?,?)")
       .run(p.business, kind, now.toISOString(), body);
   }
-  seedWeeklyGoals(goals: WeeklyGoal[], now = new Date()) {
+  seedWeeklyGoals(goals: WeeklyGoal[], now = new Date(), { overwrite = false } = {}) {
     for (const value of goals) {
       const goal = weeklyGoal(value),
         p = this.get(goal.business, now);
       const s = p.staff.find((s) => s.role === goal.role)!;
-      if (s.weeklyGoal) throw Error("已有周目标不能由初始化覆盖");
+      if (s.weeklyGoal && !overwrite) throw Error("已有周目标不能由初始化覆盖");
       s.weeklyGoal = goal;
       this.save(p, "initial-weekly-goal", now);
       this.writeStaffKnowledge(p);
