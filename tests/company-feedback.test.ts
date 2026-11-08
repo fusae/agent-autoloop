@@ -111,6 +111,10 @@ test("narrow reader rejects writes and arbitrary targets, stops on access failur
       throw Error("captcha");
     });
     assert.equal(denied.state, "blocked");
+    const timeout = await readXhs(config, join(f.dir, "remote"), { action: "read", notes: [id] }, async () => {
+      throw new DOMException("timed out", "TimeoutError");
+    });
+    assert.equal(timeout.state, "unknown");
     assert.equal(calls.length, 1);
     const wrong = await readXhs(
       { ...config, accountId: "wrong" },

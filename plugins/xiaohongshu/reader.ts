@@ -16,6 +16,14 @@ export type Note = {
 export type Observation =
   | { state: "ready"; account: string; followers: number; notes: Note[] }
   | { state: "unknown" | "blocked"; reason: string };
+function readFailure(error: unknown, reason: string): Observation {
+  // A stalled browser or broken transport is unknown, not evidence of an account restriction.
+  const transient = error instanceof Error && ["TimeoutError", "AbortError", "TypeError"].includes(error.name);
+  return {
+    state: transient ? "unknown" : "blocked",
+    reason: transient ? "浏览器读取超时或连接中断，等待有限复查" : reason,
+  };
+}
 function count(value: unknown): number {
   if (typeof value === "string" && /^\d+$/.test(value)) value = Number(value);
   if (!Number.isSafeInteger(value) || Number(value) < 0) throw Error("平台未返回精确计数，不能当作零");
@@ -54,8 +62,8 @@ export async function readXhs(
       status = await call("/api/v1/login/status");
       if (status?.is_logged_in !== true) return { state: "blocked", reason: "登录已失效，请本人处理" };
       raw = await call("/api/v1/user/me");
-    } catch {
-      return { state: "blocked", reason: "账号读取受阻，请检查登录、验证码或平台限制" };
+    } catch (error) {
+      return readFailure(error, "账号读取受阻，请检查登录、验证码或平台限制");
     }
     const profile = raw?.data ?? raw;
     if ((status?.user_id || profile?.userBasicInfo?.userId) !== config.accountId || !Array.isArray(profile.feeds))
@@ -76,8 +84,8 @@ export async function readXhs(
           xsec_token: tokens[id],
           load_all_comments: false,
         });
-      } catch {
-        return { state: "blocked", reason: "笔记读取受阻，请检查登录、验证码或平台限制" };
+      } catch (error) {
+        return readFailure(error, "笔记读取受阻，请检查登录、验证码或平台限制");
       }
       const n = response?.data?.note;
       if (!n || n.noteId !== id || n.user?.userId !== config.accountId)
