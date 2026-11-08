@@ -1,0 +1,24 @@
+[Unit]
+Description=Agent Company text card renderer
+After=local-fs.target
+[Service]
+DynamicUser=yes
+Group=agentcompany
+WorkingDirectory=/opt/agent-company/app
+ExecStart=/opt/agent-company/runtime/node_modules/.bin/node /opt/agent-company/app/plugins/xiaohongshu/cards-service.ts /work
+BindPaths=/var/lib/agent-company/company/workspace/.cards-renderer:/work
+InaccessiblePaths=/var/lib/agent-company
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+UMask=0007
+MemoryMax=512M
+TasksMax=128
+KillMode=control-group
+TimeoutStopSec=10
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target

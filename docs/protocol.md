@@ -411,3 +411,5 @@ Ship 使用本引擎仓库的 `plugins/delivery/action.yml`，项目固定到发
 公司插件的可选调用控制见[模型调用控制](company.md#模型调用控制)：`company.model.deferred` 把被限额挡住的派工留在原任务，`company.task.resume` 由固定调度恢复；独立负责人来源的 `company.task.supersede` 记录取代关闭原因。默认配置与既有事件兼容，不改内核协议、日志或领取接口。
 
 公司应用可选 `publishDailyLimit` 和 `publishApproval.confirmFirst` 复用现有 ask/answer 与发布事件；渠道预留、本人确认、顺延及成功计数均保留在 plugins/company 的经营日志与现有发布记录，不增加内核字段。默认兼容，见[发布护栏](company.md#发布护栏)。
+
+公司内容质量仅增加兼容的知识资料字段与可信岗位规范，文字配图在小红书插件和独立系统浏览器内执行，不变更内核或 HTTP 协议；见[内容质量](company.md#内容质量)。

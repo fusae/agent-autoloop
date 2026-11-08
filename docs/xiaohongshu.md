@@ -70,3 +70,19 @@ node plugins/xiaohongshu/manage.ts pack post.json tasks/原任务/xiaohongshu.js
 输入只能是 `{"action":"read","notes":["24位笔记id"]}`，禁止额外字段或publish。服务只调用只读登录状态（用于缺少账号id的旧版profile）、`/api/v1/user/me` 和 `/api/v1/feeds/detail`；详情固定 `load_all_comments:false`，不翻评论、不搜索。账号必须匹配绑定id，笔记必须属于本人；列表token私有缓存用于读取旧笔记，不向模型暴露。与原发布程序共用同账号锁，防止浏览器并发。响应仅含核验文字、图片数、时间和互动指标，没有cookies、token或任意文件读取。
 
 先以宿主身份实读首篇和本人资料，再开启 `publishVerification:"program"` 与 `feedback.json.enabled:true`；员工模型沙箱须不能提权执行通道、读取私钥或直连旧机。成功响应可新增 `others:[{id,title,likes}]`，包含本人列表中不在本次 `notes` 请求里的卡片；标题取 `noteCard.displayTitle`，点赞取 `noteCard.interactInfo.likedCount`，按既有精确计数规则解析，缺失或缩写记 `null`。这些条目不调用详情、不额外翻页，是否系统发布由公司插件对照所有发布回执判定；旧响应缺少 `others` 仍兼容。每天09:35一次采集，阻塞暂停与恢复规则见[效果数据回流](company.md#效果数据回流)。发布核验未知时15分钟、再1小时有限复查，不调用QA模型。部署验证只走read，不走真实publish，不发送测试飞书消息。
+
+## 内容质量与文字配图
+
+公司运营和 CEO 共读 `knowledge/content-guide.md`（模板见 `examples/recipes/company/`）。运营写稿、改稿前读取 feedback 的全部系统帖与 manual 手动帖、各项目 operations 资料中的 contentDrafts 和原稿；交付说明列最近10篇切入角度并解释新稿差异，不足10篇列全部。CEO 按规范第五节逐项审核，任一项失败或与其他稿件角度重复即退回。旧备稿下次审稿适用新规范，不自动修改业务记录。
+
+`feedback.posts` 新增可选 `title`、`excerpt`（冻结正文前100字），`operations/*.json` 与 `ceo.json` 项目资料新增 `contentDrafts`，保留在制且未打包稿件的标题及缺失说明；不把原图 base64 复制进知识。手动帖仍仅有标题及采集时间，不推断发布时间；已关闭、已发布稿不计备稿。均为兼容的资料字段，内核协议不变。
+
+```sh
+node plugins/xiaohongshu/manage.ts cards spec.json outdir
+```
+
+`spec.json` 为 `{"title":"封面【高亮短语】","pages":["正文页"]}`；生成1080×1440 PNG，最多封面加8页，主题由标题稳定选择，也可指定 paper/lemon/sky/blush。内容规范推荐0–3张内页。文字转义后排版，配图禁止 imagegen 或自绘；交付保留 spec、命令及 PNG 供 CEO 核验，再以 pack 打包。
+
+渲染器是独立系统工具 Chrome for Testing 的稳定版 linux64 chrome-headless-shell，默认位于 `/opt/agent-company/tools/chrome-headless-shell/chrome-headless-shell`（本地可用 XHS_CARDS_BROWSER 指定），安装所需系统库、fonts-noto-cjk、fonts-noto-color-emoji 后运行 fc-cache -f。员工沙箱禁止 Chromium 所需的 shutdown 和 connect 系统调用时，使用固定代渲染服务，不能放宽模型权限；上线必须以实际员工身份和 workspace-write 沙箱测试 cards，不调用模型、不发布。
+
+固定服务模板为 `plugins/xiaohongshu/cards.service`，安装为 `agent-company-cards.service`。先建立 root:agentcompany、0770 的 `workspace/.cards-renderer`。服务以 DynamicUser、共享组 agentcompany 运行，只将该目录绑定为 `/work`，隐藏公司状态与凭据，系统目录只读，独立临时目录和网络命名空间。员工通过本地 JSON 文件请求，服务只收 title/pages/theme，拒绝 HTML、路径或命令字段；只输出图片或错误，无发布能力。目录存在时 cards 自动代渲染；每张最多60秒，命令最多等待550秒，超时报告原任务。新进程不重试业务，不触发模型轮次。测试可用 `XHS_CARDS_SPOOL` 指定临时目录。

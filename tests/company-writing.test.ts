@@ -49,6 +49,13 @@ test("v1 contracts are replaced in rules and handbooks without changing custom i
       assert.match(prompt, /第一人称、自然口语/);
       assert.match(prompt, /只写在 handoff\/facts/);
       assert.match(prompt, /必须 deliveries.verdict=revise/);
+      assert.match(prompt, /knowledge\/content-guide\.md/);
+      assert.match(prompt, /manual 董事长手动帖/);
+      assert.match(prompt, /最近10篇已发帖/);
+      assert.match(prompt, /manage.ts cards/);
+      assert.match(prompt, /禁止 imagegen/);
+      assert.match(prompt, /第五节7项清单逐条审/);
+      assert.match(prompt, /旧备稿在下次审核时同样执行/);
     }
     ensureBusinessRules(dir);
     assert.deepEqual(

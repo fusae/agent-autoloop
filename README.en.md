@@ -278,3 +278,5 @@ Company coordination and fixed publishing run on a separate worker, so occupied 
 Company operators can configure `activeRoles`, `inspections`, `ceoWake`, and `dailyModelRuns` in private `company.json`; omitted fields retain existing behavior. Capped work remains queued until the next Beijing calendar day; owner conversations are counted but remain available. See [model controls](docs/company.md#模型调用控制).
 
 Optional company settings `publishDailyLimit` and `publishApproval.confirmFirst` share limits across projects using the same channel, count Beijing calendar days, and require owner confirmation for the first successful posts. Defaults preserve existing behavior. See [publication guards](docs/company.md#发布护栏) and [the restricted cross-host Xiaohongshu channel](docs/xiaohongshu.md#跨机发布窄通道).
+
+Company content quality includes published and manual posts plus current drafts, deterministic text cards, and a CEO checklist; see [content quality](docs/company.md#内容质量).

@@ -182,3 +182,5 @@ MCP 客户端的启动程序填 `node`，参数为本机引擎绝对路径 `bin/
 公司 fork 的模型额度、在岗名单和唤醒方式只从私有 company.json 读取；用既有公司规则升级流程加载。排队不等于失败，superseded 不等于完成或发布；具体配置及负责人取代关闭命令见 docs/company.md 的“模型调用控制”。
 
 公司共用账号发布可配置 `publishDailyLimit` 与 `publishApproval.confirmFirst`：固定程序按渠道预留日额度，需确认时沿既有卡片问本人，模型不得代答或绕过。跨机发布先验证真实模型沙箱的 sudo、网络和私钥隔离，只用 lookup 验链路；启用与真实发布由负责人授权。回滚先撤销通道并保留待决及回执。见[发布护栏](../../docs/company.md#发布护栏)。
+
+公司内容质量：将 examples/recipes/company/content-guide.md 与 xiaohongshu.md 部署到共享知识库；运营查全部已发（含 manual）和备稿，统一 manage.ts cards 配图，CEO 按第五节逐条审核，旧备稿下次审稿同样执行。升级规则和 handbook 后以实际员工沙箱验图；不手动派模型、不用发布或测试消息验收。见[内容质量](../../docs/company.md#内容质量)。

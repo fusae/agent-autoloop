@@ -118,3 +118,5 @@ agent-autoloop uninstall
 公司可在私有 `company.json` 配置在岗岗位、关闭巡检、仅按事件唤醒 CEO 及每日模型次数上限；默认保持旧行为，见[模型调用控制](docs/company.md#模型调用控制)。达到额度的工作次日继续，负责人消息仍处理并计数。
 
 跨机小红书发布需独立 `company-publisher` 账号、无参数 sudoers、受来源限制的 SSH 强制命令及固定主机指纹；模型实际沙箱的 sudo、旧机网络及私钥读取探测必须失败。私有渠道配置与共用日额度、前五篇确认见[小红书发布](docs/xiaohongshu.md#跨机发布窄通道)。安装保持 connector.enabled=false，不运行真实发布验收。
+
+公司文字配图需另装 Chrome for Testing chrome-headless-shell 与 Noto CJK/Emoji 系统字体，并以员工实际身份、沙箱验收；知识模板部署到 workspace/knowledge，见[文字配图](docs/xiaohongshu.md#内容质量与文字配图)。

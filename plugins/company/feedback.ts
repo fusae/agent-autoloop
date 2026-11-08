@@ -1,3 +1,4 @@
+import { frozenSummary } from "./content.ts";
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { publicationResults, publishDay } from "./publication-policy.ts";
@@ -162,6 +163,7 @@ export async function collectFeedback(
       const product = state.products[business];
       return {
         ...p,
+        ...frozenSummary(frozen.artifacts),
         business,
         samples: samples.map((s, i) => ({
           ...s,
@@ -218,8 +220,9 @@ export async function collectFeedback(
     ];
     for (const p of posts) {
       text.push(
-        `\n## ${p.business} · ${p.samples.at(-1)?.title ?? p.remoteId}`,
+        `\n## ${p.business} · ${p.title ?? p.samples.at(-1)?.title ?? p.remoteId}`,
         `发布：${p.publishedAt}；链接：${p.url}；冻结稿：${p.key}；${p.attribution}`,
+        `正文前100字：${p.excerpt ?? "冻结稿缺失，需读取原稿"}`,
       );
       for (const s of p.samples)
         text.push(

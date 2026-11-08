@@ -1,10 +1,16 @@
 import { readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { resolve, extname } from "node:path";
+import { generateCards } from "./cards-renderer.ts";
 import { createHash } from "node:crypto";
 import { parseXhsDraft, xhsApi } from "./publisher.ts";
 const [action, file, ...args] = process.argv.slice(2);
 try {
-  if (action === "pack") {
+  if (action === "cards") {
+    const [outdir] = args;
+    if (!outdir) throw Error("用法：manage.ts cards 配图.json 输出目录");
+    const outputs = await generateCards(JSON.parse(readFileSync(file, "utf8")), outdir);
+    console.log("文字配图已生成：\n" + outputs.join("\n"));
+  } else if (action === "pack") {
     const [output, ...images] = args;
     const draft = JSON.parse(readFileSync(file, "utf8"));
     const mime: Record<string, string> = {
@@ -64,7 +70,10 @@ try {
           enabled: config.enabled === true,
         }),
       );
-    } else throw Error("用法：login 配置 二维码路径 | status 配置 | bind 配置 | pack 正文JSON 输出JSON 图片...");
+    } else
+      throw Error(
+        "用法：login 配置 二维码路径 | status 配置 | bind 配置 | cards 配图JSON 输出目录 | pack 正文JSON 输出JSON 图片...",
+      );
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : "小红书连接失败");

@@ -1,3 +1,4 @@
+import { draftSummaries } from "./content.ts";
 import { employeeEntries, validateReporting, nextReportTime, reportTime, type EmployeeReport } from "./reporting.ts";
 import {
   automatic,
@@ -495,6 +496,7 @@ export class Operations {
           knowledge: this.executive().knowledge.filter((k) => k.business === b.id),
           staff: p.staff,
           plans: p.plans,
+          contentDrafts: draftSummaries(this.directory, p.plans, tasks),
           signals: p.signals,
           recent,
           limits: { maxActive: p.maxActive },
@@ -1170,7 +1172,11 @@ export class Operations {
                 feedbackText: "knowledge/feedback.md",
               }
             : null,
-          projects: active.map((b) => ({ ...b, ...this.get(b.id, now) })),
+          projects: active.map((b) => ({
+            ...b,
+            ...this.get(b.id, now),
+            contentDrafts: draftSummaries(this.directory, this.get(b.id, now).plans, tasks),
+          })),
           issues: c.issues.filter((i) => i.state !== "answered"),
           knowledge: c.knowledge,
           sources: sourceSnapshots(this.directory),

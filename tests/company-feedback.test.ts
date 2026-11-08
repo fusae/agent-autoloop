@@ -298,6 +298,9 @@ test("daily data survives restart, pauses on access restrictions and never conve
     assert.equal(data.followers[0].count, 86);
     assert.equal(data.posts[0].samples[0].likes, 2);
     assert.equal(data.posts[0].reads.length, 0);
+    assert.equal(data.posts[0].title, "标题");
+    assert.equal(data.posts[0].excerpt, "正文");
+    assert.match(readFileSync(join(f.dir, "workspace/knowledge/feedback.md"), "utf8"), /正文前100字：正文/);
     const values = Object.fromEntries(
       [4, 5, 6, 8, 9, 10].map((d) => [`2026-11-${String(d).padStart(2, "0")}`, d < 7 ? 0 : 2]),
     );
