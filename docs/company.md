@@ -1,5 +1,7 @@
 # 公司协作层
 
+董事长确认的定位、在岗安排与分批改造计划见 [Agent Company 改造总方案](roadmap.md)。
+
 公司层通过原有 Agent 插件入口加载，内核和现有 HTTP 协议不变。`plugins/company/agent.ts` 启动固定程序 `run.ts`，读取当前轮次的资料文件；业务模型使用现成的 Codex / Claude 插件。
 
 ```mermaid
