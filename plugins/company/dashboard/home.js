@@ -38,6 +38,7 @@ function homeSummary(d, asks, growth, stock) {
   const today = homeDay(d.at);
   const working = growth.filter(({ s }) => s.workday?.date === today).length;
   const published = (d.home?.publications ?? []).length;
+  const manual = (d.home?.feedback?.manual ?? []).length;
   const ready = Object.values(stock).reduce((n, s) => n + (s?.ready ?? 0), 0);
   const first = !growth.length
     ? "还没有在岗的运营。"
@@ -45,7 +46,8 @@ function homeSummary(d, asks, growth, stock) {
       ? `今天 ${working} 位运营上了班。`
       : `运营今天还没上班，每天 ${growth[0].p.workday?.after ?? "09:00"} 开工。`;
   const work = [
-    published ? `已发 ${published} 篇帖子` : "还没有发出帖子",
+    (published || manual ? `已发 ${published} 篇帖子` : "还没有发出帖子") +
+      (manual ? `（另有你自己发的 ${manual} 篇）` : ""),
     ready ? `手上 ${ready} 篇稿子待发` : "暂无备好的稿子",
   ];
   const you = asks.length ? `${asks.length} 件事等你拍板。` : "没有要你处理的事。";
@@ -128,6 +130,7 @@ function homePosts(d) {
   const fb = d.home?.feedback;
   const results = d.home?.publications ?? [];
   const posts = fb?.posts ?? [];
+  const manual = fb?.manual ?? [];
   const followers = fb?.followers?.at?.(-1);
   const compare = (m, label) => {
     if (!m || m.baseline == null) return `<div class="compare"><span>${label}</span><b>暂无数据</b></div>`;
@@ -147,7 +150,7 @@ function homePosts(d) {
         results.find((r) => r.publishedAt && Date.parse(r.publishedAt) === Date.parse(post.publishedAt));
       const title = esc(last.title ?? "（标题未读到）");
       return `<li class="post">
-        <div class="post-title"><h3>${proof?.url ? `<a href="${esc(proof.url)}" target="_blank" rel="noopener noreferrer">${title}</a>` : title}</h3>
+        <div class="post-title"><h3>${proof?.url ? `<a href="${esc(proof.url)}" target="_blank" rel="noopener noreferrer">${title}</a>` : title} <span class="muted">系统发布</span></h3>
           <span>${esc(homeBusiness(d, post.business))}，${homeShortDate(post.publishedAt)} ${homeClock(post.publishedAt)} 发布</span></div>
         <dl class="post-stats">
           <div><dt>阅读</dt><dd>${reads == null ? '<em title="在飞书告诉 CEO 就会记上">待你告知</em>' : homeNum(reads)}</dd></div>
@@ -174,6 +177,7 @@ function homePosts(d) {
     <div class="block-head"><h2 id="posts-title">推广效果</h2>
       ${followers ? `<p class="followers">账号粉丝 <b>${homeNum(followers.count)}</b>${followers.change ? `<small class="${followers.change > 0 ? "up" : "down"}">${followers.change > 0 ? "+" : ""}${followers.change}</small>` : ""}</p>` : ""}</div>
     ${cards.length ? `<ul class="posts">${cards.join("")}</ul>` : `<p class="empty-line">还没有发出去的帖子。${fb?.status ? esc(fb.status) + "。" : ""}</p>`}
+    ${manual.length ? `<h3 class="sub-head">你自己发的</h3><ul class="queue">${manual.map((p) => `<li><span class="queue-app">首次看到 ${homeShortDate(p.firstSeen)}</span><span class="queue-title"><a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(p.title)}</a></span><span class="queue-state">点赞 ${homeNum(p.samples?.at?.(-1)?.likes)}</span></li>`).join("")}</ul>` : ""}
     ${waiting.length ? `<h3 class="sub-head">还没发的稿子</h3><ul class="queue">${waiting.map(({ p, a }) => `<li><span class="queue-app">${esc(homeBusiness(d, p.business))}</span><span class="queue-title">${esc(homeTitle(a.title))}</span><span class="queue-state ${waitLabel(a) === "等你确认发布" ? "mark" : ""}">${esc(waitLabel(a))}</span></li>`).join("")}</ul>` : ""}
     ${fb?.status ? `<p class="block-note">互动数据${esc(fb.status)}。</p>` : ""}
   </section>`;

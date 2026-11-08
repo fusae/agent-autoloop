@@ -14,7 +14,14 @@ export type Note = {
   comments: number;
 };
 export type Observation =
-  | { state: "ready"; account: string; followers: number; notes: Note[] }
+  | {
+      state: "ready";
+      account: string;
+      followers: number;
+      notes: Note[];
+      // Older daily snapshots and readers omit list-only observations.
+      others?: { id: string; title: string; likes: number | null }[];
+    }
   | { state: "unknown" | "blocked"; reason: string };
 function readFailure(error: unknown, reason: string): Observation {
   // A stalled browser or broken transport is unknown, not evidence of an account restriction.
@@ -71,6 +78,22 @@ export async function readXhs(
     if ((status?.user_id || profile?.userBasicInfo?.userId) !== config.accountId || !Array.isArray(profile.feeds))
       return { state: "blocked", reason: "登录失效、账号不符或平台限制，请本人处理" };
     const followers = count(profile.interactions?.find((v: any) => v.type === "fans")?.count);
+    const requested = new Set(request.notes);
+    const others: NonNullable<Extract<Observation, { state: "ready" }>["others"]> = [];
+    for (const f of profile.feeds) {
+      if (!/^[a-f0-9]{24}$/.test(f?.id) || requested.has(f.id)) continue;
+      let likes: number | null = null;
+      try {
+        likes = count(f.noteCard?.interactInfo?.likedCount);
+      } catch {
+        // List cards may omit counts or abbreviate them; neither means zero.
+      }
+      others.push({
+        id: f.id,
+        title: typeof f.noteCard?.displayTitle === "string" ? f.noteCard.displayTitle : "",
+        likes,
+      });
+    }
     const tokens: Record<string, string> = existsSync(tokensFile) ? JSON.parse(readFileSync(tokensFile, "utf8")) : {};
     for (const f of profile.feeds)
       if (/^[a-f0-9]{24}$/.test(f.id) && typeof f.xsecToken === "string") tokens[f.id] = f.xsecToken;
@@ -111,7 +134,7 @@ export async function readXhs(
         comments: count(n.interactInfo?.commentCount),
       });
     }
-    return { state: "ready", account: config.accountId, followers, notes };
+    return { state: "ready", account: config.accountId, followers, notes, others };
   } finally {
     rmSync(lock, { recursive: true, force: true });
   }

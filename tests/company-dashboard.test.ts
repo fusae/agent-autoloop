@@ -1,10 +1,11 @@
 // Failure modes: a web page exposes owner keys, another origin can approve a task, offline data looks live,
-// or an artifact path escapes the workspace. The fake hub records only explicit browser actions.
+// an artifact path escapes the workspace, or manual posts inflate staff totals or inject markup. The fake hub records only explicit browser actions.
 import assert from "node:assert/strict";
 import { createServer, get } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
+import { readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 import { test } from "node:test";
 import { Company } from "../plugins/company/company.ts";
 import { initialize } from "../plugins/company/setup.ts";
@@ -245,4 +246,59 @@ test("a configured HTTPS origin supports a protected proxy without weakening CSR
     await dashboard.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("home distinguishes manual posts, escapes their fields and accepts old feedback", () => {
+  const home = runInNewContext(
+    readFileSync(new URL("../plugins/company/dashboard/home.js", import.meta.url), "utf8") +
+      ";({homeSummary, homePosts, homeGoal})",
+    {
+      esc: (s: unknown) =>
+        String(s ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;"),
+      planNames: {},
+    },
+  );
+  const d: any = {
+    at: "2026-11-08T03:00:00Z",
+    home: {
+      publications: [{}],
+      feedback: {
+        posts: [
+          {
+            publishedAt: "2026-11-07T02:00:00Z",
+            samples: [{ title: "系统稿", likes: 2 }],
+          },
+        ],
+      },
+    },
+  };
+  assert.doesNotMatch(home.homePosts(d), /你自己发的/);
+  assert.doesNotMatch(home.homeSummary(d, [], [], {}), /另有/);
+  d.home.feedback.manual = [
+    {
+      title: '<img src=x onerror="bad()">',
+      url: 'https://www.xiaohongshu.com/explore/test?x="y"',
+      firstSeen: d.at,
+      samples: [{ likes: 3 }, { likes: null }],
+    },
+  ];
+  const html = home.homePosts(d);
+  assert.match(html, /系统发布/);
+  assert.match(html, /<h3 class="sub-head">你自己发的<\/h3><ul class="queue">/);
+  assert.match(html, /首次看到 11\/8/);
+  assert.match(html, /点赞 —/);
+  assert.match(html, /&lt;img src=x onerror=&quot;bad\(\)&quot;&gt;/);
+  assert.match(
+    html,
+    /href="https:\/\/www.xiaohongshu.com\/explore\/test\?x=&quot;y&quot;" target="_blank" rel="noopener noreferrer"/,
+  );
+  assert.doesNotMatch(html, /<img/);
+  assert.match(home.homeSummary(d, [], [], {}), /已发 1 篇帖子（另有你自己发的 1 篇）/);
+  assert.match(home.homeGoal({ target: 4, published: 1, ready: 2 }), /已发 1，备稿 2，目标 4 篇/);
+  d.home.publications = [];
+  assert.match(home.homeSummary(d, [], [], {}), /已发 0 篇帖子（另有你自己发的 1 篇）/);
 });

@@ -1,5 +1,5 @@
 // Failure modes: program verification invokes QA or republishes; unknown results loop forever;
-// daily collectors duplicate reads, ignore access blocks, invent zeros, or misattribute manual data.
+// daily collectors duplicate reads, ignore access blocks, invent zeros, fetch manual details, or mix ownership.
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { test } from "node:test";
@@ -32,6 +32,7 @@ const observation: Observation = {
   state: "ready",
   account,
   followers: 86,
+  others: [],
   notes: [
     {
       id,
@@ -432,6 +433,121 @@ test("browser HTTP 500 is unknown and HTTP 401 stops collection without further 
     assert.equal(calls, 2);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    f.clean();
+  }
+});
+
+test("manual posts stay separate, deduplicate Beijing days and disappear when a system receipt arrives", async () => {
+  const f = fixture();
+  const manualId = "d".repeat(24);
+  const legacy = { ...observation };
+  delete legacy.others;
+  const daily = (day: string, likes: number | null) => ({
+    day,
+    at: `${day}T02:00:00.000Z`,
+    observation: {
+      ...observation,
+      others: [
+        { id, title: "系统发布", likes: 9 },
+        { id: manualId, title: "自己写的", likes },
+        { id: manualId, title: "自己写的", likes },
+      ],
+    },
+  });
+  try {
+    writeFileSync(
+      join(f.dir, "feedback-state.json"),
+      JSON.stringify({
+        days: [
+          { day: "2026-11-07", at: "2026-11-07T02:00:00.000Z", observation: legacy },
+          daily("2026-11-08", null),
+          daily("2026-11-08", 99),
+          daily("2026-11-09", 3),
+          daily("2026-11-10", 5),
+        ],
+        products: {},
+        resume: "",
+      }),
+    );
+    const collect = () =>
+      collectFeedback(f.dir, { manualMetrics: [] } as any, new Date("2026-11-10T03:00:00Z"), () => {
+        throw Error("must reuse daily data");
+      });
+    await collect();
+    await collect();
+    const data = JSON.parse(readFileSync(join(f.dir, "workspace/knowledge/feedback.json"), "utf8"));
+    assert.equal(data.posts.length, 1);
+    assert.deepEqual(data.manual, [
+      {
+        id: manualId,
+        title: "自己写的",
+        url: `https://www.xiaohongshu.com/explore/${manualId}`,
+        firstSeen: "2026-11-08T02:00:00.000Z",
+        samples: [
+          { at: "2026-11-08T02:00:00.000Z", likes: null },
+          { at: "2026-11-09T02:00:00.000Z", likes: 3 },
+          { at: "2026-11-10T02:00:00.000Z", likes: 5 },
+        ],
+      },
+    ]);
+    const md = readFileSync(join(f.dir, "workspace/knowledge/feedback.md"), "utf8");
+    assert.match(md, /董事长自己发的帖子/);
+    assert.match(md, /赞待完整数据/);
+    assert.match(md, /赞5；变化2/);
+    writeFileSync(
+      join(f.dir, "publications", "e".repeat(32) + "-result.json"),
+      JSON.stringify({
+        ...proof,
+        key: "e".repeat(32),
+        remoteId: manualId,
+        url: `https://www.xiaohongshu.com/explore/${manualId}`,
+      }),
+    );
+    await collect();
+    assert.deepEqual(JSON.parse(readFileSync(join(f.dir, "workspace/knowledge/feedback.json"), "utf8")).manual, []);
+  } finally {
+    f.clean();
+  }
+});
+
+test("reader extracts other list cards without detail reads and keeps unknown likes null", async () => {
+  const f = fixture();
+  const likes = ["12", 0, "0", "1万", undefined, -1, 1.5, "", "2.0", Number.MAX_SAFE_INTEGER + 1];
+  const ids = likes.map((_, i) => i.toString(16).padStart(24, "0"));
+  const paths: string[] = [];
+  try {
+    const result = await readXhs(
+      { endpoint: "http://127.0.0.1:18060", token: "fake", accountId: account },
+      join(f.dir, "remote"),
+      { action: "read", notes: [] },
+      async (path) => {
+        paths.push(path);
+        if (path.endsWith("status")) return { is_logged_in: true, user_id: account };
+        assert.equal(path, "/api/v1/user/me");
+        return {
+          data: {
+            userBasicInfo: {},
+            interactions: [{ type: "fans", count: "86" }],
+            feeds: [
+              ...likes.map((value, i) => ({
+                id: ids[i],
+                noteCard: { displayTitle: `标题${i}`, interactInfo: { likedCount: value } },
+              })),
+              { id: "bad-id", noteCard: { displayTitle: "忽略无效编号" } },
+            ],
+          },
+        };
+      },
+    );
+    assert.equal(result.state, "ready");
+    if (result.state !== "ready") return;
+    assert.deepEqual(
+      result.others,
+      ids.map((id, i) => ({ id, title: `标题${i}`, likes: [12, 0, 0][i] ?? null })),
+    );
+    assert.deepEqual(result.notes, []);
+    assert.deepEqual(paths, ["/api/v1/login/status", "/api/v1/user/me"]);
+  } finally {
     f.clean();
   }
 });

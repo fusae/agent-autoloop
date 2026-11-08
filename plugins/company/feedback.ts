@@ -19,6 +19,13 @@ export type ManualMetric = {
   text: string;
 };
 type Daily = { day: string; at: string; observation: Observation };
+type ManualPost = {
+  id: string;
+  title: string;
+  url: string;
+  firstSeen: string;
+  samples: { at: string; likes: number | null }[];
+};
 const shiftedDay = (day: string, offset: number) =>
   new Date(Date.parse(day + "T00:00:00Z") + offset * 86400000).toISOString().slice(0, 10);
 export function compareDays(publishedAt: string, values: Record<string, number>, now: Date) {
@@ -121,6 +128,29 @@ export async function collectFeedback(
     }
     save(stateFile, state);
     const days: Daily[] = state.days;
+    const systemIds = new Set(publications.map((p) => p.remoteId));
+    const manualById = new Map<string, ManualPost>();
+    for (const d of days.slice().sort((a, b) => a.at.localeCompare(b.at))) {
+      if (d.observation.state !== "ready") continue;
+      for (const note of d.observation.others ?? []) {
+        if (systemIds.has(note.id)) continue;
+        let post = manualById.get(note.id);
+        if (!post) {
+          post = {
+            id: note.id,
+            title: note.title,
+            url: `https://www.xiaohongshu.com/explore/${note.id}`,
+            firstSeen: d.at,
+            samples: [],
+          };
+          manualById.set(note.id, post);
+        }
+        post.title = note.title;
+        if (!post.samples.some((s) => publishDay(new Date(s.at)) === d.day))
+          post.samples.push({ at: d.at, likes: note.likes });
+      }
+    }
+    const manual = [...manualById.values()];
     const posts = publications.map((p) => {
       const frozen = load(join(directory, "publications", p.key + ".json"), {}),
         business = frozen.business;
@@ -176,6 +206,7 @@ export async function collectFeedback(
       days,
       followers,
       posts,
+      manual,
       products: state.products,
     });
     const fmt = (v: unknown) => (v === null || v === undefined ? "待完整数据" : String(v));
@@ -206,6 +237,17 @@ export async function collectFeedback(
             `${label}：前${c.before.join("、")}合计${fmt(c.baseline)}；后${c.after.join("、")}合计${fmt(c.result)}；变化${fmt(c.change)}；百分比${c.percent === null ? "不计算" : c.percent.toFixed(1) + "%"}`,
           );
       if (p.product) text.push(p.product.downloadNote);
+    }
+    if (manual.length) {
+      text.push("\n## 董事长自己发的帖子", "仅供运营参考内容效果，不计入员工周目标或备稿统计。");
+      for (const p of manual) {
+        text.push(`\n### ${p.title}`, `首次看到：${p.firstSeen}；链接：${p.url}`);
+        p.samples.forEach((s, i) => {
+          const previous = p.samples[i - 1]?.likes;
+          const change = s.likes === null || previous == null ? null : s.likes - previous;
+          text.push(`${s.at}：赞${fmt(s.likes)}；变化${i ? fmt(change) : "首次基线"}`);
+        });
+      }
     }
     writeFileSync(join(folder, "feedback.md"), text.join("\n") + "\n", { mode: 0o600 });
   } finally {

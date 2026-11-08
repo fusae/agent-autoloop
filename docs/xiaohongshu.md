@@ -69,4 +69,4 @@ node plugins/xiaohongshu/manage.ts pack post.json tasks/原任务/xiaohongshu.js
 
 输入只能是 `{"action":"read","notes":["24位笔记id"]}`，禁止额外字段或publish。服务只调用只读登录状态（用于缺少账号id的旧版profile）、`/api/v1/user/me` 和 `/api/v1/feeds/detail`；详情固定 `load_all_comments:false`，不翻评论、不搜索。账号必须匹配绑定id，笔记必须属于本人；列表token私有缓存用于读取旧笔记，不向模型暴露。与原发布程序共用同账号锁，防止浏览器并发。响应仅含核验文字、图片数、时间和互动指标，没有cookies、token或任意文件读取。
 
-先以宿主身份实读首篇和本人资料，再开启 `publishVerification:"program"` 与 `feedback.json.enabled:true`；员工模型沙箱须不能提权执行通道、读取私钥或直连旧机。每天09:35一次采集，阻塞暂停与恢复规则见[效果数据回流](company.md#效果数据回流)。发布核验未知时15分钟、再1小时有限复查，不调用QA模型。部署验证只走read，不走真实publish，不发送测试飞书消息。
+先以宿主身份实读首篇和本人资料，再开启 `publishVerification:"program"` 与 `feedback.json.enabled:true`；员工模型沙箱须不能提权执行通道、读取私钥或直连旧机。成功响应可新增 `others:[{id,title,likes}]`，包含本人列表中不在本次 `notes` 请求里的卡片；标题取 `noteCard.displayTitle`，点赞取 `noteCard.interactInfo.likedCount`，按既有精确计数规则解析，缺失或缩写记 `null`。这些条目不调用详情、不额外翻页，是否系统发布由公司插件对照所有发布回执判定；旧响应缺少 `others` 仍兼容。每天09:35一次采集，阻塞暂停与恢复规则见[效果数据回流](company.md#效果数据回流)。发布核验未知时15分钟、再1小时有限复查，不调用QA模型。部署验证只走read，不走真实publish，不发送测试飞书消息。
