@@ -286,3 +286,5 @@ CEO 的成果审核、返工和固定发布入口配置见[成果审核与发布
 公司可选 `publishDailyLimit` 与 `publishApproval.confirmFirst`，按共用渠道限制北京时间每日篇数，前若干篇通过负责人卡片确认后才派发；默认保持旧行为。见[发布护栏](docs/company.md#发布护栏)和[跨机小红书通道](docs/xiaohongshu.md#跨机发布窄通道)。
 
 公司内容质量：运营查重包含系统已发、董事长手动帖和当前备稿，统一文字配图，CEO 按内容规范逐项审核；见[内容质量](docs/company.md#内容质量)。
+
+Claude Code 适配器现在强制沙箱，需 CLI 2.1.317 或更新版本；Linux 另需 bubblewrap、socat。OAuth 与 API key 不能共存，`full` 也保留隔离，详见[权限边界](docs/plugins.md#access-实际能做什么)。

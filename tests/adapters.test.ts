@@ -2,6 +2,7 @@
 // a retry starts a new conversation instead of going on, an error or a turn that never finished counts as an answer, a
 // program's warning is taken for its answer, the session isn't picked out, a command line's placeholder isn't filled in,
 // or a background Codex run assumes it inherited an application's browser connection.
+// Claude must not start with conflicting credentials or silently lose its sandbox and secret-path denials.
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -16,6 +17,7 @@ const lookup = join(setup("adapters"), "lookup.sh");
 writeFileSync(lookup, '#!/bin/sh\nprintf "%s\\n" /test/codex\n', { mode: 0o755 });
 process.env.SHELL = lookup;
 findProgram("codex");
+findProgram("claude");
 if (shell === undefined) delete process.env.SHELL;
 else process.env.SHELL = shell;
 type Adapter = import("../worker/agents.ts").Adapter;
@@ -46,7 +48,7 @@ const stubbed = (adapter: Adapter, t: object) => {
   }
 };
 
-test("Claude Code: access, new and going on, model", { skip: !stubbed(claude, {}) }, () => {
+test("Claude Code: access, new and going on, model", () => {
   const argv = stubbed(claude, {})!;
   assert.ok(has(argv, "-p", "做这件事"));
   assert.ok(has(argv, "--session-id", "new-id"));
@@ -60,6 +62,60 @@ test("Claude Code: access, new and going on, model", { skip: !stubbed(claude, {}
   assert.ok(!again.includes("--session-id"));
   assert.ok(has(again, "--model", "m"));
   assert.ok(has(again, "--effort", "high"));
+});
+
+test("Claude Code: sandbox is mandatory, settings cannot widen it, and context is read-only", () => {
+  for (const access of ["read", "edit", "full"] as const) {
+    const argv = claude.command({ ...turn, access });
+    const config = JSON.parse(argv[argv.indexOf("--settings") + 1]);
+    assert.equal(config.sandbox.enabled, true);
+    assert.equal(config.sandbox.failIfUnavailable, true);
+    assert.equal(config.sandbox.allowUnsandboxedCommands, false);
+    assert.deepEqual(config.sandbox.excludedCommands, []);
+    assert.equal(config.sandbox.enableWeakerNestedSandbox, false);
+    assert.equal(config.sandbox.filesystem.disabled, false);
+    assert.ok(config.sandbox.filesystem.denyWrite.includes(turn.folder));
+    assert.ok(config.sandbox.filesystem.denyWrite.includes("/tmp"));
+    assert.equal(config.sandbox.filesystem.denyWrite.includes(turn.cwd), access === "read");
+    assert.equal(config.permissions.blockWritesOutsideWorkingDirectories, true);
+    for (const deny of [
+      "Bash(sudo:*)",
+      "Bash(su:*)",
+      "Bash(ssh:*)",
+      "Bash(scp:*)",
+      "Read(//etc/agent-company/**)",
+      "Read(//var/lib/company-publisher/**)",
+    ]) {
+      assert.ok(config.permissions.deny.includes(deny), deny);
+    }
+    assert.ok(config.sandbox.filesystem.denyRead.includes("/etc/agent-company"));
+    assert.ok(config.sandbox.filesystem.denyRead.includes("/var/lib/company-publisher"));
+    assert.ok(config.sandbox.filesystem.denyRead.includes("/proc"));
+    assert.deepEqual(config.sandbox.credentials.envVars, [{ name: "CLAUDE_CODE_OAUTH_TOKEN", mode: "deny" }]);
+    assert.deepEqual(config.sandbox.network.allowedDomains, []);
+    assert.equal(config.sandbox.network.allowAllUnixSockets, false);
+    assert.ok(has(argv, "--setting-sources", ""));
+    assert.ok(argv.includes("--strict-mcp-config"));
+    assert.ok(has(argv, "--mcp-config", '{"mcpServers":{}}'));
+    assert.equal(config.disableAllHooks, true);
+    assert.ok(has(argv, "--tools", "Bash,Read,Glob,Grep,Edit,Write"));
+  }
+});
+
+test("Claude Code: conflicting authentication refuses command construction without revealing credentials", () => {
+  const before = { oauth: process.env.CLAUDE_CODE_OAUTH_TOKEN, key: process.env.ANTHROPIC_API_KEY };
+  try {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "fake-oauth-for-test";
+    process.env.ANTHROPIC_API_KEY = "fake-api-for-test";
+    assert.throws(() => claude.command(turn), { message: "Claude OAuth 令牌与 ANTHROPIC_API_KEY 不能同时设置" });
+    delete process.env.ANTHROPIC_API_KEY;
+    assert.ok(!claude.command(turn).join(" ").includes("fake-oauth-for-test"));
+  } finally {
+    if (before.oauth === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    else process.env.CLAUDE_CODE_OAUTH_TOKEN = before.oauth;
+    if (before.key === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = before.key;
+  }
 });
 
 test("Claude Code: reading its result", () => {

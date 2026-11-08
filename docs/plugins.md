@@ -103,7 +103,9 @@ Claude 委托 Codex 的完整规则、Skill 和参数调用脚本见[浏览器�
 | 插件 | `read` | `edit` | `full` |
 |---|---|---|---|
 | Codex | `read-only`：能跑 shell，不能写文件，命令默认不能联网 | `workspace-write`：能跑 shell、写工作目录和临时目录，命令默认不能联网 | `danger-full-access`：能写文件、跑 shell、联网，无审批 |
-| Claude Code | `plan`：能读文件和运行只读命令；其他命令取决于自动审批及本机规则 | `acceptEdits`：再允许目录内文件编辑和常见文件操作；任意 shell 或联网仍需放行 | `bypassPermissions`：跳过工具审批，没有额外系统隔离 |
+| Claude Code | `plan`：保留只读模式，禁止模型文件写入 | `acceptEdits`：允许工作目录内编辑 | `bypassPermissions`：跳过工具审批，仍保留同一沙箱边界 |
+
+Claude Code 需 2.1.317 或更新版本，Linux 需 bubblewrap、socat。每轮通过内联 `--settings` 强制沙箱，启动不可用即失败，禁用无沙箱回退、弱隔离和外部 MCP/hooks；不加载用户、项目和本地设置。文件工具禁止工作目录外写入，shell 另禁临时目录和轮次资料目录写入；只读轮次也禁止工作目录写入。禁止 sudo、su、ssh、scp，隐藏公司环境文件、发布账号及其他账号 SSH 目录和进程环境。OAuth 仅从 worker 环境传给 Claude 或使用 Claude 的 company 模型包装；与 API key 同时设置则拒绝启动，shell 不继承该 OAuth 值。内联设置不含凭据，也不会产生可被模型改写的 settings 文件。管理策略仍有更高优先级，部署必须以真实身份验证沙箱。
 
 Codex 的三个档位已用插件命令实跑；Claude Code 依据[官方权限说明](https://code.claude.com/docs/en/permission-modes)整理，没有调用模型实跑。Codex 的命令网络限制与托管搜索、MCP 不是同一个边界，详见[官方沙箱说明](https://learn.chatgpt.com/docs/agent-approvals-security)。用户的 CLI 配置可能改变上述能力；`read` 也不代表读不到本机密钥。
 

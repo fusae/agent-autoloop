@@ -3,9 +3,65 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { findProgram, tail, type Adapter } from "../../worker/agents.ts";
+import { findProgram, tail, type Adapter, type Turn } from "../../worker/agents.ts";
 
 const PERMISSIONS = { read: "plan", edit: "acceptEdits", full: "bypassPermissions" };
+
+function settings(turn: Turn) {
+  const secrets = [
+    "/etc/agent-company",
+    "/var/lib/company-publisher",
+    "/var/lib/company-inbox",
+    "/var/lib/company-reader",
+    "/home/*/.ssh",
+    "/var/lib/*/.ssh",
+    "/root/.ssh",
+    path.join(homedir(), ".ssh"),
+    "/proc",
+    path.join(turn.folder, "entry.json"),
+  ];
+  return JSON.stringify({
+    disableAllHooks: true,
+    autoMemoryEnabled: false,
+    plansDirectory: path.join(turn.cwd, ".claude/plans"),
+    permissions: {
+      blockWritesOutsideWorkingDirectories: true,
+      deny: [
+        "Bash(sudo:*)",
+        "Bash(su:*)",
+        "Bash(ssh:*)",
+        "Bash(scp:*)",
+        ...secrets.flatMap((file) => [`Read(/${file})`, `Read(/${file}/**)`]),
+        `Edit(/${turn.folder}/**)`,
+        ...(turn.access === "read" ? ["Edit"] : []),
+      ],
+    },
+    sandbox: {
+      enabled: true,
+      failIfUnavailable: true,
+      allowUnsandboxedCommands: false,
+      excludedCommands: [],
+      enableWeakerNestedSandbox: false,
+      enableWeakerNetworkIsolation: false,
+      filesystem: {
+        disabled: false,
+        allowWrite: [],
+        denyRead: secrets,
+        // --add-dir exposes the context for reading, never the worker's journal for writing.
+        denyWrite: [
+          turn.folder,
+          "/tmp",
+          "/var/tmp",
+          "/dev/shm",
+          "/run/user",
+          ...(turn.access === "read" ? [turn.cwd] : []),
+        ],
+      },
+      network: { allowedDomains: [], allowUnixSockets: [], allowAllUnixSockets: false, allowLocalBinding: false },
+      credentials: { envVars: [{ name: "CLAUDE_CODE_OAUTH_TOKEN", mode: "deny" }] },
+    },
+  });
+}
 
 /** The newest Claude Code the desktop app ships, for those without a separate install. */
 function inTheApp() {
@@ -19,22 +75,37 @@ function inTheApp() {
 }
 
 export default {
-  command: (turn) => [
-    findProgram("claude", inTheApp),
-    "-p",
-    turn.prompt,
-    ...(turn.resume ? ["--resume", turn.resume] : ["--session-id", turn.session]),
-    "--output-format",
-    "json",
-    ...(turn.model ? ["--model", turn.model] : []),
-    ...(turn.effort ? ["--effort", turn.effort] : []),
-    "--permission-mode",
-    PERMISSIONS[turn.access],
-    "--add-dir",
-    turn.folder,
-    // A worktree moves the conversation away from where a later --resume looks for it.
-    "--disallowedTools=EnterWorktree,ExitWorktree",
-  ],
+  command: (turn) => {
+    if (process.env.CLAUDE_CODE_OAUTH_TOKEN && process.env.ANTHROPIC_API_KEY) {
+      throw new Error("Claude OAuth 令牌与 ANTHROPIC_API_KEY 不能同时设置");
+    }
+    return [
+      findProgram("claude", inTheApp),
+      "-p",
+      turn.prompt,
+      ...(turn.resume ? ["--resume", turn.resume] : ["--session-id", turn.session]),
+      "--output-format",
+      "json",
+      ...(turn.model ? ["--model", turn.model] : []),
+      ...(turn.effort ? ["--effort", turn.effort] : []),
+      "--permission-mode",
+      PERMISSIONS[turn.access],
+      "--add-dir",
+      turn.folder,
+      // Inline settings cannot be replaced by a writable per-turn file; no credentials enter argv.
+      "--settings",
+      settings(turn),
+      "--setting-sources",
+      "",
+      "--strict-mcp-config",
+      "--mcp-config",
+      '{"mcpServers":{}}',
+      "--tools",
+      "Bash,Read,Glob,Grep,Edit,Write",
+      // A worktree moves the conversation away from where a later --resume looks for it.
+      "--disallowedTools=EnterWorktree,ExitWorktree",
+    ];
+  },
   read(stdout, code, stderr) {
     for (const line of stdout.split("\n").reverse()) {
       let result: any;

@@ -120,3 +120,5 @@ agent-autoloop uninstall
 跨机小红书发布需独立 `company-publisher` 账号、无参数 sudoers、受来源限制的 SSH 强制命令及固定主机指纹；模型实际沙箱的 sudo、旧机网络及私钥读取探测必须失败。私有渠道配置与共用日额度、前五篇确认见[小红书发布](docs/xiaohongshu.md#跨机发布窄通道)。安装保持 connector.enabled=false，不运行真实发布验收。
 
 公司文字配图需另装 Chrome for Testing chrome-headless-shell 与 Noto CJK/Emoji 系统字体，并以员工实际身份、沙箱验收；知识模板部署到 workspace/knowledge，见[文字配图](docs/xiaohongshu.md#内容质量与文字配图)。
+
+Claude Code 需 2.1.317 或更新版本；Linux 安装 `bubblewrap`、`socat`。服务 OAuth 仅放在 root:root 0600 的环境文件，通过 systemd `EnvironmentFile` 加载，不与 `ANTHROPIC_API_KEY` 共存。切换公司模型前必须以实际 worker 身份验证 sudo、旧机网络、私钥/环境文件读取及目录外写入均被拒绝，并确认正常认证调用成功；未通过就保持 Codex。详见[权限边界](docs/plugins.md#access-实际能做什么)。

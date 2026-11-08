@@ -280,3 +280,5 @@ Company operators can configure `activeRoles`, `inspections`, `ceoWake`, and `da
 Optional company settings `publishDailyLimit` and `publishApproval.confirmFirst` share limits across projects using the same channel, count Beijing calendar days, and require owner confirmation for the first successful posts. Defaults preserve existing behavior. See [publication guards](docs/company.md#发布护栏) and [the restricted cross-host Xiaohongshu channel](docs/xiaohongshu.md#跨机发布窄通道).
 
 Company content quality includes published and manual posts plus current drafts, deterministic text cards, and a CEO checklist; see [content quality](docs/company.md#内容质量).
+
+The Claude Code adapter requires CLI 2.1.317 or newer and enforces sandboxing in every access mode; Linux also needs bubblewrap and socat. OAuth and API-key credentials cannot coexist. See [access boundaries](docs/plugins.md#access-实际能做什么).

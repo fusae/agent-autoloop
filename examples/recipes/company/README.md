@@ -140,3 +140,5 @@ CEO 默认没有每日管理次数上限；相同待办最多额外复查两次�
 私有 `company.json` 可设置 `activeRoles: ["growth"]`、`inspections: false`、`ceoWake: "events"`、`dailyModelRuns: {"total":20,"ceo":4,"growth":8}`；默认保持旧行为。规则升级后重启生效，详情见[模型调用控制](../../../docs/company.md#模型调用控制)。
 
 共用发布账号时，两个项目的私有 publishing.json 使用同一 channel；company.json 可设置 `"publishDailyLimit":1,"publishApproval":{"confirmFirst":5}`。固定程序负责本人卡片和日额度，未知结果先核实，模型不执行发布命令；缺省兼容。见[发布护栏](../../../docs/company.md#发布护栏)。
+
+CEO 改用 Claude 时保留 `use=company` 包装，只改模型执行器与 model；需要新版 Claude CLI、Linux 沙箱依赖和真实隔离验收，通过前保持 Codex。认证与权限配置见 [安装说明](../../../INSTALL.md) 和 [权限边界](../../../docs/plugins.md#access-实际能做什么)。

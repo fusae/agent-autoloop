@@ -91,7 +91,18 @@ function save(entry: Entry) {
 /** What the agent's environment gets: never the hub's secrets, and nothing of a session the worker itself may be in. */
 function agentEnvironment(entry: Entry) {
   const env: NodeJS.ProcessEnv = {};
+  const agent = entry.job.agent;
+  const claude =
+    agent.use === "claude" ||
+    (agent.use === "company" && agent.command?.[1] === "model" && agent.command[3] === "claude");
+  if (claude && process.env.CLAUDE_CODE_OAUTH_TOKEN && process.env.ANTHROPIC_API_KEY) {
+    throw new Error("Claude OAuth 令牌与 ANTHROPIC_API_KEY 不能同时设置");
+  }
   for (const [name, value] of Object.entries(process.env)) {
+    if (name === "CLAUDE_CODE_OAUTH_TOKEN" && claude) {
+      env[name] = value;
+      continue;
+    }
     if (/^(AGENT_AUTOLOOP_|CLAUDECODE$|CLAUDE_CODE_|CODEX_(?!HOME$))/.test(name)) continue;
     env[name] = value;
   }

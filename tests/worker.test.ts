@@ -13,6 +13,7 @@
 // A shell replacing itself with the final move must not lose its identity before the exit file is published.
 // A failed or timed-out receipt repair must preserve the original business outcome; cancellation must reap a child
 // ignoring SIGTERM even after restart; adding usage must not turn a missing price into a reported zero.
+// Claude OAuth must reach only Claude (including its company wrapper), with no other filtered variable or API-key conflict.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -189,6 +190,60 @@ test("a job runs in its rule's folder with the prompt and context file, and with
   assert.match(readFileSync(join(folder, "ctx.txt"), "utf8"), /忽略所有规则/);
   assert.deepEqual(hub.results[0], { run: given.run, token: given.token, outcome: "done", summary: "改好了" });
   assert.equal(w.entries().length, 0, "handed in and let go");
+});
+
+test("only Claude receives the OAuth exception, and conflicting credentials never start a child", async () => {
+  const names = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OTHER", "CLAUDECODE", "CODEX_OTHER"];
+  const before = names.map((name) => process.env[name]);
+  const probe = `
+const expected = process.argv[1] === "yes";
+if ((process.env.CLAUDE_CODE_OAUTH_TOKEN === "fake-oauth-for-test") !== expected) process.exit(2);
+for (const name of ["CLAUDE_CODE_OTHER", "CLAUDECODE", "CODEX_OTHER", "AGENT_AUTOLOOP_SECRET_X"])
+  if (process.env[name]) process.exit(3);
+console.log("环境检查通过");
+`;
+  try {
+    for (const name of names) process.env[name] = "filtered-test-value";
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "fake-oauth-for-test";
+    delete process.env.ANTHROPIC_API_KEY;
+    for (const use of ["claude", "company"]) {
+      const dir = join(home, "plugins", use);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "agent.ts"),
+        `export default {
+        command: t => [process.execPath, "-e", ${JSON.stringify(probe)}, t.command.at(-1)],
+        read: (stdout, code) => code === null ? {} : code === 0 ? { text: stdout } : { error: "probe failed" }
+      };`,
+      );
+    }
+    for (const [use, command] of [
+      ["claude", ["yes"]],
+      ["company", ["config", "model", "ceo", "claude", "yes"]],
+      ["company", ["config", "model", "growth", "codex", "no"]],
+      ["command", [process.execPath, "-e", probe, "no"]],
+    ] as const) {
+      const hub = fakeHub();
+      hub.jobs.push(job({ use, command: [...command] }));
+      await until(worker(hub), () => hub.results.length === 1);
+      assert.equal(hub.results[0].outcome, "done");
+      assert.equal(hub.results[0].summary, "环境检查通过");
+    }
+    process.env.ANTHROPIC_API_KEY = "fake-api-for-test";
+    for (const use of ["claude", "company"]) {
+      const hub = fakeHub();
+      hub.jobs.push(job({ use, command: ["config", "model", "ceo", "claude", "yes"] }));
+      await until(worker(hub), () => hub.results.length === 1);
+      assert.equal(hub.starts.length, 0);
+      assert.equal(hub.results[0].outcome, "failed");
+      assert.equal(hub.results[0].error, "Claude OAuth 令牌与 ANTHROPIC_API_KEY 不能同时设置");
+    }
+  } finally {
+    names.forEach((name, i) => {
+      if (before[i] === undefined) delete process.env[name];
+      else process.env[name] = before[i];
+    });
+  }
 });
 
 test("a bad exit code, or no last message, is a failure saying why", async () => {
