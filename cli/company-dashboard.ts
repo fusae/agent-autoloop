@@ -231,6 +231,7 @@ export async function startDashboard(directory: string, port = 3361, options: { 
                 .filter((s) => s.role === "growth" && s.onDuty)
                 .map((s) => ({
                   role: s.role,
+                  ...(s.name ? { name: s.name } : {}),
                   onDuty: s.onDuty,
                   workday: s.workday,
                   daily: s.daily,
@@ -382,7 +383,7 @@ export async function startDashboard(directory: string, port = 3361, options: { 
           const frozen = join(directory, "publications", `${draft[1]}.json`);
           if (!existsSync(frozen)) throw new HTTPError(404, "没有找到这份稿件");
           const request = JSON.parse(readFileSync(frozen, "utf8"));
-          const xhs = (request.artifacts ?? []).find((a: any) => /(^|\/)xiaohongshu\.json$/.test(a.path));
+          const xhs = (request.artifacts ?? []).find((a: any) => /(^|\/)(xiaohongshu|rabbitrun)\.json$/.test(a.path));
           const parsed = xhs ? JSON.parse(xhs.content) : null;
           const images: { mime: string; base64: string }[] = Array.isArray(parsed?.images) ? parsed.images : [];
           if (draft[2] !== undefined) {

@@ -51,6 +51,7 @@ export type CompanyConfig = {
   publishVerification?: "qa" | "program";
   publishDailyLimit?: number;
   publishApproval?: { confirmFirst: number; preview?: boolean };
+  publishPolicies?: Record<string, { dailyLimit: number; alwaysConfirm: boolean }>;
 };
 export type Context = {
   events: { id: string | number; source: string; type: string; subject: string; detail: string; hops?: number }[];

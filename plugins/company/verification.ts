@@ -1,3 +1,4 @@
+import { rabbitChannel, rabbitDraft } from "./rabbitrun.ts";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
@@ -54,6 +55,10 @@ const normalize = (s: string) =>
 export function verifyPublication(directory: string, key: string, read = readFeedback) {
   const proof = verifiedPublication(directory, key);
   const frozen = JSON.parse(readFileSync(join(directory, "publications", key + ".json"), "utf8"));
+  if (frozen.business === "rabbitrun" && proof.channel === rabbitChannel && proof.x) {
+    rabbitDraft({ ...frozen, channel: rabbitChannel, action: "lookup" });
+    return { state: "verified" as const, proof, receiptOnly: true };
+  }
   const artifact = frozen.artifacts.filter(
     (a: any) => a.path === "xiaohongshu.json" || a.path.endsWith("/xiaohongshu.json"),
   );

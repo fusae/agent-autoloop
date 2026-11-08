@@ -86,7 +86,7 @@ export async function collectFeedback(
       try {
         daily.observation = read(
           directory,
-          publications.map((p) => p.remoteId),
+          publications.filter((p) => !p.x).map((p) => p.remoteId),
         );
       } catch {
         daily.observation = { state: "unknown", reason: "只读采集未取得完整数据" };
@@ -129,7 +129,7 @@ export async function collectFeedback(
     }
     save(stateFile, state);
     const days: Daily[] = state.days;
-    const systemIds = new Set(publications.map((p) => p.remoteId));
+    const systemIds = new Set(publications.filter((p) => !p.x).map((p) => p.remoteId));
     const manualById = new Map<string, ManualPost>();
     for (const d of days.slice().sort((a, b) => a.at.localeCompare(b.at))) {
       if (d.observation.state !== "ready") continue;
@@ -155,11 +155,13 @@ export async function collectFeedback(
     const posts = publications.map((p) => {
       const frozen = load(join(directory, "publications", p.key + ".json"), {}),
         business = frozen.business;
-      const samples = days.flatMap((d) =>
-        d.observation.state === "ready"
-          ? d.observation.notes.filter((n) => n.id === p.remoteId).map((n) => ({ at: d.at, ...n }))
-          : [],
-      );
+      const samples = p.x
+        ? []
+        : days.flatMap((d) =>
+            d.observation.state === "ready"
+              ? d.observation.notes.filter((n) => n.id === p.remoteId).map((n) => ({ at: d.at, ...n }))
+              : [],
+          );
       const product = state.products[business];
       return {
         ...p,

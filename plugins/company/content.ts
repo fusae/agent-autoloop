@@ -14,7 +14,7 @@ export function frozenSummary(artifacts: { path: string; content: string }[] = [
   title?: string;
   excerpt?: string;
 } {
-  const file = artifacts.find((a) => /(^|\/)xiaohongshu\.json$/.test(a.path));
+  const file = artifacts.find((a) => /(^|\/)(xiaohongshu|rabbitrun)\.json$/.test(a.path));
   if (!file) return {};
   return contentSummary(file.content);
 }
@@ -35,7 +35,7 @@ export function draftSummaries(directory: string, plans: Plan[], tasks: Task[]) 
       const base = { plan: p.id, task: p.task, status: p.status, title: p.title, excerpt: "", files };
       // Read only registered artifacts inside the workspace, never follow an employee symlink outside it.
       for (const file of [...files].sort(
-        (a, b) => Number(b.endsWith("xiaohongshu.json")) - Number(a.endsWith("xiaohongshu.json")),
+        (a, b) => Number(/(xiaohongshu|rabbitrun)\.json$/.test(b)) - Number(/(xiaohongshu|rabbitrun)\.json$/.test(a)),
       )) {
         if (!file.endsWith(".json")) continue;
         try {

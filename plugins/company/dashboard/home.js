@@ -62,7 +62,7 @@ function homeAskFields(text) {
     .exec(t)?.[1]
     ?.trim();
   return {
-    app: pick("APP"),
+    app: pick("业务") ?? pick("APP"),
     title: pick("标题"),
     body,
     images: pick("图片数"),
@@ -81,7 +81,7 @@ function homeAsk(d, c) {
   const f = homeAskFields(c.text);
   const body =
     f.title || f.app
-      ? `<dl class="ask-fields">${f.app ? `<div><dt>APP</dt><dd>${esc(f.app)}</dd></div>` : ""}${f.title ? `<div><dt>标题</dt><dd class="ask-headline">${esc(f.title)}</dd></div>` : ""}${f.body ? `<div><dt>正文开头</dt><dd>${esc(homeClip(f.body))}</dd></div>` : ""}${f.images ? `<div><dt>配图</dt><dd>${esc(f.images)} 张</dd></div>` : ""}</dl>${f.key ? `<p class="ask-more">${draftButton(f.key)}</p>` : ""}`
+      ? `<dl class="ask-fields">${f.app ? `<div><dt>业务</dt><dd>${esc(f.app)}</dd></div>` : ""}${f.title ? `<div><dt>标题</dt><dd class="ask-headline">${esc(f.title)}</dd></div>` : ""}${f.body ? `<div><dt>正文开头</dt><dd>${esc(homeClip(f.body))}</dd></div>` : ""}${f.images ? `<div><dt>配图</dt><dd>${esc(f.images)} 张</dd></div>` : ""}</dl>${f.key ? `<p class="ask-more">${draftButton(f.key)}</p>` : ""}`
       : `<p class="ask-text">${esc(c.text)}</p>`;
   return `<article class="ask">
     <h3>${esc(c.title)}</h3>
@@ -147,7 +147,7 @@ function homeStaff(d, growth, stock) {
     const focus = s.daily?.date === today ? s.daily.focus : s.nextAction;
     const blocked = /受阻/.test(s.workStatus ?? "");
     return `<li class="person">
-      <div class="person-name"><strong>运营</strong><span>${esc(homeBusiness(d, p.business))}</span></div>
+      <div class="person-name"><strong>${esc(s.name ?? "运营")}</strong><span>${esc(homeBusiness(d, p.business))}</span></div>
       <div class="person-now"><span class="state ${blocked ? "bad" : worked ? "on" : ""}">${esc(s.workStatus ?? "")}${worked ? "，今天已上班" : ""}</span>
         <p>${esc(focus ?? "今天还没有安排")}</p>
         ${s.nextWorkdayAt ? `<small>下次上班 ${homeShortDate(s.nextWorkdayAt)} ${homeClock(s.nextWorkdayAt)}</small>` : ""}</div>
@@ -178,7 +178,7 @@ function homePosts(d) {
     const sign = m.change > 0 ? "+" : "";
     return `<div class="compare"><span>${label}</span><b>${homeNum(m.baseline)} → ${homeNum(m.result)}</b><small class="${m.change > 0 ? "up" : m.change < 0 ? "down" : ""}">${sign}${homeNum(m.change)}${m.percent != null ? `（${sign}${Math.round(m.percent)}%）` : ""}</small></div>`;
   };
-  const cards = posts
+  const cards = posts.filter((post) => !results.find((r) => r.key === (post.key ?? post.publication))?.x)
     .slice()
     .sort((a, b) => String(b.publishedAt).localeCompare(String(a.publishedAt)))
     .map((post) => {
@@ -201,6 +201,11 @@ function homePosts(d) {
         ${last.at ? `<small class="post-note">互动数 ${homeShortDate(last.at)} ${homeClock(last.at)} 读取。前后对比只看时间先后，不代表一定是这篇带来的。</small>` : ""}
       </li>`;
     });
+  for (const proof of results.filter((r) => r.x)) {
+    const x = proof.x;
+    const label = x.state === "published" ? "X 已发" : x.state === "failed" ? "X 发布失败，需要在 Mac 上核对" : x.state === "claimed" ? "X 已领取，待核对结果" : "X 待发，需要在 Mac 上执行";
+    cards.push(`<li class="post"><div class="post-title"><h3>rabbitrun 币圈内容</h3><span>${homeShortDate(proof.publishedAt)} ${homeClock(proof.publishedAt)}</span> ${draftButton(proof.key, "看全文")}</div><p><a href="${esc(proof.url)}" target="_blank" rel="noopener noreferrer">币安广场</a> · ${x.state === "published" ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">X</a>` : esc(label)}</p>${x.state !== "published" ? '<p class="post-note">Mac 触发命令：rabbitrun-x</p>' : ""}<p class="post-note">只记录发布结果，暂不采集互动数据。</p></li>`);
+  }
   const waiting = (d.home?.operations ?? d.operations ?? []).flatMap((p) =>
     (p.plans ?? [])
       .filter((a) => a.owner === "growth" && ["publishing", "delivered", "working", "planned"].includes(a.status))
@@ -234,7 +239,7 @@ function homeReports(d, growth) {
       const r = (s.reports ?? []).find((r) => r.date === today);
       const entry = r?.entries?.at?.(-1)?.report;
       if (!entry) return "";
-      return `<details class="staff-report"><summary>运营 · ${esc(homeBusiness(d, p.business))} 的今日日报</summary>
+      return `<details class="staff-report"><summary>${esc(s.name ?? "运营")} · ${esc(homeBusiness(d, p.business))} 的今日日报</summary>
         <dl><div><dt>做了什么</dt><dd>${esc(entry.done)}</dd></div><div><dt>结果</dt><dd>${esc(entry.result)}</dd></div><div><dt>卡点</dt><dd>${esc(entry.blockers)}</dd></div><div><dt>明天</dt><dd>${esc(entry.tomorrow)}</dd></div></dl></details>`;
     })
     .join("");

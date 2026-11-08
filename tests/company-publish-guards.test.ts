@@ -433,3 +433,16 @@ test("a stale publisher cannot bypass newly enabled preview and the card only sh
     assert.equal(buttons.length, 1);
     assert.equal(buttons[0].text.content, "取消");
   }, {}));
+
+test("business permanent approval still asks after five successes without changing other business policy", () =>
+  fixture(
+    ({ dir, approve, proof, publishes }: any) => {
+      mkdirSync(join(dir, "publications"), { recursive: true });
+      for (let i = 0; i < 7; i++) proof(String(i + 1).padStart(32, "0"), "2026-11-06T00:00:00Z");
+      const permanent = approve(0);
+      assert.equal(publishes(permanent).length, 0);
+      assert.ok(permanent.ask.some((a: any) => a.title === "发布确认"));
+      assert.equal(publishes(approve(1)).length, 1);
+    },
+    { publishApproval: { confirmFirst: 5 }, publishPolicies: { jizhu: { dailyLimit: 1, alwaysConfirm: true } } },
+  ));

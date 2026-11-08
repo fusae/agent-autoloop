@@ -1,3 +1,5 @@
+import { publicationResults } from "./publication-policy.ts";
+import { xStatus } from "./rabbitrun.ts";
 import { collectFeedback } from "./feedback.ts";
 import { ModelBudget } from "./model-budget.ts";
 import { workflows } from "./company.ts";
@@ -85,6 +87,15 @@ try {
       }
     } finally {
       budget.close();
+    }
+  }
+  if (existsSync(hubFile)) {
+    const cfg = JSON.parse(readFileSync(hubFile, "utf8"));
+    for (const proof of publicationResults(dirname(configFile)).filter((p) => p.x)) {
+      await hubClient(cfg.url, cfg.source.key).tell({
+        key: `rabbitrun-x-${proof.key}-${proof.x!.state}-${proof.x!.at}`,
+        text: `rabbitrun 发布记录\n币安广场：${proof.url}\n${xStatus(proof.x!)}\nMac 触发命令：rabbitrun-x`,
+      });
     }
   }
   await collectFeedback(

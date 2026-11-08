@@ -13,6 +13,7 @@ import {
 } from "./workday.ts";
 import { verifiedPublication } from "./publication.ts";
 import {
+  businessPublishPolicy,
   previewEnabled,
   previewDelivery,
   publicationTeaser,
@@ -75,6 +76,7 @@ function mergeFollowups(s: Employee) {
   s.followups = kept;
 }
 export type Employee = {
+  name?: string;
   reports?: EmployeeReport[];
   weeklyGoal?: WeeklyGoal;
   pendingGoal?: WeeklyGoal & { confirmation: string };
@@ -289,6 +291,7 @@ export class Operations {
     if (!roles.includes(role as Exclude<Role, "ceo">)) throw new Error("员工不存在");
     const p = this.get(id, now),
       s = p.staff.find((s) => s.role === role)!;
+    if (data.name !== undefined) s.name = words(data.name, 60);
     if (data.duty !== undefined) s.duty = words(data.duty, 500);
     if (data.checks !== undefined) {
       if (!Array.isArray(data.checks) || !data.checks.length || data.checks.length > 6)
@@ -1516,7 +1519,9 @@ export class Operations {
     c.runs.push({ task: id, at: now.toISOString() });
   }
   private admitPublication(project: Project, plan: Plan, businessName: string, receipt: Receipt, now: Date): boolean {
-    if (this.config.publishDailyLimit === undefined && this.config.publishApproval === undefined) return true;
+    const policy = businessPublishPolicy(this.config, project.business);
+    if (policy.publishDailyLimit === undefined && policy.publishApproval === undefined && !policy.alwaysConfirm)
+      return true;
     const channel = publicationChannel(this.directory, project.business);
     if (!channel) return true;
     const results = publicationResults(this.directory);
@@ -1533,7 +1538,7 @@ export class Operations {
     if (approval?.state === "deferred" && Date.parse(approval.nextAt!) > now.getTime()) return false;
     if (
       approval?.state !== "approved" &&
-      (approval || usage.successes < (this.config.publishApproval?.confirmFirst ?? 0))
+      (approval || policy.alwaysConfirm || usage.successes < (policy.publishApproval?.confirmFirst ?? 0))
     ) {
       if (!approval || approval.state === "deferred") {
         const round = (approval?.round ?? 0) + 1;
@@ -1553,10 +1558,7 @@ export class Operations {
     const reserved = reservations.some((r) => r.key === plan.publicationKey && !results.some((p) => p.key === r.key))
       ? 1
       : 0;
-    if (
-      this.config.publishDailyLimit !== undefined &&
-      usage.today + usage.pending - reserved >= this.config.publishDailyLimit
-    ) {
+    if (policy.publishDailyLimit !== undefined && usage.today + usage.pending - reserved >= policy.publishDailyLimit) {
       plan.publishWait = {
         reason: usage.pending ? "同渠道有发布尚待核实，保留原稿等待" : "今日渠道发布额度已用完，顺延次日",
         nextAt: nextPublishDay(now),
@@ -1565,9 +1567,9 @@ export class Operations {
       return false;
     }
     delete plan.publishWait;
-    if (this.config.publishDailyLimit !== undefined && !reserved)
+    if (policy.publishDailyLimit !== undefined && !reserved)
       (project.publishReservations ??= []).push({ key: plan.publicationKey!, channel, at: now.toISOString() });
-    if (previewEnabled(this.config, usage.successes) && !approval) {
+    if (!policy.alwaysConfirm && previewEnabled(this.config, usage.successes) && !approval) {
       if (!plan.publishPreview) {
         const publishAt = new Date(now.getTime() + 3600_000).toISOString();
         const about = `publish-preview:${plan.publicationKey}`;
@@ -1813,7 +1815,12 @@ export class Operations {
               a.result = `已取代关闭：${t.reason}`;
             } else if (t?.status === "completed") {
               const published = t.kind === "publish-content" && t.reports.at(-1)?.publication?.key === a.publicationKey;
-              a.status = chief.enabled && !published ? "delivered" : "observing";
+              a.status =
+                published && p.business === "rabbitrun"
+                  ? "closed"
+                  : chief.enabled && !published
+                    ? "delivered"
+                    : "observing";
               a.deliveredAt = now.toISOString();
               a.followUpAt = a.status === "observing" ? after(now, a.followUpDays) : null;
               a.result = t.reason;

@@ -18,6 +18,19 @@ export const publishDay = (date: Date) => new Date(date.getTime() + 8 * 3600_000
 export const nextPublishDay = (date: Date) =>
   new Date(Date.parse(`${publishDay(date)}T00:00:00+08:00`) + 86400_000).toISOString();
 export function validatePublishPolicy(config: Partial<CompanyConfig>) {
+  if (config.publishPolicies !== undefined) {
+    if (!config.publishPolicies || Array.isArray(config.publishPolicies) || typeof config.publishPolicies !== "object")
+      throw Error("业务发布规则无效");
+    for (const [business, policy] of Object.entries(config.publishPolicies))
+      if (
+        !/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/.test(business) ||
+        !policy ||
+        !Number.isSafeInteger(policy.dailyLimit) ||
+        policy.dailyLimit < 0 ||
+        typeof policy.alwaysConfirm !== "boolean"
+      )
+        throw Error("业务发布规则需要每日上限和逐篇确认开关");
+  }
   if (config.publishApproval?.preview !== undefined && typeof config.publishApproval.preview !== "boolean")
     throw Error("发布预告开关不正确");
   if (config.publishVerification !== undefined && !["qa", "program"].includes(config.publishVerification))
@@ -34,6 +47,14 @@ export function validatePublishPolicy(config: Partial<CompanyConfig>) {
       config.publishApproval.confirmFirst < 0)
   )
     throw Error("发布前确认篇数须为非负整数");
+}
+export function businessPublishPolicy(config: Partial<CompanyConfig>, business: string) {
+  const policy = config.publishPolicies?.[business];
+  return {
+    publishDailyLimit: policy?.dailyLimit ?? config.publishDailyLimit,
+    publishApproval: config.publishApproval,
+    alwaysConfirm: policy?.alwaysConfirm === true,
+  };
 }
 export function publicationChannel(directory: string, business: string): string | undefined {
   const path = join(directory, "publishing.json");
@@ -71,13 +92,17 @@ export function publicationUsage(
 export function publicationPreview(directory: string, key: string, business: string): string {
   if (!/^[a-f0-9]{32}$/.test(key)) throw Error("发布记录编号不正确");
   const request = JSON.parse(readFileSync(join(directory, "publications", `${key}.json`), "utf8"));
-  const xhs = request.artifacts.find((a: any) => /(^|\/)xiaohongshu\.json$/.test(a.path));
+  const xhs = request.artifacts.find((a: any) => /(^|\/)(xiaohongshu|rabbitrun)\.json$/.test(a.path));
   const draft = xhs
     ? JSON.parse(xhs.content)
     : { title: "已审核正文", content: request.artifacts.map((a: any) => a.content).join("\n"), images: [] };
   if (typeof draft.title !== "string" || typeof draft.content !== "string" || !Array.isArray(draft.images))
     throw Error("已审核稿件缺少标题、正文或图片");
-  return `APP：${business}\n标题：${draft.title}\n正文：${draft.content}\n图片数：${draft.images.length}\n只发布本次已冻结的审核稿；可补充文字意见。\n发布稿件：${key}`;
+  const platforms =
+    request.business === "rabbitrun"
+      ? "\n平台：X @rabbitrun_eth + 币安广场 rabbitrun_eth；同文双发，标题为正文第一行。每篇均需董事长确认。\nX 待发，需要在 Mac 上执行。"
+      : "";
+  return `${request.business === "rabbitrun" ? "业务" : "APP"}：${business}\n标题：${draft.title}\n正文：${draft.content}\n图片数：${draft.images.length}${platforms}\n只发布本次已冻结的审核稿；可补充文字意见。\n发布稿件：${key}`;
 }
 
 export type PublishPreview = { key: string; about: string; createdAt: string; publishAt: string };
@@ -91,7 +116,9 @@ export function publicationTeaser(directory: string, key: string, business: stri
   const draft = xhs
     ? JSON.parse(xhs.content)
     : { title: "已审核正文", content: request.artifacts.map((a: any) => a.content).join("\n") };
-  return `APP：${business}\n标题：${draft.title}\n正文：${Array.from(draft.content as string)
+  return `${request.business === "rabbitrun" ? "业务" : "APP"}：${business}\n标题：${draft.title}\n正文：${Array.from(
+    draft.content as string,
+  )
     .slice(0, 200)
     .join(
       "",

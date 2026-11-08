@@ -1,10 +1,18 @@
+import { rabbitChannel, rabbitDraft, xReceipt, type XReceipt } from "./rabbitrun.ts";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import type { Task } from "./company.ts";
 
-export type Publication = { key: string; channel: string; remoteId: string; url: string; publishedAt: string };
+export type Publication = {
+  key: string;
+  channel: string;
+  remoteId: string;
+  url: string;
+  publishedAt: string;
+  x?: XReceipt;
+};
 type Request = {
   key: string;
   business: string;
@@ -50,6 +58,7 @@ export function freezePublication(
   const key = digest(
     JSON.stringify([business, plan, task.id, task.assignment, artifacts.map((a) => [a.path, a.sha256])]),
   ).slice(0, 32);
+  if (business === "rabbitrun") rabbitDraft({ key, business, channel: rabbitChannel, action: "lookup", artifacts });
   if (!existsSync(file(directory, key)))
     save(file(directory, key), { key, business, plan, task: task.id, artifacts } satisfies Request);
   return key;
@@ -63,7 +72,14 @@ export function publication(value: unknown): Publication {
   const url = new URL(p.url);
   if (url.protocol !== "https:" || url.username || url.password || !Number.isFinite(Date.parse(p.publishedAt)))
     throw Error("发布链接或时间无效");
-  return { key: p.key, channel: p.channel, remoteId: p.remoteId, url: p.url, publishedAt: p.publishedAt };
+  return {
+    key: p.key,
+    channel: p.channel,
+    remoteId: p.remoteId,
+    url: p.url,
+    publishedAt: p.publishedAt,
+    ...(p.x ? { x: xReceipt(p.x) } : {}),
+  };
 }
 export function verifiedPublication(directory: string, key: string): Publication {
   return publication(JSON.parse(readFileSync(file(directory, key, "-result"), "utf8")));

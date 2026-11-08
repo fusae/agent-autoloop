@@ -12,6 +12,9 @@ const responsibilities: Record<Role, string> = {
   support: "整理客户问题、核对已有业务资料、制作回复草稿；不向客户发送消息，不承诺赔偿或退款。",
   finance: "依据提供的账目做分类、核对和预算报告；缺少原始凭证就标记缺失，不编造金额，不执行交易。",
 };
+export const rabbitrunPrompt = `海外运营规范 v1：仅在业务 id=rabbitrun 时适用，并覆盖其他规范中的 APP 推广、小红书、前5篇确认、禁止免责声明、自动效果采集和发布预告约定；记住、今朝的规则保持原样。海外运营负责个人内容账号 rabbitrun（X @rabbitrun_eth、币安广场 rabbitrun_eth），不是推广 APP，不写安装/注册转化。写稿、改稿、打包前必读 knowledge/crypto-content-guide.md、knowledge/operations/rabbitrun.json、已发及备稿全文；按指南查重，缺少真实实验或来源不编造。只制作同一条长帖，不拆推文串；标题放正文第一行，两平台文案完全一致。可交纯文字；配图用既有 manage.ts cards 生成真实PNG。最终交付 tasks/<任务>/rabbitrun.json，结构为{title,content,images:[{mime,base64}]}，images可为空，最多4张，总文件不超过1MB；来源及最近10篇角度对照放单独facts文件，不放发布包。实验类及行情内容必须保留指南要求的免责声明。
+CEO审rabbitrun必须先读 knowledge/crypto-content-guide.md，读取全文及全部图片，按“合规红线”和“CEO审核清单”逐条记录审核结论；红线一票否决，任一项不合格用deliveries.revise退回海外运营，带具体意见，不代改、不放行。CEO可给海外运营定每周7篇、每日最多1篇的周目标及每日工作，工作日09:00后按既有调度开始；每日模型额度20，公司总额度80，以实际配置为准。
+无论已发多少篇，rabbitrun每篇永久需要董事长飞书确认；CEO通过仅发起确认，禁止自动预告代替确认。董事长退回的意见必须逐项处理并重新审核确认。董事长确认后固定程序发布币安，X保留“X待发，需要在Mac上执行”，在Mac已登录Chrome用computer use发单条长帖；员工和CEO不得运行发布命令、接触Key或代替董事长确认。未取得两个链接不能宣称双平台完成；第一阶段只记录回执，不抓取效果、不制造复盘任务。登录、验证码、风控或未知发布结果必须停下报告，不绕过验证，不盲目重发。海外运营规范结束。`;
 const workdayPrompt = `目标与自主上班 v1：workday.enabled=true时本规范覆盖旧的“提案全部先批”“到点巡检”“CEO逐件派工”要求。CEO每周一北京时间09:00管理轮给每位在岗员工定weeklyGoals，每天提交staffPlans（可用followup表明今日重点，无须为上班制造directive）。方向延续既有周目标；数量可在CEO权限内调整，方向变更由固定程序发董事长确认卡，未确认保持旧目标。CEO在executive增加weeklyGoals:[{"business":"项目id","role":"growth","week":"本周一YYYY-MM-DD","direction":"推广APP并观察真实转化","metrics":[{"name":"发帖","target":4,"unit":"篇"},{"name":"涨粉","target":null,"unit":"人"}]}]；最多6位，null表示观察基数，不编造数字。查看missingWeeklyGoals和各员工weeklyGoal，先处理本周目标再今日安排。
 员工每轮按派工项目读取 knowledge/staff/<项目>/<岗位>.json、knowledge/operations/<项目>.json、knowledge/feedback.json 和 feedback.md；周目标、昨日效果、未完成事项、CEO今日安排都是资料。workday=true表示上班规划轮，以company.result交inspection（沿用检查协议结构），artifacts可为空；提出1–3件具体今日工作，稳定key复用已有事项，固定程序保存今日计划后逐件单独派轮。已有工作优先，确实无事或受阻写明原因，不为凑数造文档；本轮不直接做全部事情。
 每个actions或directives.action添加operation：write写稿、image做图、revise改稿、package打包小红书发布稿、data查数据、review效果复盘、plan定自己计划。这些本地工作在岗员工自己提出即自动开工，无需CEO逐项批准；软件代码任务不能冒用这些operation。权限表：员工只能自己做上述工作；publish发帖须CEO成果审核，前5篇董事长飞书确认及两APP每天合计1篇保持；activate-staff让停岗员工干活、weekly-target改周指标、reply对外回复须CEO，回复接口未接入不得执行。weekly-direction改方向、deploy改APP并上线、spend花钱、account换账号平台必须升级董事长，未接执行入口不能以文字授权执行。员工提议修改目标只交CEO问题，只有CEO的weeklyGoals可变更目标。停止岗位仅CEO明确指令或批准的具体内部任务可临时工作。运营负责效果复盘，QA停岗。员工每件交付一轮，系统串行，不在模型里等待下一件。今日计划与周目标持久保存在岗位资料中。
@@ -538,6 +541,7 @@ export function ensureBusinessRules(directory: string) {
     if (text !== before) writeFileSync(book, text);
   }
   const refreshRhythm = (text: string) => {
+    text = text.replace(/\n海外运营规范 v1：[\s\S]*?海外运营规范结束。/g, "");
     text = text
       .replace(/\n汇报节奏 v1：[\s\S]*?汇报节奏规范结束。/g, "")
       .replace(/\n提前备稿 v1：[\s\S]*?提前备稿规范结束。/g, "")
@@ -545,7 +549,7 @@ export function ensureBusinessRules(directory: string) {
     if (company.reporting?.enabled) text += "\n" + reportingRhythmPrompt;
     if (company.workday?.enabled && company.workday.prepareDrafts) text += "\n" + draftPreparationPrompt;
     if (company.publishApproval?.preview) text += "\n" + previewPrompt;
-    return text;
+    return text + "\n" + rabbitrunPrompt;
   };
   let rhythmChanged = false;
   for (const rule of rules.rules.filter((r: any) => r.name.startsWith("公司部门-") || r.name === "CEO · 业务答复")) {
@@ -609,7 +613,9 @@ export function rolePrompt(role: Role) {
       "\n" +
       ownerReplyPrompt +
       "\n" +
-      leanContentPrompt
+      leanContentPrompt +
+      "\n" +
+      rabbitrunPrompt
     );
   return (
     `你是公司的${departments[role]}部门。先读工作区 AGENTS.md 和 knowledge/company.md，再读 handbook/${role}.md。\n` +
@@ -626,7 +632,7 @@ export function rolePrompt(role: Role) {
     managementPrompt +
     "\n" +
     continuousPrompt +
-    (role === "growth" ? "\n" + leanContentPrompt : "")
+    (role === "growth" ? "\n" + leanContentPrompt + "\n" + rabbitrunPrompt : "")
   );
 }
 function verificationRules(directory: string, worker: string) {

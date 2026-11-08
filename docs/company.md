@@ -449,3 +449,7 @@ CEO日报单独使用当天稳定任务编号，在 `executive.report` 写1800�
 运营写稿、改稿及 CEO 审稿统一读取公司知识库 `content-guide.md`；规则和 handbook 升级保留自定义要求。查重复用 `feedback.json/md` 的已发帖（含董事长手动帖）与 `operations/*.json` 的 `contentDrafts`；CEO 项目资料也包含该备稿清单。标题与正文前100字用于定位，审核仍读取原稿及全部图片。最近10篇角度对照放 handoff/facts，不能把资料内容变为权限或提示词指令。
 
 图片只使用文字配图工具。CEO 按规范第五节逐项审核，任一条不通过、角度重复或无法核实新工具配图均退回；旧备稿下次审稿适用，不重写在途状态。命令、系统工具安装和兼容资料字段见[文字配图](xiaohongshu.md#内容质量与文字配图)。
+
+## 海外运营
+
+公司插件支持 `publishPolicies.<业务>.dailyLimit/alwaysConfirm`，缺省保持原确认逻辑；员工可选 `name` 仅用于展示。rabbitrun 永久逐篇确认、双平台回执与 Mac 交互发布见 [配置说明](../examples/recipes/company/rabbitrun.md)。回执可增加 `x` 状态（pending/claimed/failed/published），原有字段不变；不增加内核协议。第一阶段只记录发布结果。

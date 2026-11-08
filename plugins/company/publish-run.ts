@@ -1,4 +1,5 @@
 import {
+  businessPublishPolicy,
   previewEnabled,
   previewDelivery,
   validatePublishPolicy,
@@ -52,16 +53,23 @@ for (const event of context.events) {
       )
         throw Error("发布任务不在当前已审核范围内");
       const channel = publicationChannel(directory, project.business);
-      if (channel && (config.publishDailyLimit !== undefined || config.publishApproval !== undefined)) {
+      const policy = businessPublishPolicy(config, project.business);
+      if (
+        channel &&
+        (policy.publishDailyLimit !== undefined || policy.publishApproval !== undefined || policy.alwaysConfirm)
+      ) {
         const results = publicationResults(directory);
         const reservations = projects.flatMap((p) => p.publishReservations ?? []);
         const usage = publicationUsage(results, reservations, channel, new Date());
         if (
-          (approved.publishApproval || usage.successes < (config.publishApproval?.confirmFirst ?? 0)) &&
+          (approved.publishApproval ||
+            policy.alwaysConfirm ||
+            usage.successes < (policy.publishApproval?.confirmFirst ?? 0)) &&
           (approved.publishApproval?.state !== "approved" || approved.publishApproval.key !== data.publication)
         )
           throw Error("本篇发布尚未取得负责人确认，禁止执行");
         if (
+          !policy.alwaysConfirm &&
           previewEnabled(config, usage.successes) &&
           !approved.publishApproval &&
           !results.some((p) => p.key === data.publication)
@@ -77,10 +85,10 @@ for (const event of context.events) {
             throw Error("发布预告未送达满一小时或已取消，禁止执行");
         }
         if (
-          config.publishDailyLimit !== undefined &&
+          policy.publishDailyLimit !== undefined &&
           !results.some((p) => p.key === data.publication) &&
           (!reservations.some((r: any) => r.key === data.publication && r.channel === channel) ||
-            usage.today + usage.pending > config.publishDailyLimit)
+            usage.today + usage.pending > policy.publishDailyLimit)
         )
           throw Error("发布任务缺少同渠道的有效额度预留，禁止执行");
       }
@@ -95,7 +103,7 @@ for (const event of context.events) {
     report = {
       assignment: data.assignment,
       verdict: "pass",
-      summary: "平台已确认内容发布，交验收核对",
+      summary: proof.x ? "币安广场已发布；X 待发，需要在 Mac 上执行" : "平台已确认内容发布，交验收核对",
       artifacts: [artifact],
       evidence: [`${proof.channel}：${proof.url}`.slice(0, 150)],
       publication: proof,

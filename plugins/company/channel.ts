@@ -1,3 +1,4 @@
+import { rabbitChannel, rabbitDraft } from "./rabbitrun.ts";
 import { parseXhsDraft } from "../xiaohongshu/publisher.ts";
 import { ARRANGEMENT_DETAILS } from "./arrangement.ts";
 // HTTP callbacks share the spool without owning a CLI connection; chat still uses history polling.
@@ -214,13 +215,16 @@ export class CompanyFeishu {
   private async uploadPublication(card: Card): Promise<PublicationMedia | undefined> {
     const key = publicationKey(card);
     if (!key) return;
-    const count = Number(/\n图片数：(\d+)\n只发布本次/.exec(card.text)?.[1] ?? 0);
+    const count = Number(/\n图片数：(\d+)\n/.exec(card.text)?.[1] ?? 0);
     const media: PublicationMedia = { version: 2, keys: [], count };
     let temporary: string | undefined;
     try {
       const request = JSON.parse(readFileSync(join(dirname(this.file), "publications", key + ".json"), "utf8"));
       if (request.key !== key) throw Error("发布审核记录不匹配");
-      const draft = parseXhsDraft({ ...request, action: "lookup" });
+      const draft =
+        request.business === "rabbitrun"
+          ? rabbitDraft({ ...request, channel: rabbitChannel, action: "lookup" })
+          : parseXhsDraft({ ...request, action: "lookup" });
       media.count = draft.images.length;
       temporary = mkdtempSync(join(dirname(this.file), ".card-images-"));
       for (const [index, image] of draft.images.entries()) {
