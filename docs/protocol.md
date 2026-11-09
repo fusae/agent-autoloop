@@ -408,6 +408,8 @@ Ship 使用本引擎仓库的 `plugins/delivery/action.yml`，项目固定到发
 
 公司应用新增 `check-<岗位>` 与 `internal-<业务类型>` 任务及报告 `inspection` 资料；仍装在现有事件 `detail` 中。普通任务继续本人验收；职责检查可返回无行动，内部交付保留独立验收后自动归档。完整资料格式与边界见 [公司协作层](company.md#员工自主工作)。
 
+公司审核 `executive.deliveries[].reviewVersion` 绑定当前交付报告版本；缺失或过期的审核不生效，待审孤儿由插件调度补派。失败重试刷新本次资料，回执格式修复保留已审版本；旧历史不重放，不含审核的旧回执兼容。
+
 公司应用的可选 `executive.deliveries`、`publish-content` 任务及发布回执仍位于事件 detail，内核协议不变。CEO 模式内部交付先审核，只有平台确认和 QA 验证后进入效果观察；私有发布入口与权限边界见[成果审核与发布](company.md#成果审核与发布)。
 
 公司插件的可选调用控制见[模型调用控制](company.md#模型调用控制)：`company.model.deferred` 把被限额挡住的派工留在原任务，`company.task.resume` 由固定调度恢复；独立负责人来源的 `company.task.supersede` 记录取代关闭原因。默认配置与既有事件兼容，不改内核协议、日志或领取接口。

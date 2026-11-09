@@ -2,6 +2,7 @@
 // stale/replayed answers publish a revision, or pending/failed posts are mistaken for successes.
 import { DatabaseSync } from "node:sqlite";
 import { interactiveCard } from "../plugins/company/channel.ts";
+import { reviewVersion } from "../plugins/company/review-version.ts";
 import assert from "node:assert/strict";
 import { initialize, ensureBusinessRules } from "../plugins/company/setup.ts";
 import { test } from "node:test";
@@ -45,8 +46,9 @@ function fixture(
   const send = (source: string, type: string, subject: string, data: any) =>
     c.process({ events: [{ id: ++seq, source, type, subject, detail: JSON.stringify(data) }], answers: [] });
   const tick = (answers: Context["answers"] = []) => o.plan(`tick-${++seq}`, b.list(), c.tasks(), now, answers);
-  const decide = (more: any) =>
-    o.plan(`decision-${++seq}`, b.list(), c.tasks(), now, [], 1, [
+  const decide = (more: any) => {
+    for (const review of more.deliveries ?? []) review.reviewVersion ??= reviewVersion(c.task(review.task)!);
+    return o.plan(`decision-${++seq}`, b.list(), c.tasks(), now, [], 1, [
       {
         id: seq,
         source: "company-ceo",
@@ -55,6 +57,7 @@ function fixture(
         detail: JSON.stringify({ summary: "审核", executive: decision(more) }),
       },
     ]);
+  };
   const plans = () =>
     o
       .snapshot(b.list(), c.tasks(), now)

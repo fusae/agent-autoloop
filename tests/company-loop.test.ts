@@ -1,5 +1,6 @@
 // Failure modes: a normal owner reply is acknowledged but never resumes the blocked job,
 // QA rejection cannot return work, publishing-worker failures stay active, or retries republish.
+import { reviewVersion } from "../plugins/company/review-version.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,8 +35,9 @@ function fixture(fn: (x: any) => void) {
       }
     return receipt;
   };
-  const decide = (d: any) =>
-    o.plan(`decision-${++seq}`, b.list(), c.tasks(), now, [], 1, [
+  const decide = (d: any) => {
+    for (const review of d.deliveries ?? []) review.reviewVersion ??= reviewVersion(c.task(review.task)!);
+    return o.plan(`decision-${++seq}`, b.list(), c.tasks(), now, [], 1, [
       {
         id: seq,
         source: "company-ceo",
@@ -47,6 +49,7 @@ function fixture(fn: (x: any) => void) {
         }),
       },
     ]);
+  };
   const consume = (event: any) => send("company-inbox", event.type, event.subject, JSON.parse(event.detail));
   const plan = () => o.snapshot(b.list(), c.tasks(), now)[0].plans[0];
   const report = (id: string, verdict = "pass", more = {}) => {

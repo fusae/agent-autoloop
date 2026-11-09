@@ -1,3 +1,4 @@
+import { reviewVersion } from "./review-version.ts";
 import { pendingXReminder } from "./rabbitrun.ts";
 import { draftSummaries } from "./content.ts";
 import { employeeEntries, validateReporting, nextReportTime, reportTime, type EmployeeReport } from "./reporting.ts";
@@ -790,6 +791,21 @@ export class Operations {
       return "同一成果不能重复审核";
     for (const a of deliveries) {
       const p = known(a.business) ? this.get(a.business, now).plans.find((p) => p.id === a.plan) : undefined;
+      const current = tasks.find((t) => t.id === p?.task);
+      if (!current || p?.task !== a.task || a.reviewVersion !== reviewVersion(current)) {
+        this.db.prepare("INSERT INTO journal(project,kind,at,body) VALUES (?,?,?,?)").run(
+          a.business,
+          "stale-delivery-review",
+          now.toISOString(),
+          JSON.stringify({
+            decision: decisionId,
+            review: a,
+            currentTask: p?.task ?? null,
+            currentVersion: current ? reviewVersion(current) : null,
+          }),
+        );
+        return "成果版本已变化或审核缺少版本，旧结论作废，重新审核当前交付。";
+      }
       if (
         !p ||
         p.task !== a.task ||
@@ -1161,68 +1177,81 @@ export class Operations {
       });
     }
   }
-  private writeCEOContext(c: Leadership, businesses: Portfolio, tasks: Task[], now: Date, file: string) {
+  reviewContext(businesses: Portfolio, tasks: Task[], now = new Date()) {
+    const c = this.executive();
+    return this.ceoContext(c, businesses, tasks, now);
+  }
+  private ceoContext(c: Leadership, businesses: Portfolio, tasks: Task[], now: Date) {
     const active = businesses.filter((b) => b.autonomy && b.status === "active");
-    writeFileSync(
-      file + ".tmp",
-      JSON.stringify(
-        {
-          reporting: this.config.reporting?.enabled
-            ? {
-                date: day(now),
-                weekly: new Date(day(now)).getUTCDay() === 1,
-                employeeReports: "knowledge/reporting.json",
-                feedback: "knowledge/feedback.json",
-                feedbackText: "knowledge/feedback.md",
-              }
-            : null,
-          projects: active.map((b) => ({
-            ...b,
-            ...this.get(b.id, now),
-            contentDrafts: draftSummaries(this.directory, this.get(b.id, now).plans, tasks),
-          })),
-          issues: c.issues.filter((i) => i.state !== "answered"),
-          knowledge: c.knowledge,
-          sources: sourceSnapshots(this.directory),
-          questions: c.questions,
-          briefs: c.briefs,
-          controls: {
-            activeRoles: this.config.activeRoles ?? roles,
-            inspections: this.config.inspections ?? true,
-            ceoWake: this.config.ceoWake ?? "legacy",
-            dailyModelRuns: this.config.dailyModelRuns ?? null,
-            workday: this.config.workday ?? { enabled: false, after: "09:00" },
-            permissions: this.config.permissions ?? null,
-          },
-          ...(this.dailyPlanning
-            ? {
-                week: weekOf(now),
-                missingWeeklyGoals: this.config.workday?.enabled
-                  ? active.flatMap((b) =>
-                      this.get(b.id, now)
-                        .staff.filter((s) => this.onDuty(s) && s.weeklyGoal?.week !== weekOf(now))
-                        .map((s) => ({ business: b.id, role: s.role })),
-                    )
-                  : [],
-                planningDate: day(now),
-                missingDailyPlans: active.flatMap((b) =>
+    return {
+      reporting: this.config.reporting?.enabled
+        ? {
+            date: day(now),
+            weekly: new Date(day(now)).getUTCDay() === 1,
+            employeeReports: "knowledge/reporting.json",
+            feedback: "knowledge/feedback.json",
+            feedbackText: "knowledge/feedback.md",
+          }
+        : null,
+      projects: active.map((b) => ({
+        ...b,
+        ...this.get(b.id, now),
+        plans: this.get(b.id, now).plans.map((plan) => {
+          const task = tasks.find((t) => t.id === plan.task);
+          const { deliveryTask, ...current } = plan;
+          return {
+            ...current,
+            ...(["working", "blocked"].includes(plan.status) &&
+            task?.status === "completed" &&
+            task.kind !== "publish-content"
+              ? { status: "delivered" }
+              : {}),
+            previousDeliveryTask: deliveryTask,
+            ...(task ? { reviewVersion: reviewVersion(task), deliveryReports: task.reports } : {}),
+          };
+        }),
+        contentDrafts: draftSummaries(this.directory, this.get(b.id, now).plans, tasks),
+      })),
+      issues: c.issues.filter((i) => i.state !== "answered"),
+      knowledge: c.knowledge,
+      sources: sourceSnapshots(this.directory),
+      questions: c.questions,
+      briefs: c.briefs,
+      controls: {
+        activeRoles: this.config.activeRoles ?? roles,
+        inspections: this.config.inspections ?? true,
+        ceoWake: this.config.ceoWake ?? "legacy",
+        dailyModelRuns: this.config.dailyModelRuns ?? null,
+        workday: this.config.workday ?? { enabled: false, after: "09:00" },
+        permissions: this.config.permissions ?? null,
+      },
+      ...(this.dailyPlanning
+        ? {
+            week: weekOf(now),
+            missingWeeklyGoals: this.config.workday?.enabled
+              ? active.flatMap((b) =>
                   this.get(b.id, now)
-                    .staff.filter((s) => this.onDuty(s) && s.daily?.date !== day(now))
+                    .staff.filter((s) => this.onDuty(s) && s.weeklyGoal?.week !== weekOf(now))
                     .map((s) => ({ business: b.id, role: s.role })),
-                ),
-              }
-            : {}),
-          decisions: c.decisions.slice(-10),
-          retryCounts: c.retries,
-          repairs: c.repairs,
-          limits: { unchangedReviews: 2, blockedRetries: 2 },
-          stalled: c.stalled,
-        },
-        null,
-        2,
-      ),
-      { mode: 0o600 },
-    );
+                )
+              : [],
+            planningDate: day(now),
+            missingDailyPlans: active.flatMap((b) =>
+              this.get(b.id, now)
+                .staff.filter((s) => this.onDuty(s) && s.daily?.date !== day(now))
+                .map((s) => ({ business: b.id, role: s.role })),
+            ),
+          }
+        : {}),
+      decisions: c.decisions.slice(-10),
+      retryCounts: c.retries,
+      repairs: c.repairs,
+      limits: { unchangedReviews: 2, blockedRetries: 2 },
+      stalled: c.stalled,
+    };
+  }
+  private writeCEOContext(c: Leadership, businesses: Portfolio, tasks: Task[], now: Date, file: string) {
+    writeFileSync(file + ".tmp", JSON.stringify(this.ceoContext(c, businesses, tasks, now), null, 2), { mode: 0o600 });
     renameSync(file + ".tmp", file);
   }
   private eventInputs(c: Leadership, businesses: Portfolio, tasks: Task[], now: Date) {
@@ -1392,11 +1421,23 @@ export class Operations {
       this.writeCEOContext(c, businesses, tasks, now, join(this.directory, "workspace/knowledge/ceo.json"));
       if (this.config.ceoWake === "events") c.eventInputs = this.eventInputs(c, businesses, tasks, now);
     }
-    if (c.lastTask && latest?.status !== "completed") return;
+    const pendingDelivery = active.some((b) =>
+      this.get(b.id, now).plans.some(
+        (p) => p.status === "delivered" && tasks.some((t) => t.id === p.task && t.status === "completed"),
+      ),
+    );
+    // An emitted task may not have reached the office yet; queued includes quota deferrals.
+    const reviewing =
+      (c.lastTask && !latest) ||
+      tasks.some((t) => t.kind === "ceo" && ["active", "queued"].includes(t.status)) ||
+      receipt.events?.some(
+        (e) => e.type === "company.task.retry" && tasks.some((t) => t.id === e.subject && t.kind === "ceo"),
+      );
+    if (reviewing || (c.lastTask && latest?.status !== "completed" && !pendingDelivery)) return;
     const eventInputs = this.eventInputs(c, businesses, tasks, now);
     if (this.config.ceoWake === "events") {
       delete c.nextReviewAt;
-      if (c.eventInputs === eventInputs) return;
+      if (c.eventInputs === eventInputs && !pendingDelivery) return;
     }
     const fingerprint = this.ceoInputs(c, businesses, tasks, now);
     const agenda =
@@ -1409,7 +1450,7 @@ export class Operations {
         ),
       );
     const unchanged = fingerprint === c.fingerprint;
-    if (unchanged && this.config.ceoWake !== "events") {
+    if (unchanged && this.config.ceoWake !== "events" && !pendingDelivery) {
       if (!(agenda && c.nextReviewAt && Date.parse(c.nextReviewAt) <= now.getTime())) return;
       if ((c.unchangedReviews ?? 0) >= 2) {
         if (c.stalled?.fingerprint !== fingerprint) {

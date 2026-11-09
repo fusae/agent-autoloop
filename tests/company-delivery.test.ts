@@ -1,13 +1,17 @@
 // Failure modes: drafts enter effect observation before publication, CEO rejection does not
 // restart work, stale reviews approve another revision, or missing publishing access stops silently.
+import { reviewVersion } from "../plugins/company/review-version.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Company } from "../plugins/company/company.ts";
 import { Businesses } from "../plugins/company/business.ts";
+import { DatabaseSync } from "node:sqlite";
+import { refreshReviewContext } from "../plugins/company/review-context.ts";
+import type { Turn } from "../worker/agents.ts";
 import { Operations } from "../plugins/company/operations.ts";
 
 const now = new Date("2026-11-05T16:00:00Z");
@@ -23,15 +27,18 @@ const action = {
   followUpDays: 3,
   measure: "发布后的新增用户",
 };
-function fixture(fn: (x: any) => void, legacy = false, directReview = false) {
+function fixture(fn: (x: any) => void, legacy = false, directReview = false, events = false) {
   const dir = mkdtempSync(join(tmpdir(), "company-delivery-"));
-  const c = new Company({
+  const config = {
     name: "test",
     database: join(dir, "company.db"),
     maxAssignments: 6,
     ceoMode: true,
     ...(directReview ? { contentReview: "ceo" as const } : {}),
-  });
+    ...(events ? { ceoWake: "events" as const, inspections: false } : {}),
+  };
+  writeFileSync(join(dir, "company.json"), JSON.stringify(config));
+  const c = new Company(config);
   const b = new Businesses(dir),
     o = new Operations(dir);
   let seq = 0;
@@ -39,6 +46,7 @@ function fixture(fn: (x: any) => void, legacy = false, directReview = false) {
     c.process({ events: [{ id: ++seq, source, type, subject, detail: JSON.stringify(data) }], answers: [] });
   const tick = () => o.plan(`tick-${++seq}`, b.list(), c.tasks(), now);
   const decide = (d: any) => {
+    for (const review of d.deliveries ?? []) review.reviewVersion ??= reviewVersion(c.task(review.task)!);
     for (const review of d.deliveries ?? [])
       if (review.verdict === "publish" && !review.files) review.files = c.task(review.task)?.reports.at(-1)?.artifacts;
     return o.plan(`decision-${++seq}`, b.list(), c.tasks(), now, [], 1, [
@@ -84,7 +92,7 @@ function fixture(fn: (x: any) => void, legacy = false, directReview = false) {
     finish(work);
     if (legacy) o.leadership(false, now);
     tick();
-    fn({ dir, c, b, o, send, tick, decide, plan, finish, work });
+    fn({ dir, config, c, b, o, send, tick, decide, plan, finish, work });
   } finally {
     o.close();
     b.close();
@@ -269,3 +277,146 @@ test("existing draft observations are reclassified through a normal tick without
     assert.equal(plan().followUpAt, null);
     assert.equal(c.task(task).status, "completed");
   }, true));
+
+// Failure modes: retries reuse stale work/session, receipt repair relabels an old review,
+// same-task new handoffs pass as the old version, or an unchanged wake fingerprint strands a delivery.
+test("failed CEO attempts refresh current delivery and session; receipt repair preserves the reviewed snapshot", () =>
+  fixture(
+    ({ dir, config, c, work, plan, decide, finish, tick }) => {
+      const folder = join(dir, "attempt");
+      mkdirSync(folder);
+      const contextFile = join(folder, "context.json");
+      writeFileSync(contextFile, JSON.stringify({ events: [], answers: [] }));
+      const turn: Turn = {
+        prompt: "审核",
+        session: "new",
+        resume: "stale-session",
+        cwd: join(dir, "workspace"),
+        access: "read",
+        folder,
+        contextFile,
+      };
+      refreshReviewContext(dir, config, turn, false);
+      const first = JSON.parse(readFileSync(contextFile, "utf8")).companyReview.projects[0].plans[0];
+      assert.equal(first.task, work.subject);
+      assert.equal(first.reviewVersion, reviewVersion(c.task(work.subject)));
+      const returned = decide({
+        deliveries: [
+          { business: "app", plan: plan().id, task: work.subject, verdict: "revise", reason: "产品名不一致" },
+        ],
+      });
+      const revision = returned.events.find((e: any) => JSON.parse(e.detail).kind === "internal-content");
+      finish(revision);
+      tick();
+      turn.resume = "old-review";
+      refreshReviewContext(dir, config, turn, true);
+      assert.equal(JSON.parse(readFileSync(contextFile, "utf8")).companyReview.projects[0].plans[0].task, work.subject);
+      assert.equal(turn.resume, "old-review");
+      refreshReviewContext(dir, config, turn, false);
+      const current = JSON.parse(readFileSync(contextFile, "utf8")).companyReview.projects[0].plans[0];
+      assert.equal(current.task, revision.subject);
+      assert.equal(current.previousDeliveryTask, work.subject);
+      assert.equal(current.deliveryTask, undefined);
+      assert.notEqual(current.reviewVersion, first.reviewVersion);
+      assert.deepEqual(current.deliveryReports, c.task(revision.subject).reports);
+      assert.equal(turn.resume, null);
+    },
+    false,
+    true,
+  ));
+
+test("same-task changed handoff invalidates the review, journals its version and queues a fresh review", () =>
+  fixture(
+    ({ dir, c, b, o, send, tick, plan, work }) => {
+      const ceo = o.executive().lastTask;
+      send("company-inbox", "company.task.create", ceo, {
+        title: "审核",
+        kind: "ceo",
+        goal: "审核当前交付",
+        acceptance: ["版本一致"],
+      });
+      const version = reviewVersion(c.task(work.subject));
+      send("company-ceo", "company.result", ceo, {
+        assignment: 1,
+        verdict: "pass",
+        summary: "审核旧版",
+        artifacts: [],
+        evidence: ["旧交付"],
+        executive: decision({
+          deliveries: [
+            {
+              business: "app",
+              plan: plan().id,
+              task: work.subject,
+              reviewVersion: version,
+              verdict: "revise",
+              reason: "旧版问题",
+            },
+          ],
+        }),
+      });
+      const tasks = c.tasks();
+      const updated = tasks.find((t: any) => t.id === work.subject)!;
+      updated.assignment++;
+      updated.reports.push({ ...updated.reports.at(-1)!, assignment: updated.assignment, summary: "产品名已修正" });
+      const before = plan();
+      const result = o.plan("new-handoff", b.list(), tasks, now);
+      assert.equal(plan().task, before.task);
+      assert.equal(plan().status, "delivered");
+      assert.equal(plan().revision, before.revision);
+      assert.equal(plan().result, before.result);
+      assert.ok(result.events?.some((e: any) => JSON.parse(e.detail).kind === "ceo"));
+      const db = new DatabaseSync(join(dir, "operations.db"));
+      try {
+        const row = db.prepare("SELECT body FROM journal WHERE kind='stale-delivery-review'").get()!;
+        const audit = JSON.parse(row.body as string);
+        assert.equal(audit.review.reviewVersion, version);
+        assert.equal(audit.currentVersion, reviewVersion(updated));
+      } finally {
+        db.close();
+      }
+      assert.ok(!tick().events?.some((e: any) => JSON.parse(e.detail).kind === "ceo"));
+    },
+    false,
+    true,
+    true,
+  ));
+
+test("orphan delivered work wakes despite consumed event fingerprint and never duplicates queued or active review", () =>
+  fixture(
+    ({ c, o, send, tick, plan }) => {
+      const old = o.executive().lastTask;
+      send("company-inbox", "company.task.create", old, {
+        title: "审核",
+        kind: "ceo",
+        goal: "审核交付",
+        acceptance: ["读最新版"],
+      });
+      assert.ok(!tick().events?.some((e: any) => JSON.parse(e.detail).kind === "ceo"));
+      send("company-ceo", "company.model.deferred", old, { assignment: c.task(old).assignment });
+      tick();
+      send("company-inbox", "company.task.resume", old, {});
+      send("company-ceo", "company.result", old, {
+        assignment: c.task(old).assignment,
+        verdict: "pass",
+        summary: "未审核交付",
+        artifacts: [],
+        evidence: ["旧记录"],
+        executive: decision(),
+      });
+      const fingerprint = o.executive().eventInputs;
+      const result = tick();
+      assert.equal(o.executive().eventInputs, fingerprint);
+      const review = result.events?.find((e: any) => JSON.parse(e.detail).kind === "ceo");
+      assert.ok(review);
+      assert.equal(plan().status, "delivered");
+      assert.ok(!tick().events?.some((e: any) => JSON.parse(e.detail).kind === "ceo"));
+      send("company-inbox", review.type, review.subject, JSON.parse(review.detail));
+      send("company-ceo", "company.model.deferred", review.subject, { assignment: c.task(review.subject).assignment });
+      assert.equal(c.task(review.subject).status, "queued");
+      assert.ok(!tick().events?.some((e: any) => JSON.parse(e.detail).kind === "ceo"));
+    },
+    false,
+    true,
+    true,
+  ));

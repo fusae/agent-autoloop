@@ -1,5 +1,6 @@
 // Failure modes: daily goals are only prose, CEO plans duplicate work, follow-ups never wake,
 // waiting staff spin on unchanged data, or invalid cross-role plans partially apply decisions.
+import { reviewVersion } from "../plugins/company/review-version.ts";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,8 +53,9 @@ function fixture(fn: (f: any) => void) {
   const send = (source: string, type: string, subject: string, data: any) =>
     c.process({ events: [{ id: ++seq, source, type, subject, detail: JSON.stringify(data) }], answers: [] });
   const tick = (at = now, depth = 1) => o.plan("tick-" + ++seq, b.list(), c.tasks(), at, [], depth);
-  const decide = (d: any, at = now) =>
-    o.plan("decision-" + ++seq, b.list(), c.tasks(), at, [], 1, [
+  const decide = (d: any, at = now) => {
+    for (const review of d.deliveries ?? []) review.reviewVersion ??= reviewVersion(c.task(review.task)!);
+    return o.plan("decision-" + ++seq, b.list(), c.tasks(), at, [], 1, [
       {
         id: seq,
         source: "company-ceo",
@@ -62,6 +64,7 @@ function fixture(fn: (f: any) => void) {
         detail: JSON.stringify({ summary: "今日安排", executive: decision(d) }),
       },
     ]);
+  };
   try {
     b.save(
       { id: "app", name: "APP", description: "提醒", audience: "用户", objective: "推广", stage: "operating" },

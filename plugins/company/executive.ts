@@ -23,6 +23,7 @@ export type ExecutiveDecision = {
     business: string;
     plan: string;
     task: string;
+    reviewVersion?: string;
     verdict: "revise" | "accept" | "publish";
     files?: string[];
     reason: string;
@@ -187,10 +188,16 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
             if (!["revise", "accept", "publish"].includes(a.verdict)) throw new Error("成果审核结论不正确");
             if (a.verdict === "publish" && (!Array.isArray(a.files) || !a.files.length || a.files.length > 5))
               throw Error("发布审核需要明确选择1–5个正文文件");
+            if (
+              a.reviewVersion !== undefined &&
+              (typeof a.reviewVersion !== "string" || !/^[a-f0-9]{64}$/.test(a.reviewVersion))
+            )
+              throw new Error("成果审核版本需要交付资料中的 SHA-256");
             return {
               business: id(a.business),
               plan: id(a.plan),
               task: id(a.task),
+              ...(a.reviewVersion !== undefined ? { reviewVersion: a.reviewVersion } : {}),
               verdict: a.verdict,
               reason: text(a.reason, 200),
               ...(a.verdict === "publish" ? { files: a.files.map((v: unknown) => text(v, 150, "files")) } : {}),

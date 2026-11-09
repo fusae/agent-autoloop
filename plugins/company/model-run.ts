@@ -1,5 +1,6 @@
+import { refreshReviewContext } from "./review-context.ts";
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { ModelBudget } from "./model-budget.ts";
 import type { Role, Context } from "./company.ts";
@@ -18,6 +19,10 @@ const owner = role === "ceo" && entry.job.rule.name === "CEO · 业务答复";
 const budget = new ModelBudget(dirname(configFile), config);
 const adapter = engine === "codex" ? codex : engine === "claude" ? claude : null;
 if (!adapter) throw new Error("模型入口只支持 codex 或 claude");
+if (role === "ceo") {
+  refreshReviewContext(dirname(configFile), config, turn, entry.repairs > 0);
+  writeFileSync(file, JSON.stringify(turn), { mode: 0o600 });
+}
 const command = adapter.command(turn);
 const context: Context = JSON.parse(readFileSync(turn.contextFile, "utf8"));
 const event = context.events.findLast((e) => e.source === "company-office" && e.type === `company.work.${role}`);

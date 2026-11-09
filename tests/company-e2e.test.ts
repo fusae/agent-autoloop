@@ -264,8 +264,8 @@ if(question || ctx.answers.some(a=>a.about==='chat-promotion')) {
    console.log('\`\`\`agent-autoloop\\n'+JSON.stringify({events:[{id:'record-reply-'+question.id,type:'company.ceo.decision',subject:'owner',detail:JSON.stringify({summary:'负责人资料已落账',executive})}]})+'\\n\`\`\`'); process.exit(0);
  }
  if(question && JSON.parse(question.detail).question==='审核并发布') {
-   const plan=JSON.parse(readFileSync('knowledge/operations/app.json','utf8')).plans.find(p=>p.status==='delivered');
-   const executive={briefs:[],directives:[],approvals:[],answers:[],escalations:[],deliveries:[{business:'app',plan:plan.id,task:plan.task,verdict:'publish',reason:'模拟CEO已核对正文',files:['tasks/'+plan.task+'/draft.md']}]};
+   const plan=JSON.parse(readFileSync('knowledge/ceo.json','utf8')).projects.find(p=>p.id==='app').plans.find(p=>p.status==='delivered');
+   const executive={briefs:[],directives:[],approvals:[],answers:[],escalations:[],deliveries:[{business:'app',plan:plan.id,task:plan.task,reviewVersion:plan.reviewVersion,verdict:'publish',reason:'模拟CEO已核对正文',files:['tasks/'+plan.task+'/draft.md']}]};
    console.log('\`\`\`agent-autoloop\\n'+JSON.stringify({events:[{id:'publish-review-'+question.id,type:'company.ceo.decision',subject:'owner',detail:JSON.stringify({summary:'审核后发布',executive})}]})+'\\n\`\`\`'); process.exit(0);
  }
  const waiting=question && JSON.parse(question.detail).question==='推广对象需要确认';
