@@ -6,6 +6,7 @@ node_modules/
 # Company state and credentials must stay outside the fork.
 .company/
 company-state/
+tmp-audit/
 *.db
 *.db-wal
 *.db-shm

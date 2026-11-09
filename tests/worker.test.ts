@@ -14,6 +14,7 @@
 // A failed or timed-out receipt repair must preserve the original business outcome; cancellation must reap a child
 // ignoring SIGTERM even after restart; adding usage must not turn a missing price into a reported zero.
 // Claude OAuth must reach only Claude (including its company wrapper), with no other filtered variable or API-key conflict.
+// Concurrent jobs may finish out of order; result assertions must follow their run identities.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -248,15 +249,16 @@ console.log("环境检查通过");
 
 test("a bad exit code, or no last message, is a failure saying why", async () => {
   const hub = fakeHub();
-  hub.jobs.push(
-    job({ command: ["/bin/sh", "-c", "echo boom >&2; exit 3"] }),
-    job({ command: ["/bin/sh", "-c", "true"] }),
-  );
+  const bad = job({ command: ["/bin/sh", "-c", "echo boom >&2; exit 3"] }),
+    empty = job({ command: ["/bin/sh", "-c", "true"] });
+  hub.jobs.push(bad, empty);
   const w = worker(hub);
   await until(w, () => hub.results.length === 2);
-  assert.equal(hub.results[0].outcome, "failed");
-  assert.match(hub.results[0].error, /退出码 3：boom/);
-  assert.deepEqual([hub.results[1].outcome, hub.results[1].error], ["failed", "没留下结果"]);
+  const failed = hub.results.find((r) => r.run === bad.run),
+    missing = hub.results.find((r) => r.run === empty.run);
+  assert.equal(failed.outcome, "failed");
+  assert.match(failed.error, /退出码 3：boom/);
+  assert.deepEqual([missing.outcome, missing.error], ["failed", "没留下结果"]);
 });
 
 test("a last message saying it couldn't, or that there was nothing to do, is what it says", async () => {

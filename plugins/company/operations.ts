@@ -184,6 +184,22 @@ export class Operations {
   private onDuty(s: Employee) {
     return s.enabled && (!this.config.activeRoles || this.config.activeRoles.includes(s.role));
   }
+  private needsDailyPlan(s: Employee, now: Date) {
+    return (
+      s.daily?.date !== day(now) ||
+      (!!this.config.workday?.enabled && Date.parse(s.daily.issuedAt) < Date.parse(`${day(now)}T09:00:00+08:00`))
+    );
+  }
+  private topicParticipants(businesses: Portfolio, now: Date) {
+    return businesses
+      .filter(
+        (b) =>
+          b.autonomy &&
+          b.status === "active" &&
+          this.get(b.id, now).staff.some((s) => this.onDuty(s) && s.role === "growth"),
+      )
+      .map((b) => b.id);
+  }
   constructor(directory: string) {
     this.directory = directory;
     const configFile = join(directory, "company.json");
@@ -993,9 +1009,15 @@ export class Operations {
       )
         return "该动作不能作为内部任务开工：发布须成果审核，改目标须weeklyGoals；对外回复未接入，部署、花钱、换账号须升级董事长";
     }
+    const reservedTopics = new Set<string>();
     for (const directive of d.directives) {
       const p = this.get(directive.business, now);
-      const existing = p.plans.find((p) => p.key === directive.action.key);
+      const existing = p.plans.find((a) => a.id === hash(`${p.business}:ceo:${directive.action.key}`));
+      if (directive.action.topic && !existing) {
+        const key = `${p.business}:${directive.action.topic}`;
+        if (reservedTopics.has(key)) return "同一选题不能重复安排写稿";
+        reservedTopics.add(key);
+      }
       if (
         !topicCanWrite(
           p,
@@ -1008,6 +1030,48 @@ export class Operations {
         )
       )
         return "新稿必须使用董事长已通过且未被占用的选题";
+    }
+    if (this.config.workday?.prepareDrafts) {
+      for (const b of active) {
+        const p = this.get(b.id, now);
+        const additions =
+          new Set(
+            d.directives
+              .filter(
+                (v) =>
+                  v.business === b.id &&
+                  v.action.kind === "content" &&
+                  (production(v.action.operation) || !v.action.operation) &&
+                  !p.plans.some((a) => a.id === hash(`${b.id}:ceo:${v.action.key}`)),
+              )
+              .map((v) => v.action.key),
+          ).size +
+          new Set(
+            d.approvals
+              .filter(
+                (a) =>
+                  a.business === b.id &&
+                  a.approve &&
+                  p.plans.some(
+                    (p) =>
+                      p.id === a.plan &&
+                      p.status === "proposed" &&
+                      p.owner === "growth" &&
+                      p.kind === "content" &&
+                      (production(p.operation) || !p.operation),
+                  ),
+              )
+              .map((a) => a.plan),
+          ).size;
+        const stock = draftStock(
+          p.plans,
+          p.staff.find((s) => s.role === "growth")?.weeklyGoal,
+          publicationResults(this.directory),
+          now,
+        );
+        if (additions && stock.ready + stock.making + additions > stock.limit)
+          return "每项目待发备稿及制作中的稿件合计最多2篇，请复用已有稿件";
+      }
     }
     const staffPlans = d.staffPlans ?? [];
     if (staffPlans.length && !this.dailyPlanning) return "每日规划尚未启用";
@@ -1203,6 +1267,8 @@ export class Operations {
         outcome: null,
         result: "CEO 已派工",
       });
+      const topic = p.topics?.find((t) => t.id === a.topic);
+      if (topic) topic.plan = id;
       this.save(p, "ceo-directive", now);
     }
     for (const a of staffPlans) {
@@ -1211,7 +1277,7 @@ export class Operations {
       const { business: _business, role: _role, ...daily } = a;
       if (a.plan) daily.plan = resolved.get(a)!;
       const { issuedAt: _issued, checkedAt: _checked, checkTask: _checkTask, ...previous } = s.daily ?? {};
-      if (JSON.stringify(previous) === JSON.stringify(daily)) continue;
+      if (JSON.stringify(previous) === JSON.stringify(daily) && !this.needsDailyPlan(s, now)) continue;
       if (s.daily?.mode === "followup" && !s.daily.checkedAt && daily.mode === "work") {
         s.followups ??= [];
         if (!s.followups.some((f) => sameFollowup(f, s.daily!))) s.followups.push(s.daily);
@@ -1443,7 +1509,16 @@ export class Operations {
             .map((a) => a.task);
         }),
     );
+    for (const cycle of c.weeklyCycles?.filter((w) => w.week === weekOf(now)) ?? [])
+      for (const s of cycle.staff)
+        if (
+          !s.result &&
+          businesses.some((b) => b.id === s.business && b.autonomy && b.status === "active") &&
+          this.get(s.business, now).staff.some((e) => e.role === s.role && this.onDuty(e))
+        )
+          active.add(s.task);
     for (const t of tasks) {
+      const report = c.eveningReports?.some((r) => r.task === t.id && r.date === day(now) && !r.processed);
       if (
         this.config.health?.enabled &&
         (failureKind(t.reason) === "auth" || t.kind === "publish-content" || t.kind.includes("software"))
@@ -1453,6 +1528,7 @@ export class Operations {
         t.status !== "blocked" ||
         !(
           t.id === c.lastTask ||
+          report ||
           (active.has(t.id) && (t.reason.startsWith("部门报告格式不合格") || t.reason.startsWith("运行失败")))
         )
       )
@@ -1480,6 +1556,7 @@ export class Operations {
           }
           c.lastTask = null;
           c.fingerprint = this.ceoInputs(c, businesses, tasks, now);
+          if (this.config.ceoWake === "events") c.eventInputs = this.eventInputs(c, businesses, tasks, now);
           c.nextReviewAt = after(now, 1);
         }
         continue;
@@ -1584,7 +1661,7 @@ export class Operations {
             planningDate: day(now),
             missingDailyPlans: active.flatMap((b) =>
               this.get(b.id, now)
-                .staff.filter((s) => this.onDuty(s) && s.daily?.date !== day(now))
+                .staff.filter((s) => this.onDuty(s) && this.needsDailyPlan(s, now))
                 .map((s) => ({ business: b.id, role: s.role })),
             ),
           }
@@ -1882,7 +1959,7 @@ export class Operations {
         (receipt.notice ??= []).push({
           key: `ceo-evening-failed-${entry.date}`,
           title: "CEO · 汇报未完成",
-          text: `今天的汇报未完成：${task.reason}。员工日报已保留，未额外调用模型。`,
+          text: `今天的汇报未完成：${task.reason}。员工日报已保留，原任务按既有规则尝试恢复。`,
         });
         entry.failureNotified = true;
       }
@@ -2017,24 +2094,38 @@ export class Operations {
         (p) => p.status === "delivered" && tasks.some((t) => t.id === p.task && t.status === "completed"),
       ),
     );
+    const pendingReview =
+      pendingDelivery || active.some((b) => this.get(b.id, now).topics?.some((t) => t.state === "screening"));
     // An emitted task may not have reached the office yet; queued includes quota deferrals.
     const reviewing =
       (c.lastTask && !latest) ||
-      tasks.some((t) => t.kind === "ceo" && ["active", "queued"].includes(t.status)) ||
+      tasks.some(
+        (t) =>
+          t.kind === "ceo" &&
+          ["active", "queued"].includes(t.status) &&
+          !(t.status === "queued" && c.eveningReports?.some((r) => r.task === t.id && r.date < day(now))),
+      ) ||
       receipt.events?.some(
         (e) => e.type === "company.task.retry" && tasks.some((t) => t.id === e.subject && t.kind === "ceo"),
       );
     const healthPending = c.health?.pending;
-    if (reviewing || (c.lastTask && latest?.status !== "completed" && !pendingDelivery && !healthPending)) return;
+    if (reviewing || (c.lastTask && latest?.status !== "completed" && !pendingReview && !healthPending)) return;
     const eventInputs = this.eventInputs(c, businesses, tasks, now);
     if (this.config.ceoWake === "events") {
       delete c.nextReviewAt;
-      if (c.eventInputs === eventInputs && !pendingDelivery && !healthPending) return;
+      // A pending handoff is not new evidence after this CEO's bounded recovery was exhausted.
+      if (
+        !c.lastTask &&
+        c.eventInputs === eventInputs &&
+        c.runs.some((r) => c.repairs?.[r.task]?.exhausted && tasks.some((t) => t.id === r.task && t.kind === "ceo"))
+      )
+        return;
+      if (c.eventInputs === eventInputs && !pendingReview && !healthPending) return;
     }
     const fingerprint = this.ceoInputs(c, businesses, tasks, now);
     const agenda =
       (this.dailyPlanning &&
-        active.some((b) => this.get(b.id, now).staff.some((s) => this.onDuty(s) && s.daily?.date !== day(now)))) ||
+        active.some((b) => this.get(b.id, now).staff.some((s) => this.onDuty(s) && this.needsDailyPlan(s, now)))) ||
       c.issues.some((i) => i.state === "open") ||
       active.some((b) =>
         this.get(b.id, now).plans.some(
@@ -2042,7 +2133,7 @@ export class Operations {
         ),
       );
     const unchanged = fingerprint === c.fingerprint;
-    if (unchanged && this.config.ceoWake !== "events" && !pendingDelivery) {
+    if (unchanged && this.config.ceoWake !== "events" && !pendingReview) {
       if (!(agenda && c.nextReviewAt && Date.parse(c.nextReviewAt) <= now.getTime())) return;
       if ((c.unchangedReviews ?? 0) >= 2) {
         if (c.stalled?.fingerprint !== fingerprint) {
@@ -2176,6 +2267,7 @@ export class Operations {
       (approval || policy.alwaysConfirm || usage.successes < (policy.publishApproval?.confirmFirst ?? 0))
     ) {
       if (!approval || approval.state === "deferred") {
+        if ((receipt.ask?.length ?? 0) >= 5) return false;
         const round = (approval?.round ?? 0) + 1;
         const about = `publish:${plan.publicationKey}:${round}`;
         approval = plan.publishApproval = { key: plan.publicationKey!, about, round, state: "pending" };
@@ -2206,6 +2298,7 @@ export class Operations {
       (project.publishReservations ??= []).push({ key: plan.publicationKey!, channel, at: now.toISOString() });
     if (!policy.alwaysConfirm && previewEnabled(this.config, usage.successes) && !approval) {
       if (!plan.publishPreview) {
+        if ((receipt.ask?.length ?? 0) >= 5) return false;
         const publishAt = new Date(now.getTime() + 3600_000).toISOString();
         const about = `publish-preview:${plan.publicationKey}`;
         plan.publishPreview = { key: plan.publicationKey!, about, createdAt: now.toISOString(), publishAt };
@@ -2258,7 +2351,7 @@ export class Operations {
           events,
           receipt,
           now,
-          businesses.filter((b) => b.autonomy && b.status === "active").map((b) => b.id),
+          this.topicParticipants(businesses, now),
         );
       if (chief.enabled && depth <= 1) this.inspectHealth(chief, businesses, tasks, receipt, now);
       if (chief.enabled) this.repairScheduling(chief, businesses, now);
@@ -2532,7 +2625,12 @@ export class Operations {
           });
           p.activity.push({ task: id, role, kind, at: now.toISOString() });
         };
-        if (this.config.topics && chief.enabled && topicOfficeHours(now, this.config.workday?.after)) {
+        if (
+          this.config.topics &&
+          chief.enabled &&
+          topicOfficeHours(now, this.config.workday?.after) &&
+          (!this.config.workday?.startDate || day(now) >= this.config.workday.startDate)
+        ) {
           for (const s of p.staff.filter((s) => this.onDuty(s) && s.role === "growth")) {
             if (!capacity() || busy().some((a) => a.role === s.role) || s.weeklyGoal?.week !== weekOf(now)) continue;
             const stock = draftStock(p.plans, s.weeklyGoal, publicationResults(this.directory), now);
@@ -2555,6 +2653,7 @@ export class Operations {
               JSON.stringify([weekOf(now), remaining, available, (p.topics ?? []).map((t) => [t.id, t.state])]),
             );
             const writing = !first && !replacements.length && available > 0 && remaining > 0;
+            if (writing && this.config.workday?.prepareDrafts && stock.ready + stock.making >= stock.limit) continue;
             if (!first && !replacements.length && !writing && (pending || remaining <= available)) continue;
             if (!first && p.topicFollowup?.signature === signature) continue;
             const id = "T-" + topicId(`${b.id}:${s.role}:${signature}`);
@@ -2803,13 +2902,7 @@ export class Operations {
         this.profile(p, b, tasks, now);
       }
       if (this.config.topics)
-        new TopicWorkflow(this.db, this.directory).tick(
-          [],
-          [],
-          receipt,
-          now,
-          businesses.filter((b) => b.autonomy && b.status === "active").map((b) => b.id),
-        );
+        new TopicWorkflow(this.db, this.directory).tick([], [], receipt, now, this.topicParticipants(businesses, now));
       if (chief.enabled) {
         if (chief.processed !== beforeProcessed && beforeCEO === chief.fingerprint)
           chief.fingerprint = this.ceoInputs(chief, businesses, tasks, now);

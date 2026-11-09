@@ -84,6 +84,7 @@ export function validateDraftPlan(
   task: string,
   decision: import("./inspection.ts").Inspection,
   now: Date,
+  topics = false,
 ) {
   const file = join(directory, "operations.db");
   if (!existsSync(file)) return;
@@ -94,11 +95,18 @@ export function validateDraftPlan(
         plans: import("./operations.ts").Plan[];
         staff: import("./operations.ts").Employee[];
       };
-      const employee = p.staff.find((s) => s.workday?.task === task && s.role === "growth");
+      const employee = p.staff.find((s) => (s.workday?.task === task || s.lastTask === task) && s.role === "growth");
       if (!employee) continue;
       const stock = draftStock(p.plans, employee.weeklyGoal, publicationResults(directory), now);
-      const making = decision.actions.filter((a) => production(a.operation) && a.kind === "content");
-      if (stock.needsProduction && !making.length && !stock.making && !decision.noProductionReason)
+      const making = decision.actions.filter((a) => (production(a.operation) || !a.operation) && a.kind === "content");
+      if (
+        !topics &&
+        employee.workday?.task === task &&
+        stock.needsProduction &&
+        !making.length &&
+        !stock.making &&
+        !decision.noProductionReason
+      )
         throw Error(
           "周目标未达且备稿不足2篇，今日计划须包含制作，或用inspection.noProductionReason说明理由；不能只因今日无发布名额而停工",
         );

@@ -513,3 +513,19 @@ test("draft stock counts actual publications this week and ready drafts, excludi
   assert.equal(stock.needsProduction, false);
   assert.equal(draftStock(plans.slice(0, 2), goal(), results, now).needsProduction, true);
 });
+
+test("weekend shifts wait until Monday and pre-09 arrangements remain in CEO's missing-plan list", () =>
+  fixture((f: any) => {
+    const early = new Date("2026-11-09T00:55:00Z");
+    f.decide({ staffPlans: [f.daily("app", early)] }, early);
+    const context = f.o.reviewContext(f.b.list(), f.c.tasks(), now);
+    assert.ok(context.missingDailyPlans.some((s: any) => s.business === "app"));
+    const same = f.daily("app", early);
+    f.decide({ staffPlans: [same] }, now);
+    assert.ok(
+      !f.o.reviewContext(f.b.list(), f.c.tasks(), now).missingDailyPlans.some((s: any) => s.business === "app"),
+    );
+    const weekend = new Date("2026-11-14T01:05:00Z");
+    const receipt = f.decide({ staffPlans: [f.daily("app", weekend)] }, weekend);
+    assert.equal(f.work(receipt, "workday-growth").length, 0);
+  }));

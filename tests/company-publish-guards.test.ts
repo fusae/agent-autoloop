@@ -144,6 +144,9 @@ function fixture(
       dir,
       c,
       b,
+      get o() {
+        return o;
+      },
       plans,
       approve,
       tick,
@@ -449,3 +452,22 @@ test("business permanent approval still asks after five successes without changi
     },
     { publishApproval: { confirmFirst: 5 }, publishPolicies: { jizhu: { dailyLimit: 1, alwaysConfirm: true } } },
   ));
+
+test("topic cards cannot overflow the receipt and lose a publication confirmation", () =>
+  fixture((f: any) => {
+    f.approve(0);
+    const p = f.o.snapshot(f.b.list(), f.c.tasks()).find((p: any) => p.business === "jizhu");
+    const plan = p.plans.find((a: any) => a.publicationKey);
+    delete plan.publishApproval;
+    const receipt: any = {
+      ask: Array.from({ length: 5 }, (_, i) => ({
+        key: `topic-${i}`,
+        title: "选题拍板",
+        text: "待决定",
+        options: ["全部通过", "全部退回"],
+      })),
+    };
+    assert.equal(f.o.admitPublication(p, plan, "测试业务", receipt, new Date("2026-11-07T15:50:00Z")), false);
+    assert.equal(receipt.ask.length, 5);
+    assert.equal(plan.publishApproval, undefined, "deferred card must remain eligible for the next tick");
+  }));

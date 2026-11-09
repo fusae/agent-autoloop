@@ -81,6 +81,7 @@ export function nextWorkday(now: Date, after: string, issued?: string, startDate
   const date = startDate && startDate > localDay(now) ? startDate : localDay(now);
   const at = new Date(`${date}T${after}:00+08:00`);
   if (issued === date) at.setUTCDate(at.getUTCDate() + 1);
+  while ([0, 6].includes(new Date(localDay(at)).getUTCDay())) at.setUTCDate(at.getUTCDate() + 1);
   return at.toISOString();
 }
 export const goalApproval = (goal: WeeklyGoal) =>

@@ -3,7 +3,7 @@ import { registeredWeeklyReport, registeredReview, retrospective, type Retrospec
 import { dailyReport, scheduledReport, validateReporting, validateDraftPlan, type DailyReport } from "./reporting.ts";
 import { validateWorkday, type permissions } from "./workday.ts";
 import { validatePublishPolicy } from "./publication-policy.ts";
-import { ModelBudget } from "./model-budget.ts";
+import { ModelBudget, modelDay } from "./model-budget.ts";
 import { publication, verifiedPublication, type Publication } from "./publication.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
@@ -230,6 +230,15 @@ export class Company {
   }
   private dispatch(task: Task, receipt: Receipt, now: Date) {
     task.approval = null;
+    const reportDate =
+      this.config.reporting?.enabled && task.kind === "ceo"
+        ? scheduledReport(dirname(this.config.database), task.id)
+        : undefined;
+    if (reportDate && reportDate < modelDay(now)) {
+      task.status = "blocked";
+      task.reason = "汇报已跨日，保留原日期未完成记录，不占用今天的汇报或管理轮次";
+      return;
+    }
     if (task.assignment >= this.config.maxAssignments) {
       task.status = "blocked";
       task.reason = `已达到 ${this.config.maxAssignments} 次部门派工上限；请检查任务或调整本机公司配置。`;
@@ -414,8 +423,8 @@ export class Company {
             if (!this.config.topics) throw Error("选题流程尚未启用");
             validateTopicSubmission(dirname(this.config.database), task.id, report.inspection.topics, now);
           }
-          if (!this.config.topics && this.config.workday?.prepareDrafts && task.kind.startsWith("workday-"))
-            validateDraftPlan(dirname(this.config.database), task.id, report.inspection, now);
+          if (this.config.workday?.prepareDrafts)
+            validateDraftPlan(dirname(this.config.database), task.id, report.inspection, now, !!this.config.topics);
         } catch (error) {
           throw new CompanyInputError((error as Error).message);
         }

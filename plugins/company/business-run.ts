@@ -2,6 +2,8 @@ import { publicationResults } from "./publication-policy.ts";
 import { manualXNotice } from "./rabbitrun.ts";
 import { collectFeedback } from "./feedback.ts";
 import { ModelBudget } from "./model-budget.ts";
+import { scheduledReport } from "./reporting.ts";
+import { localDay } from "./workday.ts";
 import { workflows } from "./company.ts";
 import { syncOwnerReplyCards, syncTopicCards } from "./owner-replies.ts";
 import { failedWork } from "./recovery.ts";
@@ -77,7 +79,14 @@ try {
     const budget = new ModelBudget(dirname(configFile), config);
     try {
       for (const task of queued) {
-        if (!budget.available(workflows[task.kind][task.stage], now, task.id)) continue;
+        const reportDate =
+          task.kind === "ceo" && config.reporting?.enabled ? scheduledReport(dirname(configFile), task.id) : undefined;
+        // Expired reports resume only to record their terminal state; dispatch never starts a model for them.
+        if (
+          !(reportDate && reportDate < localDay(now)) &&
+          !budget.available(workflows[task.kind][task.stage], now, task.id)
+        )
+          continue;
         resumes.push(resume(task));
       }
       const usage = budget.snapshot(now);

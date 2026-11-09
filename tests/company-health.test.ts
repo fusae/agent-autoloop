@@ -256,3 +256,53 @@ test("Friday combined report is checked after 21:00, never mistaken for a missin
   f.now = new Date("2026-11-13T13:15:00Z");
   assert.ok(kinds(f).includes("report-missing"));
 });
+
+test("valid chairman waits are not mistaken for a silent employee, while missing waits still are", () => {
+  const f = fixture(),
+    s = f.projects[0].staff[0];
+  f.chief.questions.push({ id: "decision", state: "open", issues: ["issue"] } as any);
+  f.chief.issues.push({ id: "issue", business: "app", state: "owner" } as any);
+  s.daily!.waiting = { kind: "owner", id: "decision" };
+  assert.ok(!kinds(f).includes("not-started"));
+  s.daily!.waiting.id = "missing";
+  assert.ok(kinds(f).includes("not-started"));
+});
+
+test("retrospectives are real output and weekly employee failures remain visible", () => {
+  const f = fixture();
+  f.chief.weeklyCycles = [
+    {
+      week: "2026-11-09",
+      date: "2026-11-13",
+      staff: [{ business: "app", role: "growth", task: "WEEK-app", through: 0 }],
+    },
+  ];
+  f.runtime.rounds = [
+    { id: 4, role: "growth", task: "WEEK-app", at: now.toISOString(), state: "failed", attempts: 2, failure: "failed" },
+  ];
+  assert.ok(kinds(f).includes("failed"));
+  f.runtime.rounds = [1, 2, 3].map((id) => ({
+    id,
+    role: "ceo",
+    task: `t${id}`,
+    at: now.toISOString(),
+    state: "done",
+    attempts: 1,
+  }));
+  f.tasks = [
+    { id: "t3", reports: [{ artifacts: [], retrospective: { review: "真实复盘", notes: "经验", through: 1 } }] },
+  ] as any;
+  assert.ok(!kinds(f).includes("idle"));
+});
+
+test("waiting for topic approval is not employee inactivity and does not suppress the chairman reminder", () => {
+  const f = fixture();
+  f.config.topics = { startAt: "2026-11-09T01:00:00Z" };
+  f.projects[0].topics = [{ id: "t", role: "growth", state: "pending", batch: "b" }] as any;
+  f.projects[0].topicBatches = [{ id: "b", topics: ["t"], at: "2026-11-09T01:00:00Z" }];
+  f.now = new Date("2026-11-09T05:15:00Z");
+  assert.ok(!kinds(f).includes("not-started"));
+  assert.ok(kinds(f).includes("topics"));
+  f.projects[0].topics![0].state = "approved";
+  assert.ok(kinds(f).includes("not-started"));
+});

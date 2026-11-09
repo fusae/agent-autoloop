@@ -625,3 +625,144 @@ test("overdue-topic notices use durable daily keys and never repeat inside 24 ho
     },
     { health: { enabled: true } },
   ));
+
+// A consumed wakeup must not strand unscreened topics, including rabbitrun's larger meeting.
+test("unscreened topics wake CEO even when the event fingerprint was already consumed", () =>
+  fixture((f: any) => {
+    meeting(f);
+    const db = new DatabaseSync(join(f.dir, "operations.db"));
+    try {
+      const chief = f.o.executive();
+      chief.lastTask = null;
+      chief.eventInputs = f.o.eventInputs(chief, f.b.list(), f.c.tasks(), now);
+      db.prepare("UPDATE leadership SET body=? WHERE id='company'").run(JSON.stringify(chief));
+      const next = f.tick();
+      assert.equal(f.work(next, "ceo").length, 1);
+      assert.equal(f.work(f.tick(), "ceo").length, 0, "unconsumed task creation is already pending");
+    } finally {
+      db.close();
+    }
+  }));
+
+test("topic pool retains the two-draft cap without requiring unapproved production", () =>
+  fixture(
+    (f: any) => {
+      const first = f.tick();
+      for (const e of f.work(first, "check-growth"))
+        deliverTopics(f, e, [proposal("one"), proposal("two"), proposal("three")]);
+      const next = f.tick();
+      for (const e of f.work(next, "workday-growth")) {
+        f.deliver(e, []);
+        assert.equal(f.c.task(e.subject).status, "completed", "waiting for chairman must not demand a draft");
+      }
+      const cards = f.decide({ topicReviews: reviews(f) }).ask;
+      const card = cards.find((a: any) => a.text.startsWith("业务：app\n"));
+      const approved = f.tick(now, [{ card: 810, about: card.about, choice: 0 }]);
+      const task = f.work(approved, "check-growth").find((e: any) => JSON.parse(e.detail).title.startsWith("app"));
+      assert.ok(task);
+      const topics = getProject(f).topics;
+      f.deliver(
+        task,
+        topics.map((t: any, i: number) => ({ ...action(`draft${i}`), topic: t.id })),
+      );
+      assert.equal(f.c.task(task.subject).status, "blocked");
+      assert.match(f.c.task(task.subject).reason, /最多2篇/);
+    },
+    { workday: { enabled: true, after: "09:00", prepareDrafts: true } },
+  ));
+
+test("CEO cannot reserve one approved topic twice in the same decision", () =>
+  fixture((f: any) => {
+    meeting(f);
+    const card = f.decide({ topicReviews: reviews(f) }).ask.find((a: any) => a.text.startsWith("业务：app\n"));
+    f.tick(now, [{ card: 811, about: card.about, choice: 0 }]);
+    const topic = getProject(f).topics[0].id;
+    f.decide({
+      directives: [
+        { business: "app", action: { ...action("first"), topic } },
+        { business: "app", action: { ...action("second"), topic } },
+      ],
+    });
+    assert.equal(getProject(f).plans.filter((a: any) => a.topic === topic).length, 0);
+  }));
+
+test("a business without an on-duty growth employee cannot block other topic cards", () =>
+  fixture((f: any) => {
+    f.o.configure("other", "growth", { enabled: false }, now);
+    const first = f.tick();
+    for (const e of f.work(first, "check-growth")) deliverTopics(f, e, [proposal()]);
+    f.tick();
+    const result = f.decide({ topicReviews: reviews(f) });
+    assert.equal(result.ask?.filter((a: any) => a.title === "选题拍板").length, 1);
+  }));
+
+test("last week's screened topic is not held hostage by this week's unfinished meeting", () =>
+  fixture((f: any) => {
+    meeting(f);
+    const db = new DatabaseSync(join(f.dir, "operations.db"));
+    try {
+      const p = getProject(f);
+      p.topics[0].meeting = "2026-11-02";
+      p.topics[0].week = "2026-11-02";
+      db.prepare("UPDATE projects SET body=? WHERE id='app'").run(JSON.stringify(p));
+      const r = f.decide({
+        topicReviews: [{ business: "app", topic: p.topics[0].id, approve: true, reason: "旧选题仍可用", rank: 1 }],
+      });
+      assert.ok(r.ask?.some((a: any) => a.title === "选题拍板" && a.text.startsWith("业务：app\n")));
+    } finally {
+      db.close();
+    }
+  }));
+
+test("pending topic reviews do not bypass exhausted CEO repairs with a brand-new task", () =>
+  fixture((f: any) => {
+    const first = f.tick();
+    for (const e of f.work(first, "check-growth")) deliverTopics(f, e, [proposal()]);
+    const ceo = f.work(first, "ceo")[0];
+    f.send("company-inbox", ceo.type, ceo.subject, JSON.parse(ceo.detail));
+    const fail = (assignment: number) =>
+      f.send("company-inbox", "company.task.failed", ceo.subject, { assignment, reason: "运行失败：临时错误" });
+    fail(1);
+    for (const minutes of [1, 7]) {
+      const r = f.tick(new Date(+now + minutes * 60000));
+      const retry = r.events?.find((e: any) => e.type === "company.task.retry" && e.subject === ceo.subject);
+      assert.ok(retry);
+      f.send("company-inbox", retry.type, retry.subject, {});
+      fail(f.c.task(ceo.subject).assignment);
+    }
+    const r = f.tick(new Date(+now + 13 * 60000));
+    assert.equal(f.work(r, "ceo").length, 0);
+    f.restart();
+    assert.equal(f.work(f.tick(new Date(+now + 20 * 60000)), "ceo").length, 0);
+  }));
+
+test("legacy content actions without operation retain the same stock cap", () =>
+  fixture(
+    (f: any) => {
+      meeting(f);
+      const cards = f.decide({ topicReviews: reviews(f) }).ask;
+      f.tick(now, [{ card: 900, about: cards.find((a: any) => a.text.startsWith("业务：app\n")).about, choice: 0 }]);
+      const p = getProject(f),
+        db = new DatabaseSync(join(f.dir, "operations.db"));
+      try {
+        p.plans = ["a", "b", "c"].map((id) => ({
+          ...action(id),
+          operation: undefined,
+          id,
+          owner: "growth",
+          proposedBy: "growth",
+          status: "proposed",
+          createdAt: now.toISOString(),
+          task: null,
+        }));
+        db.prepare("UPDATE projects SET body=? WHERE id='app'").run(JSON.stringify(p));
+        f.decide({
+          approvals: p.plans.map((a: any) => ({ business: "app", plan: a.id, approve: true, reason: "通过" })),
+        });
+        assert.ok(getProject(f).plans.every((a: any) => a.status === "proposed"));
+      } finally {
+        db.close();
+      }
+    },
+    { workday: { enabled: true, after: "09:00", prepareDrafts: true } },
+  ));

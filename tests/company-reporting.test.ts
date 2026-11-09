@@ -279,3 +279,58 @@ test("health mode queues the same daily report at 20:30 and appends verified inc
     },
     { health: { enabled: true } },
   ));
+
+test("failed registered daily report retries its original task, rather than remaining a terminal notice", () =>
+  fixture((f: any) => {
+    const report = f.work(f.tick(evening))[0];
+    f.send("company-inbox", report.type, report.subject, JSON.parse(report.detail), evening);
+    f.send(
+      "company-inbox",
+      "company.task.failed",
+      report.subject,
+      { assignment: 1, reason: "运行失败：临时超时" },
+      evening,
+    );
+    const next = f.tick(new Date(+evening + 60000));
+    assert.ok(next.events?.some((e: any) => e.type === "company.task.retry" && e.subject === report.subject));
+    assert.equal(f.work(next).filter((e: any) => e.type === "company.task.create").length, 0);
+    f.restart();
+    assert.equal(
+      f.tick(new Date(+evening + 120000)).events?.filter((e: any) => e.type === "company.task.retry").length ?? 0,
+      0,
+    );
+  }));
+
+test("a quota-deferred prior-day report retires without a model and does not block current management", () =>
+  fixture((f: any) => {
+    const first = f.tick(evening);
+    for (const e of first.events ?? [])
+      if (e.type === "company.task.create") {
+        f.send("company-inbox", e.type, e.subject, JSON.parse(e.detail), evening);
+        if (e.subject.startsWith("REPORT-"))
+          f.send("company-ceo", "company.model.deferred", e.subject, { assignment: 1 }, evening);
+        else
+          f.send(
+            "company-ceo",
+            "company.result",
+            e.subject,
+            {
+              assignment: 1,
+              verdict: "pass",
+              summary: "经营安排",
+              artifacts: [],
+              evidence: ["资料"],
+              executive: decision(),
+            },
+            evening,
+          );
+      }
+    const report = f.work(first)[0],
+      next = new Date("2026-11-09T01:05:00Z");
+    const wake = f.tick(next);
+    assert.ok(wake.events?.some((e: any) => e.type === "company.task.create" && e.subject.startsWith("CEO-")));
+    const receipt = f.send("company-inbox", "company.task.resume", report.subject, {}, next);
+    assert.equal(f.c.task(report.subject).status, "blocked");
+    assert.match(f.c.task(report.subject).reason, /跨日/);
+    assert.ok(!receipt.events?.some((e: any) => e.type === "company.work.ceo"));
+  }));

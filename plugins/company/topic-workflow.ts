@@ -131,7 +131,7 @@ export class TopicWorkflow {
     );
     for (const p of readyProjects) {
       const ready = (p.topics ?? [])
-        .filter((t) => t.state === "ready" && (!t.meeting || !(weeklyWaiting || screening)))
+        .filter((t) => t.state === "ready" && (t.meeting !== weekOf(now) || !(weeklyWaiting || screening)))
         .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
       if (!ready.length || (receipt.ask?.length ?? 0) >= 5) continue;
       // Each packet fits the existing 4,000-character card boundary without dropping proposal fields.

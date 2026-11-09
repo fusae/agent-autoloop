@@ -359,3 +359,17 @@ test("collection failure includes older posts this week and old owner metrics do
     );
     assert.deepEqual(list.find((x) => x.publication === p.key)?.fields, ["reads", "likes", "collects", "comments"]);
   }));
+
+test("registered employee retrospective failures enter bounded recovery and retain their identity", () =>
+  fixture((f) => {
+    const report = work(f.tick("18:00"), "WEEK-")[0];
+    f.send("company-inbox", report.type, report.subject, JSON.parse(report.detail));
+    f.send("company-inbox", "company.task.failed", report.subject, { assignment: 1, reason: "运行失败：临时超时" });
+    assert.ok(f.tick("18:15").events?.some((e) => e.type === "company.task.retry" && e.subject === report.subject));
+    f.restart();
+    assert.equal(
+      f.tick("18:16").events?.filter((e) => e.type === "company.task.retry" && e.subject === report.subject).length ??
+        0,
+      0,
+    );
+  }));

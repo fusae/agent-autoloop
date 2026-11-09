@@ -85,6 +85,7 @@ function outputSignature(task: Task | undefined, round: HealthRuntime["rounds"][
     report.inspection?.reviews ?? [],
     report.inspection?.questions ?? [],
     report.inspection?.topics ?? [],
+    report.retrospective ? [report.retrospective] : [],
     report.verdict !== "pass" ? [report.verdict] : [],
     ...(d
       ? [
@@ -121,7 +122,12 @@ export function detectHealth(input: {
     ms = now.getTime();
   const add = (key: string, v: Omit<HealthFinding, "id">) => found.push({ ...v, id: healthId(key) });
   const reviewing =
-    tasks.some((t) => t.kind === "ceo" && ["active", "queued"].includes(t.status)) ||
+    tasks.some(
+      (t) =>
+        t.kind === "ceo" &&
+        ["active", "queued"].includes(t.status) &&
+        !(t.status === "queued" && chief.eveningReports?.some((r) => r.task === t.id && r.date < date)),
+    ) ||
     (!!chief.lastTask && !tasks.some((t) => t.id === chief.lastTask));
   for (const p of projects) {
     for (const batch of p.topicBatches ?? []) {
@@ -177,7 +183,16 @@ export function detectHealth(input: {
             (s.weeklyGoal.metrics.find((m) => m.unit === "篇")?.target ?? 0)
           : s.weeklyGoal.metrics.some((m) => m.target !== null && m.target > 0));
       const start = Math.max(Date.parse(`${date}T09:00:00+08:00`), Date.parse(p.createdAt));
-      if (unmet && !count && ms - start >= 3600_000)
+      const validWait = !!s.daily?.waiting && !waitingReason(s.daily, p.business, chief, p.plans);
+      const stock = draftStock(p.plans, s.weeklyGoal, publications, now);
+      const waitingContent =
+        s.role === "growth" &&
+        ((stock.target !== null && stock.published + stock.ready >= stock.target) ||
+          (!!config.topics &&
+            !stock.making &&
+            !p.topics?.some((t) => t.role === s.role && t.state === "approved" && !t.plan) &&
+            !!p.topics?.some((t) => t.role === s.role && ["screening", "ready", "pending"].includes(t.state))));
+      if (unmet && !count && !validWait && !waitingContent && ms - start >= 3600_000)
         add(`not-started:${key}:${date}`, {
           kind: "not-started",
           business: p.business,
@@ -251,8 +266,14 @@ export function detectHealth(input: {
     }
   }
   const groups = new Map<string, typeof runtime.rounds>();
+  const projectFor = (task?: string) =>
+    projects.find(
+      (p) =>
+        p.activity.some((a) => a.task === task) ||
+        chief.weeklyCycles?.some((c) => c.staff.some((s) => s.task === task && s.business === p.business)),
+    );
   for (const r of runtime.rounds.filter((r) => ["done", "nothing", "failed", "waiting"].includes(r.state))) {
-    const project = projects.find((p) => p.activity.some((a) => a.task === r.task));
+    const project = projectFor(r.task);
     if (
       r.role !== "ceo" &&
       (!project ||
@@ -269,7 +290,7 @@ export function detectHealth(input: {
     const rounds = all.sort((a, b) => b.at.localeCompare(a.at) || b.id - a.id),
       last = rounds[0];
     if (!last || ms - Date.parse(last.at) > 86400_000) continue;
-    const project = projects.find((p) => p.activity.some((a) => a.task === last.task));
+    const project = projectFor(last.task);
     const breakAt = rounds.findIndex((r) => !r.failure);
     const failures = Math.max(last.attempts, breakAt < 0 ? rounds.length : breakAt);
     if (last.failure && (last.failure !== "failed" || failures >= 2))
