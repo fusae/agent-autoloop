@@ -252,7 +252,15 @@ test("assigned model rounds require their own report even when no business actio
 
 // Pending topics are real work even when there are no manuscripts to review.
 test("a pending topic cannot be hidden by an empty management receipt", () => {
-  const marker = { companyModel: "claude", companyWork: { task: "CEO-test", assignment: 1, topicsPending: true } };
+  const marker = {
+    companyModel: "claude",
+    companyWork: {
+      task: "CEO-test",
+      assignment: 1,
+      topicsPending: true,
+      topicRefs: [{ business: "app", topic: "topic" }],
+    },
+  };
   const read = (executive: object) =>
     agent.read(
       JSON.stringify(marker) +
@@ -280,6 +288,14 @@ test("a pending topic cannot be hidden by an empty management receipt", () => {
   const empty = { briefs: [], directives: [], approvals: [], answers: [], escalations: [] };
   assert.match(read(empty).receiptProblem ?? "", /待初筛选题/);
   assert.equal(read({ ...empty, report: "今日汇报：选题待筛，发布未发生。" }).receiptProblem, undefined);
+  // A human-readable topic key passes the schema but would be rejected by the business consumer.
+  assert.match(
+    read({
+      ...empty,
+      topicReviews: [{ business: "app", topic: "writer-topic-key", approve: false, reason: "与旧题重复", rank: 1 }],
+    }).receiptProblem ?? "",
+    /不能使用 key/,
+  );
   assert.equal(
     read({
       ...empty,

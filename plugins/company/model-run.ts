@@ -68,6 +68,16 @@ if (!allowed) {
                 JSON.parse(readFileSync(join(turn.folder, "ceo-review.json"), "utf8")).projects.some((p: any) =>
                   p.topics?.some((t: any) => t.state === "screening"),
                 ),
+              ...(role === "ceo"
+                ? {
+                    topicRefs: JSON.parse(readFileSync(join(turn.folder, "ceo-review.json"), "utf8")).projects.flatMap(
+                      (p: any) =>
+                        (p.topics ?? [])
+                          .filter((t: any) => t.state === "screening")
+                          .map((t: any) => ({ business: p.business, topic: t.id })),
+                    ),
+                  }
+                : {}),
             },
           }
         : {}),

@@ -17,7 +17,12 @@ function modelReading(
   stdout: string,
   code: number | null,
   stderr: string,
-  work?: { task: string; assignment: number; topicsPending?: boolean },
+  work?: {
+    task: string;
+    assignment: number;
+    topicsPending?: boolean;
+    topicRefs?: { business: string; topic: string }[];
+  },
 ): Reading {
   const reading: Reading = (engine === "codex" ? codex : claude).read(stdout, code, stderr);
   if (reading.session) reading.session = `company:${engine}:${reading.session}`;
@@ -58,6 +63,15 @@ function modelReading(
       const detail = JSON.parse(event.detail ?? "{}");
       if (work?.topicsPending && event.type === "company.result" && event.subject === work.task) {
         const d = executiveDecision(detail.executive);
+        if (
+          work.topicRefs &&
+          d.topicReviews?.some(
+            (review) => !work.topicRefs!.some((ref) => ref.business === review.business && ref.topic === review.topic),
+          )
+        )
+          throw Error(
+            "选题初筛编号不匹配：topicReviews[].topic 必须使用本次 ceo-review.json 对应选题的 id，不能使用 key 或标题；只纠正编号，保留已有初筛结论，不重做业务。",
+          );
         if (
           !d.report &&
           ![
