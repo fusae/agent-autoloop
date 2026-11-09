@@ -1,4 +1,5 @@
 import { reviewVersion } from "./review-version.ts";
+import { waitingReason } from "./waiting.ts";
 import { pendingXReminder } from "./rabbitrun.ts";
 import { draftSummaries } from "./content.ts";
 import { employeeEntries, validateReporting, nextReportTime, reportTime, type EmployeeReport } from "./reporting.ts";
@@ -78,6 +79,7 @@ function mergeFollowups(s: Employee) {
   s.followups = kept;
 }
 export type Employee = {
+  waitRepairs?: { at: string; reason: string }[];
   name?: string;
   reports?: EmployeeReport[];
   weeklyGoal?: WeeklyGoal;
@@ -203,6 +205,45 @@ export class Operations {
     this.db
       .prepare("INSERT INTO leadership VALUES ('company',?) ON CONFLICT(id) DO UPDATE SET body=excluded.body")
       .run(JSON.stringify(c));
+  }
+  private repairScheduling(c: Leadership, businesses: Portfolio, now: Date) {
+    for (const b of businesses.filter((b) => b.autonomy && b.status === "active")) {
+      const p = this.get(b.id, now),
+        before = JSON.stringify(p);
+      const goals = p.staff.filter((s) => this.onDuty(s) && s.weeklyGoal?.week === weekOf(now));
+      const onboarding = this.config.workday?.enabled && !c.briefs[b.id] && goals.length > 0;
+      if (onboarding) {
+        c.briefs[b.id] = goals
+          .map((s) => s.weeklyGoal!.direction)
+          .join("；")
+          .slice(0, 300);
+        const issue = c.issues.find((i) => i.id === hash(`onboarding:${b.id}`) && i.state === "open");
+        if (issue && !c.questions.some((q) => q.state === "open" && q.issues.includes(issue.id))) {
+          issue.state = "answered";
+          issue.answer = "已按确认的本周目标补齐安排；未知指标不阻止独立工作";
+        }
+      }
+      for (const s of p.staff) {
+        if (!this.onDuty(s)) continue;
+        const reason = s.daily && waitingReason(s.daily, b.id, c, p.plans);
+        if (reason) (s.waitRepairs ??= []).push({ at: now.toISOString(), reason });
+        if (s.followups) s.followups = s.followups.filter((f) => !waitingReason(f, b.id, c, p.plans));
+        if (reason || (onboarding && !s.daily && s.weeklyGoal?.week === weekOf(now))) {
+          const goal = s.weeklyGoal?.direction ?? s.daily?.goal ?? b.objective;
+          s.daily = {
+            date: day(now),
+            goal: goal.slice(0, 120),
+            focus: "按已确认目标推进可独立完成的工作",
+            doneWhen: "交付可审核成果，未知数据明确标注",
+            mode: "followup",
+            reviewAt: new Date(now.getTime() + 3600_000).toISOString(),
+            issuedAt: now.toISOString(),
+          };
+          s.nextAt = now.toISOString();
+        }
+      }
+      if (before !== JSON.stringify(p)) this.save(p, "schedule-repaired", now);
+    }
   }
   leadership(enabled: boolean, now = new Date()) {
     const c = this.executive();
@@ -1659,6 +1700,7 @@ export class Operations {
         beforeProcessed = chief.processed;
       if (chief.enabled) this.manage(chief, businesses, tasks, answers, receipt, now);
       this.conversation(chief, businesses, tasks, events, receipt, now);
+      if (chief.enabled) this.repairScheduling(chief, businesses, now);
       if (chief.enabled) {
         if (depth <= 1) {
           this.recover(chief, businesses, tasks, receipt, now);
@@ -1902,6 +1944,7 @@ export class Operations {
             if (
               !capacity() ||
               !this.onDuty(s) ||
+              !!s.daily?.waiting ||
               busy().some((a) => a.role === s.role) ||
               s.workday?.date === day(now) ||
               s.weeklyGoal?.week !== weekOf(now) ||
@@ -1960,7 +2003,8 @@ export class Operations {
             (!!this.config.permissions &&
               !publishing &&
               (a.kind === "software" || (!!a.operation && !automatic(a.operation)))) ||
-            (!publishing && busy().some((v) => v.role === a.owner))
+            (!publishing &&
+              (!!p.staff.find((s) => s.role === a.owner)?.daily?.waiting || busy().some((v) => v.role === a.owner)))
           )
             continue;
           if (

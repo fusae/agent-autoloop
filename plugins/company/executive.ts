@@ -1,6 +1,7 @@
 import { weeklyGoal, type WeeklyGoal } from "./workday.ts";
 import { inspection, type ActionProposal } from "./inspection.ts";
 export type StaffPlan = {
+  waiting?: { kind: "owner" | "plan"; id: string };
   business: string;
   role: "product" | "engineering" | "qa" | "growth" | "support" | "finance";
   date: string;
@@ -157,6 +158,15 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
               throw Error("每日安排复查时间需要带时区的日期时间");
             if (a.mode === "work" && !a.plan) throw Error("执行安排必须关联已有计划或本轮指令key");
             return {
+              ...(a.waiting !== undefined
+                ? {
+                    waiting: (() => {
+                      const wait = object(a.waiting);
+                      if (!["owner", "plan"].includes(wait.kind)) throw Error("等待条件类型不正确");
+                      return { kind: wait.kind as "owner" | "plan", id: id(wait.id) };
+                    })(),
+                  }
+                : {}),
               business: id(a.business),
               role: a.role,
               date,

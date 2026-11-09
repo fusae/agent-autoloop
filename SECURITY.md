@@ -84,3 +84,5 @@ Claude 适配器每轮用不含凭据的内联 settings 强制自身沙箱：不
 Rabbitrun publishing uses a root-owned, no-argument sudo entry point that rechecks the frozen draft and chairman approval. The Binance key stays in a root-only 0600 file and is never passed to models or command arguments. Unknown network outcomes do not authorize retries. X is posted manually by the owner. The Feishu completion callback validates the owner, original message and card version before updating the publisher receipt; no model or X publishing process starts. X links are optional and validated when supplied. See [the deployment boundary](examples/recipes/company/rabbitrun.md).
 
 公司 CEO 审核由插件核对当前任务及交付报告版本，过期或无版本结论不改业务状态；失败重试读取最新资料，回执格式修复不重标旧结论。发布仍须原有负责人确认，补派审核不代表批准发布。
+
+等待条件只引用公司账本中本业务的真实未关闭问题或未完成计划；清除无效等待不等于负责人答复或发布批准。

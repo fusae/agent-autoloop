@@ -292,3 +292,5 @@ CEO 审核及失败重试读取当前交付，结论带版本；过期结论作�
 Claude Code 适配器现在强制沙箱，需 CLI 2.1.317 或更新版本；Linux 另需 bubblewrap、socat。OAuth 与 API key 不能共存，`full` 也保留隔离，详见[权限边界](docs/plugins.md#access-实际能做什么)。
 
 公司工作台支持 [rabbitrun 海外运营](examples/recipes/company/rabbitrun.md)：币安官方图文发布、逐篇飞书确认、X 由董事长手动发布，飞书卡片确认已发，密钥不交给员工。
+
+公司等待条件必须关联真实未关闭问题或未完成依赖；新业务已有周目标时自动补齐安排，见[等待条件](docs/company.md#等待条件与接入修复)。

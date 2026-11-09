@@ -286,3 +286,5 @@ Company content quality includes published and manual posts plus current drafts,
 The Claude Code adapter requires CLI 2.1.317 or newer and enforces sandboxing in every access mode; Linux also needs bubblewrap and socat. OAuth and API-key credentials cannot coexist. See [access boundaries](docs/plugins.md#access-实际能做什么).
 
 The company client also supports [rabbitrun overseas operations](examples/recipes/company/rabbitrun.md): Binance Square text/image publishing, permanent per-post owner approval, and manual X posting by the owner with a Feishu completion button. Credentials remain outside employee processes.
+
+Company waits require an open owner question or unfinished dependency; confirmed weekly goals initialize missing onboarding structures. See [scheduling recovery](docs/company.md#等待条件与接入修复).

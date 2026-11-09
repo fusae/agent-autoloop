@@ -1,6 +1,6 @@
 // Failure modes: deployment starts staff early; repeated ticks duplicate work; plans bypass approval,
 // direction changes skip the chairman; one project consumes both employees' model allowance;
-// initialization silently overwrites goals or a corrected week loses the CEO's rollover reference.
+// initialization silently overwrites goals, orphan waits block onboarding, or a corrected week loses the CEO's rollover reference.
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -210,6 +210,54 @@ test("workday waits for current CEO arrangement and starts once per employee eve
       now,
     );
     assert.equal(work(tick(), "staff-growth").length, 1);
+  }));
+
+test("onboarding fills the CEO brief and daily structure from confirmed goals, then dispatches once", () =>
+  fixture(({ tick, work, o, restart, b, c }: any) => {
+    assert.equal(o.executive().briefs.app, undefined);
+    assert.equal(work(tick(), "workday-growth").length, 2);
+    assert.equal(o.executive().briefs.app, goal().direction);
+    const staff = o.snapshot(b.list(), c.tasks(), now)[0].staff.find((s: any) => s.role === "growth");
+    assert.ok(staff.daily.focus && staff.daily.doneWhen && staff.daily.reviewAt);
+    restart();
+    assert.equal(work(tick(), "workday-growth").length, 0);
+  }));
+
+test("a prose-only owner wait is cleared without inventing an answer and work starts naturally", () =>
+  fixture(({ decide, daily, work, o, b, c }: any) => {
+    const r = decide({
+      staffPlans: [
+        {
+          ...daily(),
+          mode: "standby",
+          focus: "负责人尚未答复，明日复查",
+          doneWhen: "负责人答复到达",
+          reviewAt: "2026-11-10T01:30:00Z",
+        },
+      ],
+    });
+    assert.equal(work(r, "workday-growth").length, 2);
+    const staff = o.snapshot(b.list(), c.tasks(), now)[0].staff.find((s: any) => s.role === "growth");
+    assert.equal(staff.daily.waiting, undefined);
+    assert.equal(staff.daily.mode, "followup");
+    assert.equal(staff.waitRepairs.length, 1);
+    assert.equal(o.executive().questions.length, 0);
+  }));
+
+test("a real owner wait holds work until the authenticated answer, then resumes once", () =>
+  fixture(({ decide, daily, work, tick, o }: any) => {
+    const early = new Date("2026-11-09T00:59:00Z");
+    decide(
+      { escalations: [{ key: "source", business: "app", issues: [], question: "素材在哪？", context: "资料缺失" }] },
+      early,
+    );
+    const question = o.executive().questions[0];
+    decide({ staffPlans: [{ ...daily(), mode: "standby", waiting: { kind: "owner", id: question.id } }] });
+    assert.equal(work(tick(), "workday-growth").length, 0);
+    const resumed = tick(now, [{ card: 11, about: `ceo:${question.id}`, choice: null, text: "素材已补齐" }]);
+    assert.equal(work(resumed, "workday-growth").length, 1);
+    assert.equal(o.executive().questions[0].answer, "素材已补齐");
+    assert.equal(work(tick(), "workday-growth").length, 0);
   }));
 test("permissions auto-approve only safe own work and refuse unsafe CEO directives", () =>
   fixture(({ decide, daily, work, deliver, tick, o, b, c }: any) => {
