@@ -203,6 +203,19 @@ export async function startDashboard(directory: string, port = 3361, options: { 
           const snapshot = operations.snapshot(portfolio, tasks, now, chief);
           const latestReport = chief.eveningReports?.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
           const home = {
+            anomalies:
+              chief.health?.incidents
+                .filter((i) => !i.resolvedAt)
+                .map(({ id, title, impact, evidence, suggestion, firstAt, severity }) => ({
+                  id,
+                  title,
+                  impact,
+                  evidence,
+                  suggestion,
+                  firstAt,
+                  severity,
+                })) ?? [],
+            healthCheckedAt: chief.health?.checkedAt ?? null,
             ...homeData(directory, companyConfig, snapshot),
             leadership: { enabled: chief.enabled, openIssues: chief.issues.filter((i) => i.state === "open").length },
             ceoRun:

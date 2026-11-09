@@ -13,6 +13,13 @@ export type StaffPlan = {
   reviewAt: string;
 };
 export type ExecutiveDecision = {
+  responses?: {
+    anomaly: string;
+    action: "clear-wait" | "retry" | "review" | "pause" | "resume" | "plan" | "escalate" | "observe";
+    reason: string;
+    category?: "code" | "auth" | "quota" | "platform" | "decision";
+    request?: string;
+  }[];
   report?: string;
   weeklyGoals?: WeeklyGoal[];
   manualMetrics?: { publication: string; event: number; reads: number }[];
@@ -74,6 +81,7 @@ export type Knowledge = {
   at: string;
 };
 export type Leadership = {
+  health?: import("./health.ts").HealthState;
   eveningReports?: { date: string; task: string; processed?: boolean; failureNotified?: boolean }[];
   manualMetrics?: import("./feedback.ts").ManualMetric[];
   enabled: boolean;
@@ -122,6 +130,24 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
     return d[key].map(object);
   };
   return {
+    ...(d.responses !== undefined
+      ? {
+          responses: list("responses", 6).map((a) => {
+            if (!["clear-wait", "retry", "review", "pause", "resume", "plan", "escalate", "observe"].includes(a.action))
+              throw Error("异常处理动作不在CEO权限内");
+            if (a.action === "escalate" && !["code", "auth", "quota", "platform", "decision"].includes(a.category))
+              throw Error("上报需要说明董事长处理类别");
+            return {
+              anomaly: id(a.anomaly),
+              action: a.action as NonNullable<ExecutiveDecision["responses"]>[number]["action"],
+              reason: text(a.reason, 200, "responses.reason"),
+              ...(a.action === "escalate"
+                ? { category: a.category, request: text(a.request, 160, "responses.request") }
+                : {}),
+            };
+          }),
+        }
+      : {}),
     ...(d.report !== undefined ? { report: text(d.report, 1800, "report") } : {}),
     ...(d.weeklyGoals !== undefined ? { weeklyGoals: list("weeklyGoals", 6).map(weeklyGoal) } : {}),
     ...(d.manualMetrics !== undefined

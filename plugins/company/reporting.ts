@@ -28,6 +28,7 @@ export function validateReporting(config: Partial<CompanyConfig>) {
     throw Error("提前备稿开关不正确");
 }
 export const reportTime = (date: string, time: string) => new Date(`${date}T${time}:00+08:00`).toISOString();
+export const ceoReportTime = (config: Partial<CompanyConfig>) => (config.health?.enabled ? "20:30" : "21:00");
 export function nextReportTime(now: Date, time: string, done: boolean) {
   const at = new Date(reportTime(localDay(now), time));
   if (done) at.setUTCDate(at.getUTCDate() + 1);

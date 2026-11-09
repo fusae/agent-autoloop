@@ -63,6 +63,7 @@ export function companyBriefing(directory: string, task?: string) {
         ? {
             enabled: leader.enabled,
             briefs: leader.briefs,
+            anomalies: leader.health?.incidents.filter((i: any) => !i.resolvedAt) ?? [],
             nextReviewAt: leader.nextReviewAt,
             stalled: leader.stalled,
             issues: leader.issues,

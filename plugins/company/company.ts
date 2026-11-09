@@ -47,6 +47,7 @@ export type CompanyConfig = {
   dailyModelRuns?: Partial<Record<Role | "total" | "employee", number>>;
   workday?: { enabled: boolean; after: string; startDate?: string; prepareDrafts?: boolean };
   reporting?: { enabled: boolean };
+  health?: { enabled: boolean };
   permissions?: typeof permissions;
   publishVerification?: "qa" | "program";
   publishDailyLimit?: number;
@@ -168,6 +169,8 @@ export class Company {
     validatePublishPolicy(config);
     validateWorkday(config);
     validateReporting(config);
+    if (config.health !== undefined && typeof config.health?.enabled !== "boolean") throw Error("程序巡检开关不正确");
+    if (config.health?.enabled && !config.ceoMode) throw Error("程序巡检需要启用CEO");
     this.config = config;
     mkdirSync(dirname(config.database), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(config.database);

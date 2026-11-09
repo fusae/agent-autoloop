@@ -1,0 +1,10 @@
+[Unit]
+Description=Check company services independently every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Unit=agent-company-watchdog.service
+
+[Install]
+WantedBy=timers.target

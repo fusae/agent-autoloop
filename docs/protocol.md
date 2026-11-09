@@ -423,3 +423,5 @@ Ship 使用本引擎仓库的 `plugins/delivery/action.yml`，项目固定到发
 公司应用的业务级 `publishPolicies`、员工展示名及发布回执可选 `x` 状态均属插件约定；缺省兼容旧配置。rabbitrun 每篇永久确认、币安窄发布与 X 手动发布队列见 [说明](../examples/recipes/company/rabbitrun.md)，不改内核。
 
 公司每日安排新增可选 `waiting` 依赖引用，仅在公司插件验证与恢复；旧版文字等待会清除，既有有效待决卡不被回答。已有周目标的新业务补齐 CEO 摘要与初始安排，HTTP 协议与内核不变；见[等待条件与接入修复](company.md#等待条件与接入修复)。
+
+公司可选程序巡检与 `executive.responses` 是插件内部扩展：新字段缺省不生效，既有回执兼容；异常只读运行事实，经固定动作校验进入原派工和通知接口。独立systemd看门狗在插件外壳执行，不增加内核职责。详见[程序巡检](company.md#程序巡检与-ceo-处置)。

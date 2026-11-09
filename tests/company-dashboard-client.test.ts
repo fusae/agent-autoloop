@@ -253,3 +253,27 @@ test("each management view requests only its resource and approvals retain draft
   assert.match(b.node("#view-content").innerHTML, /查看全文和配图/);
   assert.match(b.node("#view-content").innerHTML, /data-choice="1"/);
 });
+
+test("home shows unresolved anomalies with escaped evidence and no approval controls", async () => {
+  const b = await browser();
+  const data = overview();
+  Object.assign(data.home, {
+    anomalies: [
+      {
+        id: "a",
+        title: "<script>异常</script>",
+        impact: "任务停止",
+        evidence: "<img src=x onerror=alert(1)>",
+        suggestion: "交CEO处理",
+      },
+    ],
+  });
+  b.waits.get("/api/overview")!(Response.json(data));
+  b.waits.delete("/api/overview");
+  await b.flush();
+  const html = b.node("#view-content").innerHTML;
+  assert.match(html, /未解决异常/);
+  assert.match(html, /&lt;script&gt;异常/);
+  assert.doesNotMatch(html, /<script>异常|<img src=x/);
+  assert.match(html, /交CEO处理/);
+});

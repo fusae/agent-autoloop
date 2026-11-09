@@ -1,0 +1,18 @@
+[Unit]
+Description=Company independent service watchdog
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=agentcompany
+Group=agentcompany
+Environment=HOME=/var/lib/agent-company
+Environment=PATH=/opt/agent-company/bin:/opt/agent-company/runtime/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/opt/agent-company/runtime/node_modules/.bin/node --disable-warning=ExperimentalWarning /opt/agent-company/app/plugins/company/watchdog.ts /var/lib/agent-company/company
+TimeoutStartSec=40
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/agent-company
+UMask=0077

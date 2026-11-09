@@ -1,6 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 680" role="img" aria-labelledby="t">
 <title id="t">Agent Autoloop architecture: a kernel in the middle, everything else a plugin</title>
 <desc>Company client model admission, daily quotas and supersession stay in plugins/company; the kernel protocol is unchanged. Shared-channel publication limits, owner approvals and restricted SSH publishing also stay outside the kernel. Company model wrappers preserve resumable sessions and route invalid receipts through bounded worker repair.</desc>
+<desc>公司插件按15分钟窗口巡检并校验CEO处置，独立systemd看门狗监测服务与心跳；首页和日报展示异常，内核不变。</desc>
 <defs>
 <style>
 svg{--bg:#faf9f5;--ink:#1d1c19;--muted:#6e6b64;--line:#d6d3cb;--card:#fff;--item:#f4f2ec;--accent:#c2491d;--core:#1d1c19;--core-ink:#faf9f5;--core-duty:#33302a;--core-chip:#282621;--core-line:#423f38;--core-sub:#b9b5ab;--core-accent:#ef8a62;--tag-bg:#3d261c;--tag-ink:#ffb08e;--you-bg:#fff4ee}

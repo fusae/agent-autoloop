@@ -6,7 +6,7 @@ import { workflows } from "./company.ts";
 import { syncOwnerReplyCards } from "./owner-replies.ts";
 import { failedWork } from "./recovery.ts";
 import { hubClient } from "../../protocol/client.ts";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { collectSources } from "./sources.ts";
 import { createHash } from "node:crypto";
@@ -69,11 +69,13 @@ try {
     summary: "继续排队工作",
     detail: "{}",
   });
-  const resumes = config.dailyModelRuns ? [] : tasks.filter((t) => t.status === "queued").map(resume);
+  const paused = operations.pausedTasks(businesses.list(), tasks, now);
+  const queued = tasks.filter((t) => t.status === "queued" && !paused.has(t.id));
+  const resumes = config.dailyModelRuns ? [] : queued.map(resume);
   if (config.dailyModelRuns) {
     const budget = new ModelBudget(dirname(configFile), config);
     try {
-      for (const task of tasks.filter((t) => t.status === "queued")) {
+      for (const task of queued) {
         if (!budget.available(workflows[task.kind][task.stage], now, task.id)) continue;
         resumes.push(resume(task));
       }
@@ -112,6 +114,11 @@ try {
   );
   const events = [...(proactive.events ?? []), ...(legacy.events ?? []), ...failures, ...resumes].slice(0, 100);
   const receipt = { ...proactive, ...(events.length ? { events } : {}) };
+  if (config.health?.enabled) {
+    const heartbeat = join(dirname(configFile), "health-heartbeat.json");
+    writeFileSync(heartbeat + ".tmp", JSON.stringify({ at: new Date().toISOString() }), { mode: 0o600 });
+    renameSync(heartbeat + ".tmp", heartbeat);
+  }
   process.stdout.write(`经营周期已检查。\n\n\`\`\`agent-autoloop\n${JSON.stringify(receipt)}\n\`\`\`\n`);
 } finally {
   operations.close();

@@ -130,3 +130,5 @@ Claude Code 需 2.1.317 或更新版本；Linux 安装 `bubblewrap`、`socat`。
 公司 rabbitrun 业务、root 发布入口及飞书手动发布确认的安装边界见 [海外运营配置](examples/recipes/company/rabbitrun.md)；不要用真实发布验证安装。
 
 公司等待校验升级须同步 executive、operations、waiting 和 setup 插件并运行既有规则刷新；无需修改内核或手改业务数据库。
+
+公司程序巡检在私有 `company.json` 中启用 `health:{"enabled":true}`，同步本次公司插件及后台文件并刷新可信规则。独立看门狗使用仓库 `plugins/company/watchdog.service` 与 `.timer`，按实际安装路径检查后分别安装为 `agent-company-watchdog.service` / `.timer`；私有公司目录的 `watchdog.json` 只写 `{"callbackUrl":"http://127.0.0.1:3362/"}`（按实际回调端口设置），收件人和飞书CLI复用私有通道配置。先以假服务/假CLI验收，再在真实服务健康时启用timer；不发测试消息。升级前确认没有运行模型、备份业务库与规则、仅同步改动文件；引擎和后台需重启，回调服务无需重启。详见[独立看门狗](docs/company.md#独立看门狗)。

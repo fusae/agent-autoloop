@@ -114,7 +114,8 @@ async function openDraft(key) {
 async function copyDraft(key, button) {
   try {
     const draft = await api(`/api/publications/${encodeURIComponent(key)}`);
-    const text = draft.content.split(/\r?\n/, 1)[0] === draft.title ? draft.content : `${draft.title}\n\n${draft.content}`;
+    const text =
+      draft.content.split(/\r?\n/, 1)[0] === draft.title ? draft.content : `${draft.title}\n\n${draft.content}`;
     await navigator.clipboard.writeText(text);
     button.textContent = "已复制";
   } catch {
@@ -196,7 +197,8 @@ function homePosts(d) {
     const sign = m.change > 0 ? "+" : "";
     return `<div class="compare"><span>${label}</span><b>${homeNum(m.baseline)} → ${homeNum(m.result)}</b><small class="${m.change > 0 ? "up" : m.change < 0 ? "down" : ""}">${sign}${homeNum(m.change)}${m.percent != null ? `（${sign}${Math.round(m.percent)}%）` : ""}</small></div>`;
   };
-  const cards = posts.filter((post) => !results.find((r) => r.key === (post.key ?? post.publication))?.x)
+  const cards = posts
+    .filter((post) => !results.find((r) => r.key === (post.key ?? post.publication))?.x)
     .slice()
     .sort((a, b) => String(b.publishedAt).localeCompare(String(a.publishedAt)))
     .map((post) => {
@@ -222,7 +224,9 @@ function homePosts(d) {
   for (const proof of results.filter((r) => r.x)) {
     const x = proof.x;
     const label = x.state === "published" ? "X 已发" : "X 待发";
-    cards.push(`<li class="post"><div class="post-title"><h3>rabbitrun 币圈内容</h3><span>${homeShortDate(proof.publishedAt)} ${homeClock(proof.publishedAt)}</span> ${draftButton(proof.key, "全文和配图")} <button type="button" class="text-action" data-copy-draft="${esc(proof.key)}">复制全文</button></div><p><a href="${esc(proof.url)}" target="_blank" rel="noopener noreferrer">币安广场</a> · ${x.state === "published" && x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${label}</a>` : label}</p><p class="post-note">只记录发布结果，暂不采集互动数据。</p></li>`);
+    cards.push(
+      `<li class="post"><div class="post-title"><h3>rabbitrun 币圈内容</h3><span>${homeShortDate(proof.publishedAt)} ${homeClock(proof.publishedAt)}</span> ${draftButton(proof.key, "全文和配图")} <button type="button" class="text-action" data-copy-draft="${esc(proof.key)}">复制全文</button></div><p><a href="${esc(proof.url)}" target="_blank" rel="noopener noreferrer">币安广场</a> · ${x.state === "published" && x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${label}</a>` : label}</p><p class="post-note">只记录发布结果，暂不采集互动数据。</p></li>`,
+    );
   }
   const waiting = (d.home?.operations ?? d.operations ?? []).flatMap((p) =>
     (p.plans ?? [])
@@ -289,6 +293,7 @@ function homeHTML(d) {
         ? `<section class="home-block needs" aria-labelledby="needs-title"><div class="block-head"><h2 id="needs-title">等你处理</h2></div><div class="asks">${asks.map((c) => homeAsk(d, c)).join("")}</div></section>`
         : ""
     }
+    ${(d.home?.anomalies ?? []).length ? `<section class="home-block" aria-labelledby="anomaly-title"><div class="block-head"><h2 id="anomaly-title">未解决异常</h2><span class="muted">${d.home.anomalies.length} 项</span></div><ul class="queue">${d.home.anomalies.map((i) => `<li><details><summary>${esc(i.title)}</summary><p class="block-note">${esc(i.impact)}<br>依据：${esc(i.evidence)}<br>处理建议：${esc(i.suggestion)}</p></details></li>`).join("")}</ul></section>` : ""}
     ${homeStaff(d, growth, stock)}
     ${homePosts(d)}
     ${homeReports(d, growth)}

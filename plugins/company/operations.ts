@@ -1,5 +1,8 @@
 import { reviewVersion } from "./review-version.ts";
 import { waitingReason } from "./waiting.ts";
+import { canNotify, detectHealth, failureKind, healthDue, healthId, healthReport, reconcileHealth } from "./health.ts";
+import { healthRuntime } from "./health-runtime.ts";
+import { ceoReportTime } from "./reporting.ts";
 import { pendingXReminder } from "./rabbitrun.ts";
 import { draftSummaries } from "./content.ts";
 import { employeeEntries, validateReporting, nextReportTime, reportTime, type EmployeeReport } from "./reporting.ts";
@@ -79,6 +82,7 @@ function mergeFollowups(s: Employee) {
   s.followups = kept;
 }
 export type Employee = {
+  pausedByCEO?: boolean;
   waitRepairs?: { at: string; reason: string }[];
   name?: string;
   reports?: EmployeeReport[];
@@ -125,7 +129,7 @@ export type Plan = ActionProposal & {
   result: string;
 };
 type Signal = { id: string; title: string; detail: string; source: string; role: Role | "all"; at: string };
-type Project = {
+export type Project = {
   publishReservations?: PublishReservation[];
   business: string;
   owner: Role;
@@ -224,9 +228,20 @@ export class Operations {
         }
       }
       for (const s of p.staff) {
-        if (!this.onDuty(s)) continue;
+        if (!this.onDuty(s) && !s.pausedByCEO) continue;
         const reason = s.daily && waitingReason(s.daily, b.id, c, p.plans);
-        if (reason) (s.waitRepairs ??= []).push({ at: now.toISOString(), reason });
+        if (reason) {
+          (s.waitRepairs ??= []).push({ at: now.toISOString(), reason });
+          const incident = c.health?.incidents.find((i) => i.id === healthId(`wait:${b.id}:${s.role}`));
+          if (incident) {
+            incident.actions.push({
+              at: now.toISOString(),
+              action: "clear-wait",
+              result: "程序已撤销无效等待，按原目标恢复调度",
+            });
+            incident.resolvedAt = now.toISOString();
+          }
+        }
         if (s.followups) s.followups = s.followups.filter((f) => !waitingReason(f, b.id, c, p.plans));
         if (reason || (onboarding && !s.daily && s.weeklyGoal?.week === weekOf(now))) {
           const goal = s.weeklyGoal?.direction ?? s.daily?.goal ?? b.objective;
@@ -243,6 +258,160 @@ export class Operations {
         }
       }
       if (before !== JSON.stringify(p)) this.save(p, "schedule-repaired", now);
+    }
+  }
+  private inspectHealth(c: Leadership, businesses: Portfolio, tasks: Task[], receipt: Receipt, now: Date) {
+    if (!this.config.health?.enabled || !healthDue(c.health, now)) return;
+    const projects = businesses
+      .filter((b) => b.autonomy && b.status === "active")
+      .map((b) => ({ ...this.get(b.id, now), name: b.name, createdAt: b.createdAt }));
+    c.health = reconcileHealth(
+      c.health,
+      detectHealth({
+        now,
+        config: this.config,
+        chief: c,
+        tasks,
+        projects,
+        runtime: healthRuntime(this.directory, now),
+        publications: publicationResults(this.directory),
+      }),
+      now,
+    );
+    for (const incident of c.health.incidents.filter(
+      (i) =>
+        !i.resolvedAt &&
+        (i.reminderOnly ||
+          (i.role === "ceo" &&
+            (i.kind === "auth" ||
+              (["failed", "timeout"].includes(i.kind) && !!i.task && c.repairs?.[i.task]?.exhausted)))),
+    )) {
+      if (!canNotify(incident, now)) continue;
+      const action = incident.reminderOnly
+        ? "请查看原卡片并亲自决定或登记发布。"
+        : incident.kind === "auth"
+          ? "请恢复CEO登录认证。"
+          : "请检查并修复CEO运行故障。";
+      const tried = incident.reminderOnly
+        ? "程序已核对运行记录，保留原确认状态"
+        : incident.kind === "auth"
+          ? "程序已核对认证失败，CEO无法自行处理"
+          : "CEO任务已经自动修复两次，仍未取得有效结果";
+      (receipt.notice ??= []).push({
+        key: `health-${incident.id}-${c.health.revision}`,
+        title: "CEO · 异常上报",
+        text: `发生：${incident.title}。\n影响：${incident.impact}。\n已尝试：${tried}。\n需要董事长：${action}`,
+      });
+      incident.notifiedAt = now.toISOString();
+      incident.notifiedSeverity = incident.severity;
+      incident.actions.push({
+        at: now.toISOString(),
+        action: "escalate",
+        result: "已向董事长提醒，未代确认或改变权限",
+      });
+    }
+  }
+  private validateResponses(c: Leadership, businesses: Portfolio, tasks: Task[], d: ExecutiveDecision, now: Date) {
+    if (d.responses?.length && !this.config.health?.enabled) return "程序巡检尚未启用";
+    if (new Set(d.responses?.map((r) => r.anomaly)).size !== (d.responses?.length ?? 0))
+      return "同一异常每轮只能处理一次";
+    for (const r of d.responses ?? []) {
+      const incident = c.health?.incidents.find((i) => i.id === r.anomaly);
+      if (!incident) return "异常编号不存在";
+      if (incident.resolvedAt && ["clear-wait", "retry", "review"].includes(r.action)) continue;
+      if (["escalate", "observe"].includes(r.action)) continue;
+      const b = businesses.find((b) => b.id === incident.business && b.autonomy && b.status === "active");
+      if (!b) return "处理动作需要运行中的业务";
+      const p = this.get(b.id, now),
+        s = p.staff.find((s) => s.role === incident.role);
+      if (["pause", "resume", "clear-wait"].includes(r.action)) {
+        if (!s || (this.config.activeRoles && !this.config.activeRoles.includes(s.role)))
+          return "不能改变可信规则中的在岗名单";
+        if (r.action === "resume" && !s.pausedByCEO) return "只能恢复CEO暂停的员工";
+        if (r.action === "clear-wait" && s.daily && !waitingReason(s.daily, p.business, c, p.plans))
+          return "不能撤销真实有效等待";
+      }
+      if (r.action === "retry") {
+        const t = tasks.find((t) => t.id === incident.task);
+        if (
+          !t ||
+          t.status !== "blocked" ||
+          !this.currentTask(p, t.id) ||
+          this.pausedTask(p, t.id) ||
+          t.kind.includes("software") ||
+          t.kind === "publish-content" ||
+          incident.kind === "auth" ||
+          failureKind(t.reason) === "auth" ||
+          (c.retries[t.id] ?? 0) >= 2
+        )
+          return "只能有限重试当前受阻的非发布、非代码、非认证任务";
+      }
+      if (r.action === "review" && !p.plans.some((p) => p.id === incident.plan && p.status === "delivered"))
+        return "只能补派当前待审交付";
+      if (
+        r.action === "plan" &&
+        !d.staffPlans?.some((a) => a.business === b.id && (!incident.role || a.role === incident.role)) &&
+        !d.directives.some((a) => a.business === b.id)
+      )
+        return "调整计划必须同时提交staffPlans或安全内部指令";
+    }
+    return null;
+  }
+  private applyResponses(
+    c: Leadership,
+    d: ExecutiveDecision,
+    decision: string,
+    receipt: Receipt,
+    now: Date,
+    tasks: Task[],
+  ) {
+    for (const r of d.responses ?? []) {
+      const i = c.health!.incidents.find((i) => i.id === r.anomaly)!;
+      if (i.resolvedAt && ["clear-wait", "retry", "review"].includes(r.action)) continue;
+      if (r.action === "escalate") {
+        if (!canNotify(i, now)) continue;
+        const tried =
+          i.actions
+            .filter((a) => a.action !== "escalate")
+            .slice(-3)
+            .map((a) => a.result)
+            .join("；") || "已核对巡检证据，暂无可安全执行的修复";
+        (receipt.notice ??= []).push({
+          key: `health-${i.id}-${decision}`,
+          title: "CEO · 异常上报",
+          text: `发生：${i.title}。\n影响：${i.impact}。\n已尝试：${tried}；${r.reason}。\n需要董事长：${r.request}`,
+        });
+        i.notifiedAt = now.toISOString();
+        i.notifiedSeverity = i.severity;
+      } else if (r.action === "retry") {
+        c.pendingRetries ??= [];
+        if (!c.pendingRetries.some((p) => p.task === i.task)) c.pendingRetries.push({ task: i.task!, decision });
+      } else if (r.action === "review") {
+        const task = tasks.find((t) => t.id === i.task);
+        if (!task) continue;
+        const version = reviewVersion(task);
+        if (i.reviewVersion === version) continue;
+        i.reviewVersion = version;
+        c.health!.pending = true;
+        c.health!.revision++;
+      } else if (["pause", "resume"].includes(r.action)) {
+        const p = this.get(i.business!, now),
+          s = p.staff.find((s) => s.role === i.role)!;
+        s.enabled = r.action === "resume";
+        s.pausedByCEO = r.action === "pause";
+        this.save(p, `ceo-${r.action}`, now);
+      }
+      const labels = {
+        "clear-wait": "撤销无效等待",
+        retry: "排队重试非发布任务",
+        review: "补派当前交付审核",
+        pause: "暂停员工后续派工",
+        resume: "恢复员工后续派工",
+        plan: "调整当天工作计划",
+        escalate: "已上报董事长",
+        observe: "核对证据后继续跟进",
+      };
+      i.actions.push({ at: now.toISOString(), action: r.action, result: `${labels[r.action]}：${r.reason}` });
     }
   }
   leadership(enabled: boolean, now = new Date()) {
@@ -404,7 +573,11 @@ export class Operations {
                 p.staff.filter((s) => this.onDuty(s)).every((s) => s.reports?.some((r) => r.date === day(now))) &&
                   now.toISOString() >= reportTime(day(now), "20:30"),
               ),
-              ceoAt: nextReportTime(now, "21:00", !!leadership.eveningReports?.some((r) => r.date === day(now))),
+              ceoAt: nextReportTime(
+                now,
+                ceoReportTime(this.config),
+                !!leadership.eveningReports?.some((r) => r.date === day(now)),
+              ),
             }
           : null,
         todayTasks: p.activity.filter((a) => day(new Date(a.at)) === day(now)).length,
@@ -521,6 +694,19 @@ export class Operations {
   private currentTask(p: Project, task: string) {
     return p.plans.some((a) => a.task === task && a.status !== "closed") || p.staff.some((s) => s.lastTask === task);
   }
+  private pausedTask(p: Project, task: string) {
+    return p.staff.some(
+      (s) =>
+        s.pausedByCEO &&
+        (s.lastTask === task ||
+          p.activity.some((a) => a.task === task && a.role === s.role) ||
+          p.plans.some((a) => a.task === task && a.owner === s.role)),
+    );
+  }
+  pausedTasks(businesses: Portfolio, tasks: Task[], now = new Date()) {
+    const projects = businesses.map((b) => this.get(b.id, now));
+    return new Set(tasks.filter((t) => projects.some((p) => this.pausedTask(p, t.id))).map((t) => t.id));
+  }
   private profile(p: Project, b: Portfolio[number], tasks: Task[], now: Date) {
     if (this.config.workday?.enabled || this.config.reporting?.enabled) this.writeStaffKnowledge(p, now);
     const file = join(this.directory, "workspace/knowledge/operations", b.id + ".json"),
@@ -608,6 +794,7 @@ export class Operations {
         issues: c.issues.filter((i) => i.state === "open"),
         knowledge: c.knowledge,
         briefs: c.briefs,
+        ...(c.health ? { healthRevision: c.health.revision } : {}),
       }),
     );
   }
@@ -752,6 +939,8 @@ export class Operations {
           a.issues.every((id) => c.issues.some((i) => i.id === id && (!a.business || i.business === a.business))),
       );
     if (!valid) return "CEO 决策引用了不存在或暂停的项目、计划或问题，请重新核对编号。";
+    const responseError = this.validateResponses(c, businesses, tasks, d, now);
+    if (responseError) return responseError;
     const weeklyGoals = d.weeklyGoals ?? [];
     if (weeklyGoals.length && !this.config.workday?.enabled) return "自主上班尚未启用";
     if (new Set(weeklyGoals.map((g) => `${g.business}:${g.role}`)).size !== weeklyGoals.length) return "周目标员工重复";
@@ -763,7 +952,7 @@ export class Operations {
       )
         return "周目标必须属于本周的在岗员工";
     }
-    if (this.config.permissions) {
+    if (this.config.permissions || this.config.health?.enabled) {
       const executable = (a: ActionProposal) => a.kind !== "software" && (!a.operation || automatic(a.operation));
       if (
         d.directives.some((a) => !executable(a.action)) ||
@@ -1052,7 +1241,11 @@ export class Operations {
         at: now.toISOString(),
       });
       this.save(p, "ceo-answer", now);
-      if (!escalated && t?.status === "blocked") {
+      if (
+        !escalated &&
+        t?.status === "blocked" &&
+        !(this.config.health?.enabled && (t.kind === "publish-content" || t.kind.includes("software")))
+      ) {
         c.pendingRetries ??= [];
         if (!c.pendingRetries.some((v) => v.task === t.id)) c.pendingRetries.push({ task: t.id, decision: decisionId });
       }
@@ -1109,6 +1302,7 @@ export class Operations {
         about: `ceo:${q.id}`,
       });
     }
+    this.applyResponses(c, d, decisionId, receipt, now, tasks);
     return null;
   }
   private conversation(
@@ -1164,10 +1358,17 @@ export class Operations {
         .filter((b) => b.autonomy && b.status === "active")
         .flatMap((b) => {
           const p = this.get(b.id, now);
-          return p.activity.filter((a) => this.currentTask(p, a.task)).map((a) => a.task);
+          return p.activity
+            .filter((a) => this.currentTask(p, a.task) && !this.pausedTask(p, a.task))
+            .map((a) => a.task);
         }),
     );
     for (const t of tasks) {
+      if (
+        this.config.health?.enabled &&
+        (failureKind(t.reason) === "auth" || t.kind === "publish-content" || t.kind.includes("software"))
+      )
+        continue;
       if (
         t.status !== "blocked" ||
         !(
@@ -1189,12 +1390,14 @@ export class Operations {
         r.exhausted = true;
         // Employee failures are already issues for the CEO. Only a broken CEO bypasses that escalation path.
         if (t.id === c.lastTask) {
-          receipt.notice ??= [];
-          receipt.notice.push({
-            key: `repair-exhausted-${t.id}`,
-            title: "CEO 运行异常",
-            text: `${t.title} 连续修复两次仍未通过：${t.reason}。其他工作继续；补充资料或下个经营日再恢复管理。`,
-          });
+          if (!this.config.health?.enabled) {
+            receipt.notice ??= [];
+            receipt.notice.push({
+              key: `repair-exhausted-${t.id}`,
+              title: "CEO 运行异常",
+              text: `${t.title} 连续修复两次仍未通过：${t.reason}。其他工作继续；补充资料或下个经营日再恢复管理。`,
+            });
+          }
           c.lastTask = null;
           c.fingerprint = this.ceoInputs(c, businesses, tasks, now);
           c.nextReviewAt = after(now, 1);
@@ -1257,6 +1460,7 @@ export class Operations {
       knowledge: c.knowledge,
       sources: sourceSnapshots(this.directory),
       questions: c.questions,
+      anomalies: c.health?.incidents.filter((i) => !i.resolvedAt) ?? [],
       briefs: c.briefs,
       controls: {
         activeRoles: this.config.activeRoles ?? roles,
@@ -1320,6 +1524,7 @@ export class Operations {
         day: day(new Date(now.getTime() - 9 * 3600_000)),
         results: Object.entries(c.eventOutcomes).sort(),
         answers: c.answeredCards,
+        healthRevision: c.health?.revision ?? 0,
       }),
     );
   }
@@ -1398,11 +1603,18 @@ export class Operations {
       (receipt.notice ??= []).push({
         key: `ceo-evening-${entry.date}`,
         title: new Date(entry.date).getUTCDay() === 1 ? "CEO · 周报" : "CEO · 日报",
-        text: (d?.report ?? report.summary) + pendingXReminder(publicationResults(this.directory), entry.date),
+        text:
+          (d?.report ?? report.summary) +
+          healthReport(c.health, entry.date) +
+          (this.config.health?.enabled ? "" : pendingXReminder(publicationResults(this.directory), entry.date)),
       });
       entry.processed = true;
     }
-    if (!schedule || now.toISOString() < reportTime(date, "21:00") || c.eveningReports.some((r) => r.date === date))
+    if (
+      !schedule ||
+      now.toISOString() < reportTime(date, ceoReportTime(this.config)) ||
+      c.eveningReports.some((r) => r.date === date)
+    )
       return false;
     const active = businesses.filter((b) => b.autonomy && b.status === "active");
     if (!active.length) return false;
@@ -1416,6 +1628,7 @@ export class Operations {
         {
           date,
           weekly,
+          health: healthReport(c.health, date),
           projects: active.map((b) => ({
             business: b.id,
             name: b.name,
@@ -1461,6 +1674,7 @@ export class Operations {
     if (latest?.status === "queued") {
       this.writeCEOContext(c, businesses, tasks, now, join(this.directory, "workspace/knowledge/ceo.json"));
       if (this.config.ceoWake === "events") c.eventInputs = this.eventInputs(c, businesses, tasks, now);
+      if (c.health) c.health.pending = false;
     }
     const pendingDelivery = active.some((b) =>
       this.get(b.id, now).plans.some(
@@ -1474,11 +1688,12 @@ export class Operations {
       receipt.events?.some(
         (e) => e.type === "company.task.retry" && tasks.some((t) => t.id === e.subject && t.kind === "ceo"),
       );
-    if (reviewing || (c.lastTask && latest?.status !== "completed" && !pendingDelivery)) return;
+    const healthPending = c.health?.pending;
+    if (reviewing || (c.lastTask && latest?.status !== "completed" && !pendingDelivery && !healthPending)) return;
     const eventInputs = this.eventInputs(c, businesses, tasks, now);
     if (this.config.ceoWake === "events") {
       delete c.nextReviewAt;
-      if (c.eventInputs === eventInputs && !pendingDelivery) return;
+      if (c.eventInputs === eventInputs && !pendingDelivery && !healthPending) return;
     }
     const fingerprint = this.ceoInputs(c, businesses, tasks, now);
     const agenda =
@@ -1598,6 +1813,7 @@ export class Operations {
       delete c.nextReviewAt;
     } else c.nextReviewAt = new Date(now.getTime() + 30 * 60000).toISOString();
     c.lastTask = id;
+    if (c.health) c.health.pending = false;
     c.fingerprint = fingerprint;
     c.runs.push({ task: id, at: now.toISOString() });
   }
@@ -1700,6 +1916,7 @@ export class Operations {
         beforeProcessed = chief.processed;
       if (chief.enabled) this.manage(chief, businesses, tasks, answers, receipt, now);
       this.conversation(chief, businesses, tasks, events, receipt, now);
+      if (chief.enabled && depth <= 1) this.inspectHealth(chief, businesses, tasks, receipt, now);
       if (chief.enabled) this.repairScheduling(chief, businesses, now);
       if (chief.enabled) {
         if (depth <= 1) {
@@ -1707,10 +1924,19 @@ export class Operations {
           for (const pending of chief.pendingRetries ?? []) {
             const t = tasks.find((t) => t.id === pending.task);
             if (t?.status !== "blocked" || (chief.retries[t.id] ?? 0) >= 2) continue;
+            if (
+              this.config.health?.enabled &&
+              (t.kind === "publish-content" || t.kind.includes("software") || failureKind(t.reason) === "auth")
+            )
+              continue;
             if (receipt.events?.some((e) => e.type === "company.task.retry" && e.subject === t.id)) continue;
             if (
               !businesses.some(
-                (b) => b.autonomy && b.status === "active" && this.currentTask(this.get(b.id, now), t.id),
+                (b) =>
+                  b.autonomy &&
+                  b.status === "active" &&
+                  this.currentTask(this.get(b.id, now), t.id) &&
+                  !this.pausedTask(this.get(b.id, now), t.id),
               )
             )
               continue;
@@ -2004,7 +2230,9 @@ export class Operations {
               !publishing &&
               (a.kind === "software" || (!!a.operation && !automatic(a.operation)))) ||
             (!publishing &&
-              (!!p.staff.find((s) => s.role === a.owner)?.daily?.waiting || busy().some((v) => v.role === a.owner)))
+              (p.staff.find((s) => s.role === a.owner)?.pausedByCEO ||
+                !!p.staff.find((s) => s.role === a.owner)?.daily?.waiting ||
+                busy().some((v) => v.role === a.owner)))
           )
             continue;
           if (

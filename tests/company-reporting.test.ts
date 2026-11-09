@@ -245,3 +245,37 @@ test("reporting, draft and preview prompts upgrade idempotently and can be disab
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("health mode queues the same daily report at 20:30 and appends verified incident history once", () =>
+  fixture(
+    (f: any) => {
+      const start = new Date("2026-11-09T12:30:00Z");
+      const r = f.tick(start),
+        e = f.work(r)[0];
+      assert.ok(e);
+      const inputs = JSON.parse(readFileSync(join(f.dir, "workspace/knowledge/reporting.json"), "utf8"));
+      assert.match(inputs.health, /今天 CEO 发现并处理的问题/);
+      f.send("company-inbox", e.type, e.subject, JSON.parse(e.detail), start);
+      f.send(
+        "company-ceo",
+        "company.result",
+        e.subject,
+        {
+          assignment: 1,
+          verdict: "pass",
+          summary: "汇报完成",
+          artifacts: [],
+          evidence: ["读取资料"],
+          executive: decision({ report: "今日已核对员工工作，目标待补齐。" }),
+        },
+        start,
+      );
+      const result = f.tick(new Date(+start + 60000));
+      const report = result.notice.find((n: any) => /日报|周报/.test(n.title));
+      assert.match(report.text, /今天 CEO 发现并处理的问题/);
+      assert.match(report.text, /缺少本周目标/);
+      f.restart();
+      assert.equal(f.work(f.tick(new Date(+start + 16 * 60000))).length, 0);
+    },
+    { health: { enabled: true } },
+  ));
