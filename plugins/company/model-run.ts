@@ -1,3 +1,4 @@
+import { attachWorkNotes } from "./notes.ts";
 import { refreshReviewContext } from "./review-context.ts";
 import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -23,9 +24,12 @@ if (role === "ceo") {
   refreshReviewContext(dirname(configFile), config, turn, entry.repairs > 0);
   writeFileSync(file, JSON.stringify(turn), { mode: 0o600 });
 }
-const command = adapter.command(turn);
+
 const context: Context = JSON.parse(readFileSync(turn.contextFile, "utf8"));
 const event = context.events.findLast((e) => e.source === "company-office" && e.type === `company.work.${role}`);
+if (config.reporting?.weekly && !entry.repairs)
+  attachWorkNotes(dirname(configFile), role, event?.subject, turn.contextFile);
+const command = adapter.command(turn);
 let allowed: boolean;
 try {
   allowed = budget.start(role as Role, key, owner, new Date(), event?.subject);

@@ -277,3 +277,43 @@ test("home shows unresolved anomalies with escaped evidence and no approval cont
   assert.doesNotMatch(html, /<script>异常|<img src=x/);
   assert.match(html, /交CEO处理/);
 });
+
+test("employee notes and weekly report stay read-only and escape embedded markup", async () => {
+  const b = await browser(false);
+  const d = overview() as any;
+  d.home.weeklyReport = { date: "2026-11-13", report: "周报<script>bad</script>" };
+  b.waits.get("/api/overview")!(Response.json(d));
+  b.waits.delete("/api/overview");
+  await b.flush();
+  assert.match(b.node("#view-content").innerHTML, /周报&lt;script&gt;bad&lt;\/script&gt;/);
+  b.replies.set("/api/operations", () =>
+    Response.json({
+      ceoNotes: { text: "管理经验<script>bad</script>" },
+      operations: [
+        {
+          business: "app",
+          name: "应用",
+          owner: "growth",
+          status: "active",
+          staff: [
+            {
+              role: "growth",
+              duty: "运营",
+              checks: [],
+              enabled: true,
+              notes: { text: "标题要具体<img src=x>", omitted: 2 },
+            },
+          ],
+        },
+      ],
+      tasks: [],
+    }),
+  );
+  b.location.hash = "#employees";
+  await b.app.enterView();
+  const html = b.node("#view-content").innerHTML;
+  assert.match(html, /管理经验&lt;script&gt;/);
+  assert.match(html, /标题要具体&lt;img src=x&gt;/);
+  assert.match(html, /2 条原始事实待周五整理/);
+  assert.doesNotMatch(html, /<textarea[^>]*notes|<script>bad/);
+});

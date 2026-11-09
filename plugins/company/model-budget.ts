@@ -1,3 +1,4 @@
+import { registeredReview } from "./weekly.ts";
 import codex from "../codex/agent.ts";
 import claude from "../claude/agent.ts";
 import { scheduledReport } from "./reporting.ts";
@@ -152,6 +153,8 @@ export class ModelBudget {
   }
   private employee(role: Role, task?: string): string | undefined {
     if (!task || role === "ceo" || !existsSync(join(this.directory, "operations.db"))) return undefined;
+    const weekly = registeredReview(this.directory, task);
+    if (weekly && weekly.role === role) return `${weekly.business}:${role}`;
     const db = new DatabaseSync(join(this.directory, "operations.db"), { readOnly: true });
     try {
       for (const row of db.prepare("SELECT id,body FROM projects").all()) {

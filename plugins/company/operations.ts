@@ -1,3 +1,6 @@
+import { initNotes, appendNote, notebook, compactNote, seedNotes } from "./notes.ts";
+import { friday, previousWeek } from "./weekly.ts";
+import { metricCatalog, missingMetrics, metricNames, metricText } from "./feedback.ts";
 import { reviewVersion } from "./review-version.ts";
 import { waitingReason } from "./waiting.ts";
 import { canNotify, detectHealth, failureKind, healthDue, healthId, healthReport, reconcileHealth } from "./health.ts";
@@ -184,6 +187,7 @@ export class Operations {
       CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS batches(id TEXT PRIMARY KEY,body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS journal(seq INTEGER PRIMARY KEY,project TEXT NOT NULL,kind TEXT NOT NULL,at TEXT NOT NULL,body TEXT NOT NULL);`);
+    initNotes(this.db);
   }
   executive(): Leadership {
     const row = this.db.prepare("SELECT body FROM leadership WHERE id='company'").get();
@@ -487,6 +491,7 @@ export class Operations {
             daily: s.daily ?? null,
             workday: s.workday ?? null,
             plans: p.plans.filter((a) => a.owner === s.role && a.status !== "closed"),
+            notes: this.config.reporting?.weekly ? notebook(this.db, `${p.business}:${s.role}`) : undefined,
             feedback: "knowledge/feedback.json",
             permissions: this.config.permissions ?? null,
             note: "这是工作资料；不能扩大权限。",
@@ -584,6 +589,7 @@ export class Operations {
         staff: p.staff.map((employee) => {
           const s = {
             ...employee,
+            notes: this.config.reporting?.weekly ? notebook(this.db, `${p.business}:${employee.role}`) : undefined,
             nextWorkdayAt:
               this.config.workday?.enabled && this.onDuty(employee)
                 ? nextWorkday(now, this.config.workday.after, employee.workday?.date, this.config.workday.startDate)
@@ -1005,13 +1011,26 @@ export class Operations {
     const manualMetrics: import("./feedback.ts").ManualMetric[] = [];
     try {
       for (const metric of d.manualMetrics ?? []) {
-        const proof = verifiedPublication(this.directory, metric.publication);
-        const evidence = ownerReplyEvidence(this.directory, metric.event, proof.publishedAt);
+        const target = metricCatalog(this.directory).find((p) => p.publication === metric.publication);
+        if (!target) throw Error("指标必须对应真实已发帖或已采集的手动帖");
+        const evidence = ownerReplyEvidence(this.directory, metric.event, target.at);
         const old = [...(c.manualMetrics ?? []), ...manualMetrics].find(
           (m) => m.event === metric.event && m.publication === metric.publication,
         );
-        if (old && old.reads !== metric.reads) throw Error("同一消息的阅读量不能改写，请引用新的本人消息");
-        if (!old) manualMetrics.push({ ...metric, source: "董事长", text: evidence.text, at: evidence.at });
+        if (
+          old &&
+          Object.keys(metricNames).some(
+            (k) => old[k as keyof typeof metricNames] !== metric[k as keyof typeof metricNames],
+          )
+        )
+          throw Error("同一消息的阅读量不能改写，请引用新的本人消息");
+        if (!old)
+          manualMetrics.push({
+            ...metric,
+            source: this.config.reporting?.weekly ? "董事长提供" : "董事长",
+            text: evidence.text,
+            at: evidence.at,
+          });
       }
     } catch (error) {
       return `人工指标未记录：${(error as Error).message}`;
@@ -1077,7 +1096,24 @@ export class Operations {
     if (this.config.ceoWake === "events") {
       delete c.nextReviewAt;
     } else c.nextReviewAt = new Date(now.getTime() + 30 * 60000).toISOString();
-    if (manualMetrics.length) (c.manualMetrics ??= []).push(...manualMetrics);
+    if (manualMetrics.length) {
+      (c.manualMetrics ??= []).push(...manualMetrics);
+      if (this.config.reporting?.weekly)
+        for (const m of manualMetrics) {
+          const target = metricCatalog(this.directory).find((p) => p.publication === m.publication)!;
+          const agents = target.business
+            ? ["ceo", `${target.business}:growth`]
+            : ["ceo", ...active.map((b) => `${b.id}:growth`)];
+          for (const agent of agents)
+            appendNote(
+              this.db,
+              agent,
+              `metric:${m.publication}:${m.event}`,
+              `董事长提供《${target.title}》${target.platform}：${metricText(m)}`,
+              m.at,
+            );
+        }
+    }
     c.decisions.push({ task: decisionId, summary, at: now.toISOString(), decision: d });
     for (const goal of weeklyGoals) {
       const p = this.get(goal.business, now),
@@ -1428,6 +1464,26 @@ export class Operations {
   private ceoContext(c: Leadership, businesses: Portfolio, tasks: Task[], now: Date) {
     const active = businesses.filter((b) => b.autonomy && b.status === "active");
     return {
+      workNotes: this.config.reporting?.weekly ? notebook(this.db, "ceo") : undefined,
+      weeklyCycles: this.config.reporting?.weekly
+        ? (c.weeklyCycles ?? [])
+            .filter((w) => w.week >= previousWeek(now))
+            .map((w) => ({
+              week: w.week,
+              date: w.date,
+              report: w.report,
+              staff: w.staff.map((s) => ({
+                business: s.business,
+                role: s.role,
+                task: s.task,
+                result: s.result ? { review: s.result.review } : undefined,
+              })),
+            }))
+        : undefined,
+      metricCatalog: this.config.reporting?.weekly ? metricCatalog(this.directory) : undefined,
+      missingMetrics: this.config.reporting?.weekly
+        ? missingMetrics(this.directory, c.manualMetrics ?? [], now)
+        : undefined,
       reporting: this.config.reporting?.enabled
         ? {
             date: day(now),
@@ -1574,6 +1630,192 @@ export class Operations {
       else s.reports[index] = report;
     }
   }
+  notes(agent: string) {
+    return notebook(this.db, agent);
+  }
+  initializeNotes(businesses: Portfolio) {
+    const chief = this.executive();
+    seedNotes(
+      this.db,
+      chief,
+      businesses.map((b) => {
+        const p = this.get(b.id);
+        return { ...p, staff: p.staff.filter((s) => this.onDuty(s)) };
+      }),
+    );
+    for (const row of this.db
+      .prepare("SELECT at,body FROM journal WHERE seq>? ORDER BY seq")
+      .all(Number(this.db.prepare("SELECT through FROM notebooks WHERE agent='_history'").get()?.through ?? 0))) {
+      const p = JSON.parse(String(row.body)) as Project;
+      for (const plan of p.plans ?? [])
+        if (/负责人退回修改|董事长取消发布/.test(plan.result))
+          this.ownerNote(p, plan, `history:${plan.id}:${plan.revision ?? 0}`, plan.result, new Date(String(row.at)));
+    }
+    const last = Number(this.db.prepare("SELECT MAX(seq) AS seq FROM journal").get()?.seq ?? 0);
+    this.db
+      .prepare(
+        "INSERT INTO notebooks VALUES ('_history','',?) ON CONFLICT(agent) DO UPDATE SET through=excluded.through",
+      )
+      .run(last);
+    const catalog = metricCatalog(this.directory);
+    for (const metric of chief.manualMetrics ?? []) {
+      const post = catalog.find((p) => p.publication === metric.publication);
+      if (!post) continue;
+      for (const agent of post.business
+        ? ["ceo", `${post.business}:growth`]
+        : ["ceo", ...businesses.map((b) => `${b.id}:growth`)])
+        appendNote(
+          this.db,
+          agent,
+          `metric:${metric.publication}:${metric.event}`,
+          `董事长提供《${post.title}》${post.platform}：${metricText(metric)}`,
+          metric.at,
+        );
+    }
+    const file = join(this.directory, "workspace/knowledge/feedback.json");
+    if (existsSync(file)) {
+      const feedback = JSON.parse(readFileSync(file, "utf8"));
+      for (const post of [...(feedback.posts ?? []), ...(feedback.manual ?? [])]) {
+        for (const sample of post.samples ?? []) {
+          if (typeof sample.at !== "string" || !Number.isFinite(Date.parse(sample.at))) continue;
+          const text = metricText(
+            Object.fromEntries(Object.entries(sample).filter(([k, v]) => k in metricNames && typeof v === "number")),
+          );
+          if (!text) continue;
+          const agents = post.business
+            ? ["ceo", `${post.business}:growth`]
+            : ["ceo", ...businesses.map((b) => `${b.id}:growth`)];
+          for (const agent of agents)
+            appendNote(
+              this.db,
+              agent,
+              `sample:${post.key ?? post.id}:${sample.at}`,
+              `《${post.title ?? sample.title ?? post.remoteId ?? post.id}》${post.business ? "发布成绩" : "董事长手动帖参考"}：${text}`,
+              sample.at,
+            );
+        }
+      }
+    }
+  }
+  private ownerNote(p: Project, plan: Plan, key: string, reason: string, now: Date) {
+    if (!this.config.reporting?.weekly) return;
+    for (const agent of ["ceo", `${p.business}:${plan.owner}`])
+      appendNote(this.db, agent, key, `董事长退回《${plan.title}》：${reason}`, now.toISOString());
+  }
+  private weeklyRhythm(
+    c: Leadership,
+    businesses: Portfolio,
+    tasks: Task[],
+    receipt: Receipt,
+    now: Date,
+    schedule: boolean,
+  ) {
+    if (!this.config.reporting?.weekly) return;
+    seedNotes(
+      this.db,
+      c,
+      businesses.map((b) => this.get(b.id, now)),
+    );
+    this.initializeNotes(businesses);
+    c.weeklyCycles ??= [];
+    for (const cycle of c.weeklyCycles)
+      for (const employee of cycle.staff) {
+        if (employee.result) continue;
+        const task = tasks.find((t) => t.id === employee.task);
+        const result = task?.reports.at(-1)?.retrospective;
+        if (task?.status !== "completed" || !result) continue;
+        compactNote(this.db, `${employee.business}:${employee.role}`, result.notes, result.through);
+        employee.result = result;
+      }
+    if (!schedule || !friday(now, this.config.workday?.startDate)) return;
+    const date = day(now),
+      week = weekOf(now);
+    const active = businesses.filter((b) => b.autonomy && b.status === "active");
+    if (!active.length) return;
+    let cycle = c.weeklyCycles.find((w) => w.week === week);
+    if (!cycle) {
+      cycle = { week, date, staff: [] };
+      c.weeklyCycles.push(cycle);
+    }
+    if (now.toISOString() >= reportTime(date, "14:00") && !cycle.requestedAt) {
+      const missing = missingMetrics(this.directory, c.manualMetrics ?? [], now);
+      if (missing.length) {
+        cycle.missing = missing;
+        cycle.requestedAt = now.toISOString();
+        (receipt.notice ??= []).push({
+          key: `weekly-data-${week}`,
+          title: "CEO · 本周缺失数据",
+          text:
+            "请补充本周以下帖子的效果数据，回复格式随意，看不到的可以不填。\n" +
+            missing
+              .map((p) => `- ${p.platform}《${p.title}》：${p.fields.map((k) => metricNames[k]).join("、")}`)
+              .join("\n"),
+        });
+      }
+    }
+    if (now.toISOString() < reportTime(date, "18:00")) return;
+    for (const b of active)
+      for (const employee of this.get(b.id, now).staff.filter((s) => this.onDuty(s))) {
+        if (cycle.staff.some((s) => s.business === b.id && s.role === employee.role)) continue;
+        const id = "WEEK-" + hash(`${week}:${b.id}:${employee.role}`);
+        const notes = notebook(this.db, `${b.id}:${employee.role}`);
+        cycle.staff.push({ business: b.id, role: employee.role, task: id, through: notes.through });
+        const folder = join(this.directory, "workspace/knowledge/weekly");
+        mkdirSync(folder, { recursive: true, mode: 0o700 });
+        writeFileSync(
+          join(folder, id + ".json"),
+          JSON.stringify({
+            week,
+            business: b.id,
+            role: employee.role,
+            notes,
+            facts: this.db
+              .prepare("SELECT seq,text,at FROM note_facts WHERE agent=? AND seq>? AND seq<=? ORDER BY seq")
+              .all(
+                `${b.id}:${employee.role}`,
+                Number(
+                  this.db.prepare("SELECT through FROM notebooks WHERE agent=?").get(`${b.id}:${employee.role}`)
+                    ?.through ?? 0,
+                ),
+                notes.through,
+              ),
+            weeklyGoal: employee.weeklyGoal,
+            reports: employee.reports?.filter((r) => r.date >= week),
+            missing: missingMetrics(this.directory, c.manualMetrics ?? [], now),
+            feedback: "knowledge/feedback.json",
+          }),
+          { mode: 0o600 },
+        );
+        const request = taskRequest({
+          title: `${employee.name ?? b.name + " · " + departments[employee.role]} · 本周复盘`.slice(0, 120),
+          kind: `check-${employee.role}`,
+          goal: `读取knowledge/weekly/${id}.json、knowledge/feedback.json及content-guide。本轮只复盘本周目标vs实际、逐帖数据、好坏及原因、下周打算；未知不能当0。更新本人笔记，保留数字、退稿原因、写作教训和固定事实，合并旧条目至4000字。company.result.detail提交retrospective:{review,notes,through}；inspection用idle、actions:[]、reviews:[]；整个detail≤3500字，review400–800字、notes1500–2000字，不新增工作。`,
+          acceptance: ["有依据的本周复盘，缺数据照常提交", "笔记保留最有用经验及固定事实，through原样返回"],
+        });
+        (receipt.events ??= []).push({
+          id: `company:weekly:${id}`,
+          type: "company.task.create",
+          subject: id,
+          summary: request.title,
+          detail: JSON.stringify({ ...request, supervised: true }),
+        });
+      }
+  }
+  private weeklyGaps(c: Leadership, week: string, now: Date) {
+    const cycle = c.weeklyCycles?.find((w) => w.week === week);
+    const missing = missingMetrics(
+      this.directory,
+      c.manualMetrics ?? [],
+      new Date(`${cycle?.date ?? day(now)}T21:00:00+08:00`),
+    );
+    const late = cycle?.staff.filter((s) => !s.result).map((s) => `${s.business} · ${departments[s.role]}`) ?? [];
+    return (
+      (missing.length
+        ? "\n未取得数据：" +
+          missing.map((p) => `${p.platform}《${p.title}》${p.fields.map((k) => metricNames[k]).join("、")}`).join("；")
+        : "") + (late.length ? "\n未交复盘：" + late.join("、") : "")
+    );
+  }
   private reporting(
     c: Leadership,
     businesses: Portfolio,
@@ -1598,28 +1840,57 @@ export class Operations {
       if (task?.status !== "completed") continue;
       const report = task.reports.at(-1)!;
       const d = report.executive;
+      const cycle = this.config.reporting?.weekly ? c.weeklyCycles?.find((w) => w.date === entry.date) : undefined;
+      if (cycle && !cycle.prepared) {
+        if (report.retrospective && report.retrospective.through === cycle.ceoThrough)
+          compactNote(this.db, "ceo", report.retrospective.notes, report.retrospective.through);
+        cycle.report = d?.report ?? report.summary;
+        cycle.prepared = true;
+      }
+      if (cycle && now.toISOString() < reportTime(entry.date, "21:00")) continue;
       // Report delivery is independent of management decisions and their approval cards.
       if (d) this.applyDecision(c, businesses, tasks, d, task.id, report.summary, receipt, now);
       (receipt.notice ??= []).push({
         key: `ceo-evening-${entry.date}`,
-        title: new Date(entry.date).getUTCDay() === 1 ? "CEO · 周报" : "CEO · 日报",
+        title: cycle
+          ? "CEO · 日报+周报"
+          : new Date(entry.date).getUTCDay() === 1 && !this.config.reporting?.weekly
+            ? "CEO · 周报"
+            : "CEO · 日报",
         text:
           (d?.report ?? report.summary) +
+          (cycle ? this.weeklyGaps(c, cycle.week, now) : "") +
           healthReport(c.health, entry.date) +
           (this.config.health?.enabled ? "" : pendingXReminder(publicationResults(this.directory), entry.date)),
       });
+      if (cycle) {
+        const notice = receipt.notice!.at(-1)!;
+        cycle.report = notice.text;
+        if (notice.text.length > 4000) notice.text = notice.text.slice(0, 3950) + "\n完整周报及缺失数据见后台报告。";
+      }
       entry.processed = true;
     }
+    const cycle = this.config.reporting?.weekly
+      ? c.weeklyCycles?.find((w) => w.week === weekOf(now) && w.date === date)
+      : undefined;
+    const ready =
+      cycle &&
+      now.toISOString() >= reportTime(date, "18:00") &&
+      ((cycle.staff.length > 0 && cycle.staff.every((s) => s.result)) ||
+        now.toISOString() >= reportTime(date, "19:30"));
     if (
       !schedule ||
-      now.toISOString() < reportTime(date, ceoReportTime(this.config)) ||
+      (cycle
+        ? !ready || !friday(now, this.config.workday?.startDate)
+        : now.toISOString() < reportTime(date, ceoReportTime(this.config))) ||
       c.eveningReports.some((r) => r.date === date)
     )
       return false;
     const active = businesses.filter((b) => b.autonomy && b.status === "active");
     if (!active.length) return false;
     const id = "REPORT-" + date;
-    const weekly = new Date(date).getUTCDay() === 1;
+    const weekly = !!cycle || (!this.config.reporting?.weekly && new Date(date).getUTCDay() === 1);
+    if (cycle) cycle.ceoThrough = notebook(this.db, "ceo").through;
     this.writeCEOContext(c, businesses, tasks, now, join(this.directory, "workspace/knowledge/ceo.json"));
     const file = join(this.directory, "workspace/knowledge/reporting.json");
     writeFileSync(
@@ -1628,7 +1899,20 @@ export class Operations {
         {
           date,
           weekly,
+          cycle,
+          notes: cycle ? notebook(this.db, "ceo") : undefined,
+          noteFacts: cycle
+            ? this.db
+                .prepare("SELECT seq,text,at FROM note_facts WHERE agent='ceo' AND seq>? ORDER BY seq")
+                .all(Number(this.db.prepare("SELECT through FROM notebooks WHERE agent='ceo'").get()?.through ?? 0))
+            : undefined,
           health: healthReport(c.health, date),
+          weeklyHealth: cycle
+            ? c.health?.incidents.filter(
+                (i) =>
+                  day(new Date(i.firstAt)) >= cycle.week || i.actions.some((a) => day(new Date(a.at)) >= cycle.week),
+              )
+            : undefined,
           projects: active.map((b) => ({
             business: b.id,
             name: b.name,
@@ -1647,9 +1931,11 @@ export class Operations {
     );
     renameSync(file + ".tmp", file);
     const request = taskRequest({
-      title: weekly ? "CEO · 周报" : "CEO · 日报",
+      title: cycle ? "CEO · 日报+周报" : weekly ? "CEO · 周报" : "CEO · 日报",
       kind: "ceo",
-      goal: `读取knowledge/reporting.json、knowledge/ceo.json、knowledge/feedback.json和feedback.md；${weekly ? "汇报上周目标达成、效果数据汇总、本周目标，同时交代今日员工进展和明日安排" : "汇报今日各员工进展、发布与效果数据、对照周目标的进度、明日安排"}及董事长需要知道的风险。在executive.report写完整中文汇报（1800字内），其他决策字段无事用空数组；决策卡单独上报，不代替日报。不因汇报新增员工任务。`,
+      goal: cycle
+        ? "读取knowledge/reporting.json、knowledge/ceo.json、knowledge/feedback.json和feedback.md；汇总本周各业务目标vs成绩、逐帖数据、问题、CEO处理异常、下周目标建议；有董事长待决定事项才写。缺数据和未交复盘明确注明。executive.report写1800字内日报+周报；同时在company.result.detail交retrospective:{review,notes,through}整理CEO管理经验和董事长偏好决定，notes不超过4000字，through取reporting.json.notes.through；review一句话，整个detail≤3500字。程序21:00合并发一次，不自行notice。"
+        : `读取knowledge/reporting.json、knowledge/ceo.json、knowledge/feedback.json和feedback.md；${weekly ? "汇报上周目标达成、效果数据汇总、本周目标，同时交代今日员工进展和明日安排" : "汇报今日各员工进展、发布与效果数据、对照周目标的进度、明日安排"}及董事长需要知道的风险。在executive.report写完整中文汇报（1800字内），其他决策字段无事用空数组；决策卡单独上报，不代替日报。不因汇报新增员工任务。`,
       acceptance: [
         "每位在岗员工都有进展或今日无工作；未知数据不编造",
         "executive.report为完整日报或周报，决策卡单独处理",
@@ -1987,6 +2273,13 @@ export class Operations {
               p.publishReservations = p.publishReservations?.filter((r) => r.key !== preview.key);
               plan.deliveryDecision = "revise";
               plan.result = "董事长取消发布，退回运营调整";
+              this.ownerNote(
+                p,
+                plan,
+                `history:${plan.id}:${(plan.revision ?? 0) + 1}`,
+                answer?.text || plan.result,
+                now,
+              );
               plan.revision = (plan.revision ?? 0) + 1;
               plan.status = "planned";
               plan.task = null;
@@ -2020,6 +2313,7 @@ export class Operations {
             } else {
               plan.deliveryDecision = "revise";
               plan.result = `负责人退回修改：${approval.answer}`;
+              this.ownerNote(p, plan, `history:${plan.id}:${(plan.revision ?? 0) + 1}`, approval.answer!, now);
               plan.revision = (plan.revision ?? 0) + 1;
               plan.status = "planned";
               plan.task = null;
@@ -2388,6 +2682,7 @@ export class Operations {
       if (chief.enabled) {
         if (chief.processed !== beforeProcessed && beforeCEO === chief.fingerprint)
           chief.fingerprint = this.ceoInputs(chief, businesses, tasks, now);
+        this.weeklyRhythm(chief, businesses, tasks, receipt, now, depth <= 1);
         const reporting = this.reporting(chief, businesses, tasks, receipt, now, depth <= 1);
         if (depth <= 1 && !reporting) this.scheduleCEO(chief, businesses, tasks, receipt, now);
         this.saveExecutive(chief);

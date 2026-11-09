@@ -266,12 +266,13 @@ function homeReports(d, growth) {
     })
     .join("");
   return `<section class="home-block" aria-labelledby="report-title">
-    <div class="block-head"><h2 id="report-title">日报</h2></div>
+    <div class="block-head"><h2 id="report-title">报告</h2></div>
     ${
       text
         ? `<article class="ceo-report"><p class="report-date">CEO 日报 · ${esc(last.date)}</p><p class="report-body">${esc(text)}</p></article>`
         : `<p class="empty-line">${last ? "CEO 正在写日报，写好会显示在这里。" : `第一份 CEO 日报${ceoAt ? `会在 ${homeShortDate(ceoAt)} ${homeClock(ceoAt)}` : "会在晚上"}发到飞书，也会显示在这里。`}</p>`
     }
+    ${d.home?.weeklyReport?.report ? `<details class="staff-report"><summary>周报 · ${esc(d.home.weeklyReport.date)}</summary><p class="report-body">${esc(d.home.weeklyReport.report)}</p></details>` : ""}
     ${staff}
   </section>`;
 }

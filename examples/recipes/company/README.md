@@ -144,3 +144,5 @@ CEO 审核及失败重试读取当前交付，结论带版本；过期结论作�
 CEO 改用 Claude 时保留 `use=company` 包装，只改模型执行器与 model；需要新版 Claude CLI、Linux 沙箱依赖和真实隔离验收，通过前保持 Codex。认证与权限配置见 [安装说明](../../../INSTALL.md) 和 [权限边界](../../../docs/plugins.md#access-实际能做什么)。
 
 个人账号双平台运营配置见 [rabbitrun 海外运营](rabbitrun.md)，内容要求见 [币圈内容指南](crypto-content-guide.md)；不替换现有 APP 内容指南。
+
+可选 `reporting:{"enabled":true,"weekly":true}` 启用私有工作笔记、周五复盘和每周数据补录；见[说明](../../../docs/company.md#工作笔记与周五复盘)。周报与周五日报21:00合并，员工复盘正常使用额度，不额外开CEO汇报轮。

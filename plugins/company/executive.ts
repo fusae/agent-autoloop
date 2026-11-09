@@ -22,7 +22,10 @@ export type ExecutiveDecision = {
   }[];
   report?: string;
   weeklyGoals?: WeeklyGoal[];
-  manualMetrics?: { publication: string; event: number; reads: number }[];
+  manualMetrics?: Pick<
+    import("./feedback.ts").ManualMetric,
+    "publication" | "event" | "reads" | "likes" | "collects" | "comments"
+  >[];
   staffPlans?: StaffPlan[];
   briefs: { business: string; objective: string }[];
   directives: { business: string; action: ActionProposal }[];
@@ -81,6 +84,7 @@ export type Knowledge = {
   at: string;
 };
 export type Leadership = {
+  weeklyCycles?: import("./weekly.ts").WeeklyCycle[];
   health?: import("./health.ts").HealthState;
   eveningReports?: { date: string; task: string; processed?: boolean; failureNotified?: boolean }[];
   manualMetrics?: import("./feedback.ts").ManualMetric[];
@@ -152,17 +156,25 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
     ...(d.weeklyGoals !== undefined ? { weeklyGoals: list("weeklyGoals", 6).map(weeklyGoal) } : {}),
     ...(d.manualMetrics !== undefined
       ? {
-          manualMetrics: list("manualMetrics", 5).map((a) => {
+          manualMetrics: list("manualMetrics", 20).map((a) => {
             if (
               typeof a.publication !== "string" ||
-              !/^[a-f0-9]{32}$/.test(a.publication) ||
+              !/^(?:[a-f0-9]{32}(?::x)?|manual:[A-Za-z0-9_-]{1,80})$/.test(a.publication) ||
               !Number.isSafeInteger(a.event) ||
               a.event < 1 ||
-              !Number.isSafeInteger(a.reads) ||
-              a.reads < 0
+              !["reads", "likes", "collects", "comments"].some((k) => a[k] !== undefined) ||
+              ["reads", "likes", "collects", "comments"].some(
+                (k) => a[k] !== undefined && (!Number.isSafeInteger(a[k]) || a[k] < 0),
+              )
             )
               throw Error("人工阅读量需要已发布编号、本人消息事件和非负整数");
-            return { publication: a.publication, event: a.event, reads: a.reads };
+            return {
+              publication: a.publication,
+              event: a.event,
+              ...Object.fromEntries(
+                ["reads", "likes", "collects", "comments"].filter((k) => a[k] !== undefined).map((k) => [k, a[k]]),
+              ),
+            };
           }),
         }
       : {}),

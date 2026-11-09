@@ -332,7 +332,8 @@ export function detectHealth(input: {
       severity: 1,
       reminderOnly: true,
     });
-  if (config.reporting?.enabled && ms >= Date.parse(`${date}T20:45:00+08:00`)) {
+  const reportCheck = config.reporting?.weekly && new Date(date).getUTCDay() === 5 ? "21:15" : "20:45";
+  if (config.reporting?.enabled && ms >= Date.parse(`${date}T${reportCheck}:00+08:00`)) {
     const entry = chief.eveningReports?.find((r) => r.date === date);
     const delivered = runtime.cards.some((c) => c.key === `ceo-evening-${date}` && c.delivered);
     if (!entry?.processed || !delivered)

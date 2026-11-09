@@ -1,3 +1,4 @@
+import { localDay, weekOf } from "./workday.ts";
 import { frozenSummary } from "./content.ts";
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -14,8 +15,11 @@ function save(p: string, value: unknown) {
 export type ManualMetric = {
   publication: string;
   event: number;
-  reads: number;
-  source: "董事长";
+  reads?: number;
+  likes?: number;
+  collects?: number;
+  comments?: number;
+  source: "董事长" | "董事长提供";
   at: string;
   text: string;
 };
@@ -212,6 +216,7 @@ export async function collectFeedback(
       posts,
       manual,
       products: state.products,
+      ownerMetrics: leadership.manualMetrics ?? [],
     });
     const fmt = (v: unknown) => (v === null || v === undefined ? "待完整数据" : String(v));
     const text = [
@@ -231,7 +236,15 @@ export async function collectFeedback(
           `${s.at}：赞${s.likes} / 藏${s.collects} / 评论${s.comments}；变化${s.change ? `${s.change.likes}/${s.change.collects}/${s.change.comments}` : "首次基线"}`,
         );
       text.push(
-        `阅读量：${p.reads.map((r) => `${r.reads}（${r.source}，${r.at}，事件${r.event}）`).join("；") || "董事长尚未告知"}`,
+        `董事长提供：${
+          (leadership.manualMetrics ?? [])
+            .filter((r) => r.publication === p.key || r.publication.startsWith(p.key + ":"))
+            .map(
+              (r) =>
+                `${metricText(r)}（${r.source}，${r.at}，事件${r.event}，${r.publication.endsWith(":x") ? "X" : "原平台"}）`,
+            )
+            .join("；") || "尚未告知"
+        }`,
       );
       if (p.product)
         for (const [label, c] of [
@@ -246,7 +259,16 @@ export async function collectFeedback(
     if (manual.length) {
       text.push("\n## 董事长自己发的帖子", "仅供运营参考内容效果，不计入员工周目标或备稿统计。");
       for (const p of manual) {
-        text.push(`\n### ${p.title}`, `首次看到：${p.firstSeen}；链接：${p.url}`);
+        text.push(
+          `\n### ${p.title}`,
+          `首次看到：${p.firstSeen}；链接：${p.url}`,
+          `董事长提供：${
+            (leadership.manualMetrics ?? [])
+              .filter((r) => r.publication === "manual:" + p.id)
+              .map(metricText)
+              .join("；") || "尚未告知"
+          }`,
+        );
         p.samples.forEach((s, i) => {
           const previous = p.samples[i - 1]?.likes;
           const change = s.likes === null || previous == null ? null : s.likes - previous;
@@ -258,4 +280,84 @@ export async function collectFeedback(
   } finally {
     rmSync(lock, { recursive: true, force: true });
   }
+}
+
+export const metricNames = { reads: "阅读", likes: "点赞", collects: "收藏", comments: "评论" } as const;
+export type MetricField = keyof typeof metricNames;
+export type MissingMetric = {
+  publication: string;
+  title: string;
+  platform: string;
+  business?: string;
+  at: string;
+  fields: MetricField[];
+  observedAt?: string;
+};
+export function metricText(value: Partial<Record<MetricField, number>>) {
+  return (Object.keys(metricNames) as MetricField[])
+    .filter((k) => value[k] !== undefined)
+    .map((k) => `${metricNames[k]}${value[k]}`)
+    .join(" / ");
+}
+export function metricCatalog(directory: string): MissingMetric[] {
+  const feedback = load(join(directory, "workspace/knowledge/feedback.json"), {});
+  const items: MissingMetric[] = [];
+  for (const p of publicationResults(directory)) {
+    const frozen = load(join(directory, "publications", p.key + ".json"), {});
+    const post = feedback.posts?.find((v: any) => v.key === p.key);
+    const title = frozenSummary(frozen.artifacts).title ?? post?.title ?? p.remoteId;
+    const attempt = feedback.days?.at(-1);
+    const failed =
+      !p.x &&
+      attempt &&
+      (attempt.observation?.state !== "ready" || !attempt.observation.notes?.some((n: any) => n.id === p.remoteId));
+    const sample = failed ? {} : (post?.samples?.at(-1) ?? {});
+    items.push({
+      publication: p.key,
+      title,
+      platform: p.x ? "币安广场" : "小红书",
+      business: frozen.business,
+      at: p.publishedAt,
+      observedAt: failed ? attempt.at : undefined,
+      fields: p.x
+        ? ["reads", "likes"]
+        : (["reads", "likes", "collects", "comments"] as MetricField[]).filter((k) => sample[k] == null),
+    });
+    if (p.x?.state === "published")
+      items.push({
+        publication: p.key + ":x",
+        title,
+        platform: "X",
+        business: frozen.business,
+        at: p.x.at,
+        fields: ["reads", "likes", "comments"],
+      });
+  }
+  for (const p of feedback.manual ?? [])
+    items.push({
+      publication: "manual:" + p.id,
+      title: p.title,
+      platform: "小红书手动帖（首次采集）",
+      at: p.firstSeen,
+      observedAt: p.samples?.at(-1)?.at,
+      fields:
+        p.samples?.at(-1)?.likes == null
+          ? ["reads", "likes", "collects", "comments"]
+          : ["reads", "collects", "comments"],
+    });
+  return [...new Map(items.map((p) => [p.publication, p])).values()];
+}
+export function missingMetrics(directory: string, metrics: ManualMetric[], now: Date) {
+  return metricCatalog(directory)
+    .filter((p) => localDay(new Date(p.observedAt ?? p.at)) >= weekOf(now) && localDay(new Date(p.at)) <= localDay(now))
+    .map((p) => ({
+      ...p,
+      fields: p.fields.filter(
+        (k) =>
+          !metrics.some(
+            (m) => m.publication === p.publication && m[k] !== undefined && localDay(new Date(m.at)) >= weekOf(now),
+          ),
+      ),
+    }))
+    .filter((p) => p.fields.length);
 }

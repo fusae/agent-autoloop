@@ -290,3 +290,5 @@ The company client also supports [rabbitrun overseas operations](examples/recipe
 Company waits require an open owner question or unfinished dependency; confirmed weekly goals initialize missing onboarding structures. See [scheduling recovery](docs/company.md#等待条件与接入修复).
 
 The company plugin supports deterministic health checks, constrained CEO recovery actions, unresolved incidents on home, daily incident reporting, and an independent systemd watchdog. See [health monitoring](docs/company.md#程序巡检与-ceo-处置).
+
+The optional company weekly rhythm keeps private employee notes, requests missing metrics once on Friday, and combines the CEO daily and weekly reports. See [company notes and retrospectives](docs/company.md#工作笔记与周五复盘); no kernel changes are required.

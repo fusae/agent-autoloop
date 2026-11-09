@@ -247,3 +247,12 @@ test("persistent incidents wake once, worsen once, resolve only by inspection, a
   assert.match(healthReport(state, "2026-11-09"), /今天 CEO 发现并处理的问题[\s\S]*已重试/);
   assert.equal(healthReport(undefined, "2026-11-09"), "");
 });
+
+test("Friday combined report is checked after 21:00, never mistaken for a missing 20:30 daily report", () => {
+  const f = fixture();
+  f.config.reporting = { enabled: true, weekly: true };
+  f.now = new Date("2026-11-13T12:45:00Z");
+  assert.ok(!kinds(f).includes("report-missing"));
+  f.now = new Date("2026-11-13T13:15:00Z");
+  assert.ok(kinds(f).includes("report-missing"));
+});

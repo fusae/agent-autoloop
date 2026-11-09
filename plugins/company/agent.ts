@@ -1,3 +1,4 @@
+import { retrospective } from "./weekly.ts";
 import { writeFileSync } from "node:fs";
 import codex from "../codex/agent.ts";
 import claude from "../claude/agent.ts";
@@ -37,6 +38,7 @@ function modelReading(engine: "codex" | "claude", stdout: string, code: number |
       if (!["company.ceo.decision", "company.result"].includes(event.type)) continue;
       const detail = JSON.parse(event.detail ?? "{}");
       if (event.type === "company.ceo.decision" || detail.executive !== undefined) executiveDecision(detail.executive);
+      if (detail.retrospective !== undefined) retrospective(detail.retrospective);
       if (detail.dailyReport !== undefined) dailyReport(detail.dailyReport);
       if (detail.inspection !== undefined) inspection(detail.inspection);
     }

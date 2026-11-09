@@ -230,10 +230,18 @@ export async function startDashboard(directory: string, port = 3361, options: { 
                   finishedAt,
                   createdAt,
                 }))[0] ?? null,
+            weeklyReport:
+              chief.weeklyCycles
+                ?.filter((w) => w.report)
+                .map((w) => ({ date: w.date, report: w.report }))
+                .at(-1) ?? null,
             ceoReport: latestReport
               ? {
                   date: latestReport.date,
-                  summary: tasks.find((t) => t.id === latestReport.task)?.reports.at(-1)?.summary ?? null,
+                  summary:
+                    tasks.find((t) => t.id === latestReport.task)?.reports.at(-1)?.executive?.report ??
+                    tasks.find((t) => t.id === latestReport.task)?.reports.at(-1)?.summary ??
+                    null,
                 }
               : null,
             operations: snapshot.map((p) => ({
@@ -319,6 +327,7 @@ export async function startDashboard(directory: string, port = 3361, options: { 
           pageParams(url);
           const tasks = company.tasks();
           return cached({
+            ceoNotes: operations.notes("ceo"),
             operations: operations.snapshot(businesses.list(), tasks).map((p) => ({
               ...p,
               staff: p.staff.map((s) => ({

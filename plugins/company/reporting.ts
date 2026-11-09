@@ -23,6 +23,9 @@ export function dailyReport(value: any): DailyReport {
 }
 export function validateReporting(config: Partial<CompanyConfig>) {
   if (config.reporting !== undefined && typeof config.reporting?.enabled !== "boolean") throw Error("汇报开关不正确");
+  if (config.reporting?.weekly !== undefined && typeof config.reporting.weekly !== "boolean")
+    throw Error("周复盘开关不正确");
+  if (config.reporting?.weekly && !config.reporting.enabled) throw Error("周复盘需要启用汇报");
   if (config.reporting?.enabled && !config.ceoMode) throw Error("汇报需要启用CEO");
   if (config.workday?.prepareDrafts !== undefined && typeof config.workday.prepareDrafts !== "boolean")
     throw Error("提前备稿开关不正确");

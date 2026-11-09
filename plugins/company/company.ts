@@ -1,3 +1,4 @@
+import { registeredWeeklyReport, registeredReview, retrospective, type Retrospective } from "./weekly.ts";
 import { dailyReport, scheduledReport, validateReporting, validateDraftPlan, type DailyReport } from "./reporting.ts";
 import { validateWorkday, type permissions } from "./workday.ts";
 import { validatePublishPolicy } from "./publication-policy.ts";
@@ -46,7 +47,7 @@ export type CompanyConfig = {
   ceoWake?: "legacy" | "events";
   dailyModelRuns?: Partial<Record<Role | "total" | "employee", number>>;
   workday?: { enabled: boolean; after: string; startDate?: string; prepareDrafts?: boolean };
-  reporting?: { enabled: boolean };
+  reporting?: { enabled: boolean; weekly?: boolean };
   health?: { enabled: boolean };
   permissions?: typeof permissions;
   publishVerification?: "qa" | "program";
@@ -61,6 +62,7 @@ export type Context = {
 export type Report = {
   at?: string;
   dailyReport?: DailyReport;
+  retrospective?: Retrospective;
   assignment: number;
   verdict: "pass" | "reject" | "blocked";
   summary: string;
@@ -371,6 +373,22 @@ export class Company {
             : [],
         evidence: list(data.evidence, "核验依据", 150),
       };
+      const weekly = this.config.reporting?.weekly
+        ? registeredReview(dirname(this.config.database), task.id)
+        : undefined;
+      const weeklyCEO =
+        this.config.reporting?.weekly && task.kind === "ceo"
+          ? registeredWeeklyReport(dirname(this.config.database), task.id)
+          : undefined;
+      if (weekly && data.verdict === "pass") {
+        try {
+          report.retrospective = retrospective(data.retrospective);
+          if (weekly.role !== role || report.retrospective.through !== weekly.through)
+            throw Error("复盘员工或笔记版本不符");
+        } catch (error) {
+          throw new CompanyInputError((error as Error).message);
+        }
+      }
       if (data.dailyReport !== undefined) {
         try {
           report.dailyReport = dailyReport(data.dailyReport);
@@ -390,6 +408,10 @@ export class Company {
       if (task.kind === "ceo" && data.verdict === "pass") {
         try {
           report.executive = executiveDecision(data.executive);
+          if (weeklyCEO) {
+            report.retrospective = retrospective(data.retrospective);
+            if (report.retrospective.through !== weeklyCEO.ceoThrough) throw Error("CEO笔记版本不符");
+          }
           if (
             this.config.reporting?.enabled &&
             scheduledReport(dirname(this.config.database), task.id) &&
@@ -419,7 +441,7 @@ export class Company {
           throw new CompanyInputError((error as Error).message);
         }
       }
-      if (JSON.stringify(report).length > (task.kind === "ceo" ? 3500 : 1900))
+      if (JSON.stringify(report).length > (weekly || task.kind === "ceo" ? 3500 : 1900))
         throw new CompanyInputError("报告 JSON 超过 1900 字，请将详情留在交付文件");
     } catch (error) {
       if (!(error instanceof CompanyInputError)) throw error;
