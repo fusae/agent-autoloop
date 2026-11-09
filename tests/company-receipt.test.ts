@@ -215,3 +215,76 @@ test("fixed company coordinators do not acquire a model session or resume on fai
   assert.equal(results[0].session, undefined);
   assert.deepEqual(starts, []);
 });
+
+// A prose-only idle response must repair its receipt now, rather than leave the office active for another business retry.
+test("assigned model rounds require their own report even when no business action is needed; owner chat stays optional", () => {
+  const marker = { companyModel: "claude", companyWork: { task: "CEO-test", assignment: 2 } };
+  const output = (text: string, work = true) =>
+    JSON.stringify(work ? marker : { companyModel: "claude" }) +
+    "\n" +
+    JSON.stringify({ type: "result", subtype: "success", result: text, session_id: "session" });
+  assert.match(
+    agent.read(output("没事可做：没有新事项，不发回执。"), 0, "").receiptProblem ?? "",
+    /缺少 company.result/,
+  );
+  assert.equal(agent.read(output("已回答负责人。", false), 0, "").receiptProblem, undefined);
+  const receipt = (task: string, assignment: number) =>
+    "没事可做：已核对。\n```agent-autoloop\n" +
+    JSON.stringify({
+      events: [
+        {
+          id: "result",
+          type: "company.result",
+          subject: task,
+          detail: JSON.stringify({
+            assignment,
+            verdict: "pass",
+            executive: { briefs: [], directives: [], approvals: [], answers: [], escalations: [] },
+          }),
+        },
+      ],
+    }) +
+    "\n```";
+  assert.match(agent.read(output(receipt("other", 2)), 0, "").receiptProblem ?? "", /缺少/);
+  assert.match(agent.read(output(receipt("CEO-test", 1)), 0, "").receiptProblem ?? "", /缺少/);
+  assert.equal(agent.read(output(receipt("CEO-test", 2)), 0, "").receiptProblem, undefined);
+});
+
+// Pending topics are real work even when there are no manuscripts to review.
+test("a pending topic cannot be hidden by an empty management receipt", () => {
+  const marker = { companyModel: "claude", companyWork: { task: "CEO-test", assignment: 1, topicsPending: true } };
+  const read = (executive: object) =>
+    agent.read(
+      JSON.stringify(marker) +
+        "\n" +
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          result:
+            "没事可做：没有稿件。\n```agent-autoloop\n" +
+            JSON.stringify({
+              events: [
+                {
+                  id: "result",
+                  type: "company.result",
+                  subject: "CEO-test",
+                  detail: JSON.stringify({ assignment: 1, executive }),
+                },
+              ],
+            }) +
+            "\n```",
+        }),
+      0,
+      "",
+    );
+  const empty = { briefs: [], directives: [], approvals: [], answers: [], escalations: [] };
+  assert.match(read(empty).receiptProblem ?? "", /待初筛选题/);
+  assert.equal(read({ ...empty, report: "今日汇报：选题待筛，发布未发生。" }).receiptProblem, undefined);
+  assert.equal(
+    read({
+      ...empty,
+      topicReviews: [{ business: "app", topic: "topic", approve: false, reason: "与旧题重复", rank: 1 }],
+    }).receiptProblem,
+    undefined,
+  );
+});

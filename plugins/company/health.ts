@@ -308,7 +308,9 @@ export function detectHealth(input: {
             : "核对故障，必要时重试非发布任务，失败两次后升级",
         severity: last.failure === "auth" || failures >= 3 ? 2 : 1,
       });
-    const recent = rounds.slice(0, 3),
+    // An in-flight recovery is not new output and must not clear/reopen its own idle incident.
+    const completed = rounds.filter((r) => !["claimed", "queued", "running"].includes(r.state));
+    const recent = completed.slice(0, 3),
       signatures = recent.map((r) =>
         outputSignature(
           tasks.find((t) => t.id === r.task),
@@ -322,8 +324,8 @@ export function detectHealth(input: {
         (signatures.every((s) => s === signatures[0]) &&
           signatures[0] ===
             outputSignature(
-              tasks.find((t) => t.id === rounds[3]?.task),
-              rounds[3],
+              tasks.find((t) => t.id === completed[3]?.task),
+              completed[3],
             )))
     )
       add(`idle:${key}`, {

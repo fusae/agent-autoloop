@@ -294,7 +294,9 @@ test("interactive decision cards bind clicks and update the original message aft
     const sent = calls[0];
     assert.ok(sent.includes("interactive"));
     const content = JSON.parse(sent[sent.indexOf("--content") + 1]);
-    const buttons = content.body.elements.filter((e: any) => e.tag === "button");
+    const buttons = content.body.elements
+      .find((e: any) => e.name === "owner_reply")
+      .elements.filter((e: any) => e.name?.startsWith("choice_"));
     assert.equal(buttons.length, 3);
     assert.match(buttons[1].text.content, /先推广阅读/);
     const event = {
@@ -497,9 +499,9 @@ test("decision cards accept validated owner form text and clear the form after s
     const form = rendered.body.elements.find((e: any) => e.tag === "form");
     assert.ok(form, "missing free-text form");
     const input = form.elements.find((e: any) => e.tag === "input"),
-      button = form.elements.find((e: any) => e.tag === "button");
+      button = form.elements.find((e: any) => e.name === "submit_reply");
     assert.equal(input.input_type, "multiline_text");
-    assert.equal(input.required, true);
+    assert.equal(input.required, false);
     assert.equal(button.form_action_type, "submit");
     const event = {
       header: { event_id: "text-42", event_type: "card.action.trigger" },
@@ -893,5 +895,78 @@ console.error(JSON.stringify({error:{message:'invalid_argument: --user-id requir
     abort.abort();
     clearTimeout(timeout);
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Production callback shape omitted form_value because the choice was outside the form.
+test("publication choices submit the same form and preserve opinions in raw and flattened callbacks", async () => {
+  for (const flattened of [false, true]) {
+    const dir = mkdtempSync(join(tmpdir(), "card-opinion-"));
+    const calls: string[][] = [],
+      answers: any[] = [];
+    try {
+      const bridge = new CompanyFeishu(
+        join(dir, "state.json"),
+        "ou_owner",
+        {
+          delivered: async () => {},
+          answer: async (...args: any[]) => {
+            answers.push(args);
+          },
+        } as any,
+        async (args) => {
+          calls.push(args);
+          return { data: { message_id: "om_card" } };
+        },
+        undefined,
+        true,
+      );
+      await bridge.deliver({ ...card, title: "发布确认", options: ["发布", "退回修改", "暂缓"] });
+      const rendered = JSON.parse(calls[0][calls[0].indexOf("--content") + 1]);
+      assert.ok(!rendered.body.elements.some((e: any) => e.name === "choice_1"));
+      const form = rendered.body.elements.find((e: any) => e.name === "owner_reply");
+      const button = form.elements.find((e: any) => e.name === "choice_1");
+      assert.equal(button.form_action_type, "submit");
+      assert.ok(form.elements.some((e: any) => e.name === "reply"));
+      const action = {
+        tag: "button",
+        name: button.name,
+        value: button.behaviors[0].value,
+        form_value: { reply: "  选题不好  " },
+      };
+      const raw = {
+        schema: "2.0",
+        header: { event_id: "opinion", event_type: "card.action.trigger" },
+        event: { operator: { open_id: "ou_owner" }, context: { open_message_id: "om_card" }, action },
+      };
+      assert.equal(
+        await bridge.receiveAction({
+          ...raw,
+          event: { ...raw.event, action: { ...action, form_value: { reply: {} } } },
+        }),
+        false,
+      );
+      assert.equal(
+        await bridge.receiveAction(
+          flattened
+            ? {
+                type: "card.action.trigger",
+                event_id: "opinion",
+                operator_id: "ou_owner",
+                message_id: "om_card",
+                action_value: JSON.stringify(action.value),
+                action_tag: action.tag,
+                action_name: action.name,
+                form_value: JSON.stringify(action.form_value),
+              }
+            : raw,
+        ),
+        true,
+      );
+      assert.deepEqual(answers, [[42, { choice: 1, text: "选题不好", by: "ou_owner", ref: "om_card" }]]);
+      assert.equal(await bridge.receiveAction(raw), false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }
 });

@@ -12,13 +12,32 @@ import { inspection } from "./inspection.ts";
 
 // Session tags survive worker restarts without a mutable, cross-run engine lookup.
 const sessionTag = /^company:(codex|claude):(.+)$/;
-function modelReading(engine: "codex" | "claude", stdout: string, code: number | null, stderr: string): Reading {
+function modelReading(
+  engine: "codex" | "claude",
+  stdout: string,
+  code: number | null,
+  stderr: string,
+  work?: { task: string; assignment: number; topicsPending?: boolean },
+): Reading {
   const reading: Reading = (engine === "codex" ? codex : claude).read(stdout, code, stderr);
   if (reading.session) reading.session = `company:${engine}:${reading.session}`;
   if (!reading.text || reading.error) return reading;
   const { result, problem } = resultFrom(readMessage(reading.text), {});
   if (problem) return reading;
   try {
+    if (
+      work &&
+      ["done", "nothing"].includes(result.outcome) &&
+      !result.events?.some(
+        (event) =>
+          event.type === "company.result" &&
+          event.subject === work.task &&
+          JSON.parse(event.detail ?? "{}").assignment === work.assignment,
+      )
+    )
+      throw Error(
+        "本轮派工缺少 company.result 部门报告：即使没事可做，也须在 agent-autoloop 代码块的 events 中提交原 task、assignment 的报告；只补回执，不重做业务。",
+      );
     // A bare business JSON block is not a hub receipt; do not silently discard a completed report.
     if (!result.events?.length) {
       for (const block of reading.text.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/g)) {
@@ -37,6 +56,25 @@ function modelReading(engine: "codex" | "claude", stdout: string, code: number |
     for (const event of result.events ?? []) {
       if (!["company.ceo.decision", "company.result"].includes(event.type)) continue;
       const detail = JSON.parse(event.detail ?? "{}");
+      if (work?.topicsPending && event.type === "company.result" && event.subject === work.task) {
+        const d = executiveDecision(detail.executive);
+        if (
+          !d.report &&
+          ![
+            d.topicReviews,
+            d.deliveries,
+            d.directives,
+            d.approvals,
+            d.answers,
+            d.escalations,
+            d.staffPlans,
+            d.weeklyGoals,
+          ].some((v) => v?.length)
+        )
+          throw Error(
+            "本次资料仍有 state=screening 的待初筛选题，不能交空决策或只说无待审稿件；按既有规范提交 topicReviews，真实受阻则说明并上报，不代董事长批准，不重做已完成业务。",
+          );
+      }
       if (event.type === "company.ceo.decision" || detail.executive !== undefined) executiveDecision(detail.executive);
       if (detail.retrospective !== undefined) retrospective(detail.retrospective);
       if (detail.dailyReport !== undefined) dailyReport(detail.dailyReport);
@@ -89,8 +127,8 @@ export default {
     const first = stdout.split("\n")[0];
     try {
       const marker = JSON.parse(first);
-      if (marker.companyModel === "codex") return modelReading("codex", stdout, code, stderr);
-      if (marker.companyModel === "claude") return modelReading("claude", stdout, code, stderr);
+      if (marker.companyModel === "codex") return modelReading("codex", stdout, code, stderr, marker.companyWork);
+      if (marker.companyModel === "claude") return modelReading("claude", stdout, code, stderr, marker.companyWork);
       if (marker.companyDeferred)
         return {
           text: `今日模型次数已用完，工作保留到明天。\n\n\`\`\`agent-autoloop\n${JSON.stringify(marker.companyDeferred)}\n\`\`\``,

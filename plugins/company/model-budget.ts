@@ -115,9 +115,13 @@ export class ModelBudget {
       const rawCode = readFileSync(exit, "utf8").trim();
       if (!/^\d+$/.test(rawCode)) continue;
       const stdout = readFileSync(out, "utf8");
-      const marker = stdout.split("\n")[0];
-      const adapter =
-        marker === '{"companyModel":"codex"}' ? codex : marker === '{"companyModel":"claude"}' ? claude : null;
+      let marker: { companyModel?: string };
+      try {
+        marker = JSON.parse(stdout.split("\n")[0]);
+      } catch {
+        continue;
+      }
+      const adapter = marker.companyModel === "codex" ? codex : marker.companyModel === "claude" ? claude : null;
       if (adapter?.read(stdout, Number(rawCode), "").modelNotStarted) this.refund(String(row.id));
     }
   }

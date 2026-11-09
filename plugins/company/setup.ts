@@ -553,7 +553,7 @@ export function ensureBusinessRules(directory: string) {
     if (company.workday?.enabled) text += "\n" + workdayPrompt;
     if (text !== before) writeFileSync(book, text);
   }
-  if (company.topics && !rules.rules.some((r: any) => r.name === "公司经营-选题答复")) {
+  if (!rules.rules.some((r: any) => r.name === "公司经营-选题答复")) {
     rules.rules.push({
       ...rules.rules.find((r: any) => r.name === "公司经营-对话"),
       name: "公司经营-选题答复",

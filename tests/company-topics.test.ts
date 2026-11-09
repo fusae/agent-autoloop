@@ -507,19 +507,20 @@ test("callback opinions cannot approve another topic, and earlier item decisions
     const batch = cardTopics(card.text)!.id;
     mkdirSync(join(f.dir, "hub"));
     const db = new DatabaseSync(join(f.dir, "hub/hub.db"));
-    db.exec("CREATE TABLE events(id INTEGER PRIMARY KEY,source TEXT,type TEXT,detail TEXT,received_at TEXT)");
+    db.exec("CREATE TABLE events(id INTEGER PRIMARY KEY,source TEXT,type TEXT,detail TEXT,received_at TEXT,key TEXT)");
     const detail = JSON.stringify({
       question: `选题批次：${batch}\n1退回：请举例“2通过”`,
       message: "om_original",
       topicBatch: batch,
       topicChoice: { index: 0, approve: false, opinion: "请举例，2通过只是示例" },
     });
-    db.prepare("INSERT INTO events VALUES (?,?,?,?,?)").run(
+    db.prepare("INSERT INTO events VALUES (?,?,?,?,?,?)").run(
       1000,
       "company-inbox",
       "company.owner.question",
       detail,
       now.toISOString(),
+      "topic-card:test-callback",
     );
     try {
       f.o.plan(
@@ -529,7 +530,15 @@ test("callback opinions cannot approve another topic, and earlier item decisions
         now,
         [{ card: 300, about: card.about, choice: 0, at: now.toISOString() }],
         1,
-        [{ id: 1000, source: "company-inbox", type: "company.owner.question", subject: "owner", detail }],
+        [
+          {
+            id: "topic-card:test-callback",
+            source: "company-inbox",
+            type: "company.owner.question",
+            subject: "owner",
+            detail,
+          },
+        ],
       );
       assert.deepEqual(
         getProject(f).topics.map((t: any) => t.state),
@@ -766,3 +775,42 @@ test("legacy content actions without operation retain the same stock cap", () =>
     },
     { workday: { enabled: true, after: "09:00", prepareDrafts: true } },
   ));
+
+// Pending reviews must wake once, but repeated empty CEO reports must not create endless new model tasks.
+test("unchanged unscreened topics stop after bounded empty reviews and resume with a new topic", () =>
+  fixture((f: any) => {
+    meeting(f);
+    let made = 0;
+    for (let i = 0; i < 8; i++) {
+      const chief = f.o.executive();
+      const id = chief.lastTask;
+      if (id && !f.c.task(id))
+        f.send("company-inbox", "company.task.create", id, {
+          title: "审核选题",
+          kind: "ceo",
+          goal: "初筛",
+          acceptance: ["记录结论"],
+        });
+      if (id && f.c.task(id)?.status === "active")
+        f.send("company-ceo", "company.result", id, {
+          assignment: 1,
+          verdict: "pass",
+          summary: "未处理选题",
+          artifacts: [],
+          evidence: ["资料"],
+          executive: decision(),
+        });
+      made += f.work(f.tick(), "ceo").length;
+    }
+    assert.ok(made <= 3, `created ${made} repeated reviews`);
+    assert.ok(f.o.executive().stalled);
+    const db = new DatabaseSync(join(f.dir, "operations.db"));
+    try {
+      const p = getProject(f);
+      p.topics.push({ ...p.topics[0], id: "new-topic", key: "new-topic", title: "新的选题" });
+      db.prepare("UPDATE projects SET body=? WHERE id='app'").run(JSON.stringify(p));
+    } finally {
+      db.close();
+    }
+    assert.equal(f.work(f.tick(), "ceo").length, 1);
+  }));

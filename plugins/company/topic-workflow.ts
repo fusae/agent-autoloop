@@ -95,7 +95,7 @@ export class TopicWorkflow {
             continue;
           }
           if (raw.topicBatch !== b.id || typeof raw.question !== "string") continue;
-          const evidence = ownerReplyEvidence(this.directory, Number(e.id), b.at);
+          const evidence = ownerReplyEvidence(this.directory, e.id, b.at);
           if (evidence.text !== raw.question) continue;
           replies.push({ choices: replyChoices(evidence, b), at: evidence.at });
         }
@@ -105,7 +105,10 @@ export class TopicWorkflow {
             choices: parseTopicReply(
               a.choice === 0 ? "全部通过" : a.choice === 1 ? "全部退回" : (a.text ?? ""),
               b.topics.length,
-            ),
+            ).map((choice) => ({
+              ...choice,
+              ...(a.choice !== null && a.text?.trim() ? { opinion: a.text.trim() } : {}),
+            })),
             at: a.at ?? now.toISOString(),
           });
         }

@@ -306,3 +306,20 @@ test("waiting for topic approval is not employee inactivity and does not suppres
   f.projects[0].topics![0].state = "approved";
   assert.ok(kinds(f).includes("not-started"));
 });
+
+// A recovery in flight used to resolve idle, then its empty result reopened the same incident and woke CEO again.
+test("an active CEO round cannot resolve and reopen the existing idle incident", () => {
+  const f = fixture();
+  f.runtime.rounds = [1, 2, 3].map((id) => ({ id, role: "ceo", at: now.toISOString(), state: "nothing", attempts: 1 }));
+  const first = reconcileHealth(undefined, detectHealth(f), now);
+  first.pending = false;
+  f.runtime.rounds.push({ id: 4, role: "ceo", at: now.toISOString(), state: "claimed", attempts: 1 });
+  const active = reconcileHealth(first, detectHealth(f), now);
+  assert.equal(active.incidents.find((i) => i.kind === "idle")?.resolvedAt, undefined);
+  f.runtime.rounds.at(-1)!.state = "nothing";
+  const ended = reconcileHealth(active, detectHealth(f), now);
+  assert.equal(ended.revision, first.revision);
+  assert.equal(ended.pending, false);
+  f.runtime.rounds.at(-1)!.progress = "real new decision";
+  assert.ok(reconcileHealth(ended, detectHealth(f), now).incidents.find((i) => i.kind === "idle")?.resolvedAt);
+});

@@ -55,7 +55,24 @@ if (!allowed) {
     }) + "\n",
   );
 } else {
-  process.stdout.write(JSON.stringify({ companyModel: engine }) + "\n");
+  process.stdout.write(
+    JSON.stringify({
+      companyModel: engine,
+      ...(event
+        ? {
+            companyWork: {
+              task: event.subject,
+              assignment: JSON.parse(event.detail).assignment,
+              topicsPending:
+                role === "ceo" &&
+                JSON.parse(readFileSync(join(turn.folder, "ceo-review.json"), "utf8")).projects.some((p: any) =>
+                  p.topics?.some((t: any) => t.state === "screening"),
+                ),
+            },
+          }
+        : {}),
+    }) + "\n",
+  );
   const refund = () => {
     const ledger = new ModelBudget(dirname(configFile), config);
     try {

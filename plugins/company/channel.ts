@@ -164,22 +164,23 @@ export function interactiveCard(
         });
       }
     }
-    elements.push(
-      ...card.options.flatMap((label, choice) =>
-        card.title === "发布预告" && choice !== 0
-          ? []
-          : [
-              {
-                tag: "button",
-                text: { tag: "plain_text", content: card.title === "发布预告" ? label : `${choice + 1}. ${label}` },
-                type: choice === card.recommend ? "primary" : "default",
-                width: "fill",
-                behaviors: [{ type: "callback", value: { card: card.id, version: card.version, choice } }],
-              },
-            ],
-      ),
+    const choices = card.options.flatMap((label, choice) =>
+      card.title === "发布预告" && choice !== 0
+        ? []
+        : [
+            {
+              tag: "button",
+              name: `choice_${choice}`,
+              ...(card.title !== "发布预告" ? { form_action_type: "submit" } : {}),
+              text: { tag: "plain_text", content: card.title === "发布预告" ? label : `${choice + 1}. ${label}` },
+              type: choice === card.recommend ? "primary" : "default",
+              width: "fill",
+              behaviors: [{ type: "callback", value: { card: card.id, version: card.version, choice } }],
+            },
+          ],
     );
-    if (card.title !== "发布预告")
+    if (card.title === "发布预告") elements.push(...choices);
+    else
       elements.push({
         tag: "form",
         name: "owner_reply",
@@ -193,8 +194,9 @@ export function interactiveCard(
             rows: 3,
             width: "fill",
             max_length: 1000,
-            required: true,
+            required: false,
           },
+          ...choices,
           {
             tag: "button",
             name: "submit_reply",
@@ -350,7 +352,7 @@ export class CompanyFeishu {
     let saved = this.state.cards[card.id];
     const promote =
       this.cards &&
-      (!saved?.interactive || saved.layout !== 3 || (publicationKey(card) && saved.publicationMedia?.version !== 2)) &&
+      (!saved?.interactive || saved.layout !== 4 || (publicationKey(card) && saved.publicationMedia?.version !== 2)) &&
       card.kind === "ask" &&
       card.state === "open";
     if (!saved || saved.version < card.version || promote) {
@@ -415,7 +417,7 @@ export class CompanyFeishu {
         topics: card.title === "选题拍板" ? cardTopics(card.text) : undefined,
         publicationMedia,
         interactive: native || saved?.interactive,
-        layout: native ? 3 : saved?.layout,
+        layout: native ? 4 : saved?.layout,
         cardRef,
         ref,
         version: card.version,
@@ -440,7 +442,8 @@ export class CompanyFeishu {
             context: { open_message_id: raw.message_id },
             action: {
               value: JSON.parse(raw.action_value),
-              form_value: raw.form_value ? JSON.parse(raw.form_value) : undefined,
+              form_value: typeof raw.form_value === "string" ? JSON.parse(raw.form_value) : raw.form_value,
+              input_value: raw.input_value,
               tag: raw.action_tag,
               name: raw.action_name,
             },
@@ -475,7 +478,7 @@ export class CompanyFeishu {
       return false;
     if (saved.topics && value.action === "topic") {
       const index = saved.topics.topics.indexOf(value.topic);
-      const opinion = event.action.form_value?.[`opinion_${value.topic}`] ?? "";
+      const opinion = event.action.form_value?.[`opinion_${value.topic}`] ?? event.action.input_value ?? "";
       if (
         !this.onQuestion ||
         index < 0 ||
@@ -523,9 +526,10 @@ export class CompanyFeishu {
       this.save();
       return true;
     }
-    let answer: { text: string } | { choice: number };
+    let answer: { text?: string; choice?: number };
+    const text = event.action.form_value?.reply ?? event.action.input_value;
+    if (text !== undefined && (typeof text !== "string" || text.length > 1000)) return false;
     if (value.action === "reply") {
-      const text = event.action.form_value?.reply;
       if (
         value.choice !== undefined ||
         event.action.tag !== "button" ||
@@ -544,7 +548,7 @@ export class CompanyFeishu {
         value.choice >= saved.options.length
       )
         return false;
-      answer = { choice: value.choice };
+      answer = { choice: value.choice, ...(text?.trim() ? { text: text.trim() } : {}) };
     }
     try {
       await this.hub.answer(value.card, { ...answer, by: this.owner, ref: saved.ref });

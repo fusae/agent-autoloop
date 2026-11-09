@@ -6,6 +6,7 @@
 <desc>公司插件按15分钟窗口巡检并校验CEO处置，独立systemd看门狗监测服务与心跳；首页和日报展示异常，内核不变。</desc>
 <desc>公司插件在私有operations.db保存员工笔记和周五复盘，集中索取缺失数据，21:00合并日报周报；资料上下文、额度和后台展示均在内核之外。</desc>
 <desc>公司插件可选选题会：员工报题、CEO初筛、董事长逐项飞书或文字拍板后入选题池，再派写稿；既有稿件及发布确认不变。选题资料和笔记留在私有工作区，首页显示进度，四小时待批提醒按24小时去重，内核不变。</desc>
+<desc>公司卡片在同一表单提交选项与意见，普通引用回复作为私有知识；缺报告修回执、相同审核有界复查、在途轮次不重置空转异常，内核与发布权限不变。</desc>
 <defs>
 <style>
 svg{--bg:#faf9f5;--ink:#1d1c19;--muted:#6e6b64;--line:#d6d3cb;--card:#fff;--item:#f4f2ec;--accent:#c2491d;--core:#1d1c19;--core-ink:#faf9f5;--core-duty:#33302a;--core-chip:#282621;--core-line:#423f38;--core-sub:#b9b5ab;--core-accent:#ef8a62;--tag-bg:#3d261c;--tag-ink:#ffb08e;--you-bg:#fff4ee}

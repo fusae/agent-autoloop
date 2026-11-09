@@ -47,7 +47,7 @@ import {
   type PublishReservation,
 } from "./publication-policy.ts";
 import { arrangementText } from "./arrangement.ts";
-import { ownerReplyEvidence } from "./owner-replies.ts";
+import { ownerReplyEvidence, ownerCardFeedback } from "./owner-replies.ts";
 import { freezePublication } from "./publication.ts";
 import { sourceSnapshots } from "./sources.ts";
 import { createHash, randomUUID } from "node:crypto";
@@ -1703,6 +1703,7 @@ export class Operations {
         day: day(new Date(now.getTime() - 9 * 3600_000)),
         results: Object.entries(c.eventOutcomes).sort(),
         answers: c.answeredCards,
+        ownerKnowledge: c.knowledge.filter((k) => k.source === "owner").map((k) => k.id),
         topics: businesses.map((b) => this.get(b.id, now).topics ?? []),
         healthRevision: c.health?.revision ?? 0,
       }),
@@ -2133,8 +2134,8 @@ export class Operations {
         ),
       );
     const unchanged = fingerprint === c.fingerprint;
-    if (unchanged && this.config.ceoWake !== "events" && !pendingReview) {
-      if (!(agenda && c.nextReviewAt && Date.parse(c.nextReviewAt) <= now.getTime())) return;
+    if (unchanged && (this.config.ceoWake !== "events" || pendingReview)) {
+      if (!pendingReview && !(agenda && c.nextReviewAt && Date.parse(c.nextReviewAt) <= now.getTime())) return;
       if ((c.unchangedReviews ?? 0) >= 2) {
         if (c.stalled?.fingerprint !== fingerprint) {
           const pending = [
@@ -2143,6 +2144,12 @@ export class Operations {
               this.get(b.id, now)
                 .plans.filter((p) => p.status === "proposed" || p.status === "review" || p.status === "delivered")
                 .map((p) => p.title),
+            ),
+            ...active.flatMap(
+              (b) =>
+                this.get(b.id, now)
+                  .topics?.filter((t) => t.state === "screening")
+                  .map((t) => t.title) ?? [],
             ),
           ];
           c.stalled = {
@@ -2340,6 +2347,51 @@ export class Operations {
       }
       const receipt: Receipt = {},
         chief = this.executive();
+      for (const e of events.filter((e) => e.source === "company-inbox" && e.type === "company.owner.question")) {
+        const feedback = ownerCardFeedback(this.directory, e.id);
+        if (!feedback) continue;
+        const p = this.get(feedback.business, now),
+          plan = p.plans.find((p) => p.id === feedback.plan);
+        const id = `card-feedback:${feedback.event}`;
+        if (!plan || chief.knowledge.some((k) => k.id === id)) continue;
+        chief.knowledge.push({
+          id,
+          business: p.business,
+          issue: plan.id,
+          source: "owner",
+          answer: feedback.text,
+          evidence: `董事长消息事件 ${feedback.event}，卡片 #${feedback.card}`,
+          context: feedback.title,
+          at: feedback.at,
+        });
+        for (const agent of ["ceo", `${p.business}:${plan.owner}`])
+          appendNote(
+            this.db,
+            agent,
+            id,
+            `董事长补充《${feedback.title}》（卡片 #${feedback.card}）：${feedback.text}`,
+            feedback.at,
+          );
+      }
+      // This parallel consumer only records owner evidence; the CEO chat and normal clock own dispatch.
+      if (
+        events.length &&
+        !answers.length &&
+        events.every((e) => e.source === "company-inbox" && e.type === "company.owner.question")
+      ) {
+        if (this.config.topics)
+          new TopicWorkflow(this.db, this.directory).tick(
+            [],
+            events,
+            receipt,
+            now,
+            this.topicParticipants(businesses, now),
+          );
+        this.saveExecutive(chief);
+        this.db.prepare("INSERT INTO batches VALUES (?,?)").run(batch, JSON.stringify(receipt));
+        this.db.exec("COMMIT");
+        return receipt;
+      }
       if (this.config.ceoWake === "events") delete chief.nextReviewAt;
       const beforeCEO = this.ceoInputs(chief, businesses, tasks, now),
         beforeProcessed = chief.processed;
@@ -2908,7 +2960,11 @@ export class Operations {
           chief.fingerprint = this.ceoInputs(chief, businesses, tasks, now);
         this.weeklyRhythm(chief, businesses, tasks, receipt, now, depth <= 1);
         const reporting = this.reporting(chief, businesses, tasks, receipt, now, depth <= 1);
-        if (depth <= 1 && !reporting) this.scheduleCEO(chief, businesses, tasks, receipt, now);
+        // The owner's message already has a CEO conversation; record its evidence without opening a second round.
+        const ownerConversation = events.some(
+          (e) => e.source === "company-inbox" && e.type === "company.owner.question",
+        );
+        if (depth <= 1 && !reporting && !ownerConversation) this.scheduleCEO(chief, businesses, tasks, receipt, now);
         this.saveExecutive(chief);
       }
       this.db.prepare("INSERT INTO batches VALUES (?,?)").run(batch, JSON.stringify(receipt));
