@@ -53,6 +53,8 @@ export function weeklyGoal(value: any): WeeklyGoal {
   return { business: value.business, role: value.role, week: value.week, direction: value.direction.trim(), metrics };
 }
 export function validateWorkday(config: Partial<CompanyConfig>) {
+  if (config.topics && (!config.workday?.enabled || !Number.isFinite(Date.parse(config.topics.startAt))))
+    throw Error("选题流程需要自主上班和生效时间");
   if (
     config.workday !== undefined &&
     (!config.workday ||

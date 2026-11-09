@@ -277,6 +277,17 @@ function homeReports(d, growth) {
   </section>`;
 }
 
+function homeTopics(d) {
+  const projects = d.home?.operations ?? d.operations ?? [];
+  const labels = [
+    ["pending", "待拍板"],
+    ["ready", "已通过待写"],
+    ["writing", "写作中"],
+    ["published", "已发"],
+  ];
+  return `<section class="home-block" aria-labelledby="topics-title"><div class="block-head"><h2 id="topics-title">选题</h2></div><ul class="queue">${labels.map(([key, label]) => `<li><span class="queue-title">${label}</span><span class="queue-state">${projects.reduce((sum, p) => sum + (p.topicStats?.[key] ?? 0), 0)}</span></li>`).join("")}</ul></section>`;
+}
+
 function homeHTML(d) {
   const asks = (d.cards ?? []).filter((c) => c.kind === "ask");
   const growth = (d.home?.operations ?? d.operations ?? []).flatMap((p) =>
@@ -295,6 +306,7 @@ function homeHTML(d) {
         : ""
     }
     ${(d.home?.anomalies ?? []).length ? `<section class="home-block" aria-labelledby="anomaly-title"><div class="block-head"><h2 id="anomaly-title">未解决异常</h2><span class="muted">${d.home.anomalies.length} 项</span></div><ul class="queue">${d.home.anomalies.map((i) => `<li><details><summary>${esc(i.title)}</summary><p class="block-note">${esc(i.impact)}<br>依据：${esc(i.evidence)}<br>处理建议：${esc(i.suggestion)}</p></details></li>`).join("")}</ul></section>` : ""}
+    ${homeTopics(d)}
     ${homeStaff(d, growth, stock)}
     ${homePosts(d)}
     ${homeReports(d, growth)}

@@ -54,7 +54,9 @@ test("v1 contracts are replaced in rules and handbooks without changing custom i
       assert.match(prompt, /最近10篇已发帖/);
       assert.match(prompt, /manage.ts cards/);
       assert.match(prompt, /禁止 imagegen/);
-      assert.match(prompt, /第五节7项清单逐条审/);
+      assert.match(prompt, /第五节8项清单逐条审/);
+      assert.match(prompt, /是否符合账号人设、App 推广是否克制/);
+      assert.match(prompt, /每三篇最多一篇以 App 为主角/);
       assert.match(prompt, /旧备稿在下次审核时同样执行/);
     }
     ensureBusinessRules(dir);

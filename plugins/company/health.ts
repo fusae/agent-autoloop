@@ -84,6 +84,7 @@ function outputSignature(task: Task | undefined, round: HealthRuntime["rounds"][
     report.inspection?.actions ?? [],
     report.inspection?.reviews ?? [],
     report.inspection?.questions ?? [],
+    report.inspection?.topics ?? [],
     report.verdict !== "pass" ? [report.verdict] : [],
     ...(d
       ? [
@@ -96,6 +97,8 @@ function outputSignature(task: Task | undefined, round: HealthRuntime["rounds"][
           d.staffPlans ?? [],
           d.weeklyGoals ?? [],
           d.ownerReplies ?? [],
+          d.topicReviews ?? [],
+          d.topicReplies ?? [],
           (d.responses ?? []).filter((r) => r.action !== "observe").map(({ anomaly, action }) => ({ anomaly, action })),
           d.report ? [d.report] : [],
         ]
@@ -121,6 +124,24 @@ export function detectHealth(input: {
     tasks.some((t) => t.kind === "ceo" && ["active", "queued"].includes(t.status)) ||
     (!!chief.lastTask && !tasks.some((t) => t.id === chief.lastTask));
   for (const p of projects) {
+    for (const batch of p.topicBatches ?? []) {
+      if (
+        !p.topics?.some((t) => t.batch === batch.id && t.state === "pending") ||
+        ms - Date.parse(batch.at) <= 4 * 3600_000
+      )
+        continue;
+      add(`topics:${batch.id}`, {
+        kind: "topics",
+        business: p.business,
+        role: "growth",
+        title: `${p.name}选题待拍板超过4小时`,
+        impact: "未通过的选题不能写稿，可先查资料",
+        evidence: `批次${batch.id}，提交于${batch.at}`,
+        suggestion: "CEO提醒董事长一次，24小时内不重复；不得自动通过",
+        severity: 1,
+        reminderOnly: true,
+      });
+    }
     for (const s of p.staff.filter((s) => s.pausedByCEO)) {
       for (const i of chief.health?.incidents.filter(
         (i) => !i.resolvedAt && i.business === p.business && i.role === s.role,
@@ -373,6 +394,7 @@ export function reconcileHealth(state: HealthState | undefined, findings: Health
 export function canNotify(incident: HealthIncident, now: Date) {
   return (
     !incident.notifiedAt ||
+    (incident.kind === "topics" && now.getTime() - Date.parse(incident.notifiedAt) >= 86400_000) ||
     (!incident.reminderOnly &&
       (now.getTime() - Date.parse(incident.notifiedAt) >= 86400_000 ||
         incident.severity > (incident.notifiedSeverity ?? 0)))

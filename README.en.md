@@ -292,3 +292,5 @@ Company waits require an open owner question or unfinished dependency; confirmed
 The company plugin supports deterministic health checks, constrained CEO recovery actions, unresolved incidents on home, daily incident reporting, and an independent systemd watchdog. See [health monitoring](docs/company.md#程序巡检与-ceo-处置).
 
 The optional company weekly rhythm keeps private employee notes, requests missing metrics once on Friday, and combines the CEO daily and weekly reports. See [company notes and retrospectives](docs/company.md#工作笔记与周五复盘); no kernel changes are required.
+
+The company plugin optionally runs [topic meetings](docs/company.md#选题会与账号人设): employees propose topics, the CEO screens them, and the owner approves them in Feishu before new drafting begins. Per-topic buttons and authenticated text replies are supported. Existing drafts and publication approvals keep their original workflow; the home page and Friday review include topic progress.

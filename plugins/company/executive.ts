@@ -13,6 +13,8 @@ export type StaffPlan = {
   reviewAt: string;
 };
 export type ExecutiveDecision = {
+  topicReviews?: { business: string; topic: string; approve: boolean; reason: string; rank: number }[];
+  topicReplies?: { business: string; batch: string; event: number }[];
   responses?: {
     anomaly: string;
     action: "clear-wait" | "retry" | "review" | "pause" | "resume" | "plan" | "escalate" | "observe";
@@ -134,6 +136,29 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
     return d[key].map(object);
   };
   return {
+    ...(d.topicReviews !== undefined
+      ? {
+          topicReviews: list("topicReviews", 30).map((a) => {
+            if (typeof a.approve !== "boolean" || !Number.isInteger(a.rank) || a.rank < 1 || a.rank > 30)
+              throw Error("选题初筛需要approve和排序rank");
+            return {
+              business: id(a.business),
+              topic: id(a.topic),
+              approve: a.approve,
+              reason: text(a.reason, 160),
+              rank: a.rank,
+            };
+          }),
+        }
+      : {}),
+    ...(d.topicReplies !== undefined
+      ? {
+          topicReplies: list("topicReplies", 10).map((a) => {
+            if (!Number.isSafeInteger(a.event) || a.event < 1) throw Error("选题答复需要真实消息编号");
+            return { business: id(a.business), batch: id(a.batch), event: a.event };
+          }),
+        }
+      : {}),
     ...(d.responses !== undefined
       ? {
           responses: list("responses", 6).map((a) => {

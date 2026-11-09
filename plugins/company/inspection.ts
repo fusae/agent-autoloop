@@ -1,5 +1,7 @@
+import { topicProposals, type TopicProposal } from "./topics.ts";
 import { permissions, type WorkOperation } from "./workday.ts";
 export type ActionProposal = {
+  topic?: string;
   operation?: WorkOperation;
   key: string;
   title: string;
@@ -12,6 +14,7 @@ export type ActionProposal = {
   measure: string;
 };
 export type Inspection = {
+  topics?: TopicProposal[];
   noProductionReason?: string;
   state: "idle" | "action" | "blocked";
   actions: ActionProposal[];
@@ -55,6 +58,7 @@ export function inspection(value: unknown): Inspection {
     return {
       ...(a.operation !== undefined ? { operation: a.operation } : {}),
       key: key(a.key),
+      ...(a.topic !== undefined ? { topic: key(a.topic) } : {}),
       title: str(a.title, 80),
       kind: a.kind,
       goal: str(a.goal, 240),
@@ -81,6 +85,7 @@ export function inspection(value: unknown): Inspection {
   });
   return {
     ...(d.noProductionReason !== undefined ? { noProductionReason: str(d.noProductionReason, 180) } : {}),
+    ...(d.topics !== undefined ? { topics: topicProposals(d.topics) } : {}),
     state: d.state,
     actions,
     reviews,

@@ -1,3 +1,4 @@
+import { topicStats } from "../plugins/company/topics.ts";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage } from "node:http";
@@ -246,6 +247,7 @@ export async function startDashboard(directory: string, port = 3361, options: { 
               : null,
             operations: snapshot.map((p) => ({
               business: p.business,
+              topicStats: topicStats(p, undefined, publicationResults(directory)),
               workday: p.workday,
               reporting: p.reporting,
               staff: p.staff

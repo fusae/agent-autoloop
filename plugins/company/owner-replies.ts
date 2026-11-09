@@ -27,6 +27,8 @@ export function ownerReplyEvidence(directory: string, event: number, after: stri
     )
       throw Error("负责人原话不完整，不能据此关闭问题");
     return {
+      topicBatch: typeof detail.topicBatch === "string" ? detail.topicBatch : undefined,
+      topicChoice: detail.topicChoice as import("./topics.ts").TopicChoice | undefined,
       at: String(row.received_at),
       text: detail.question,
       message: detail.message,
@@ -51,5 +53,24 @@ export async function syncOwnerReplyCards(directory: string, leadership: Leaders
     }
   } finally {
     db.close();
+  }
+}
+
+export async function syncTopicCards(directory: string, hub: Pick<Hub, "resolve">) {
+  const db = new DatabaseSync(join(directory, "operations.db"), { readOnly: true });
+  const h = new DatabaseSync(join(directory, "hub/hub.db"), { readOnly: true });
+  h.function("card_token", { deterministic: true }, (_id, _at) => null);
+  try {
+    for (const row of db.prepare("SELECT body FROM projects").all()) {
+      const p = JSON.parse(String(row.body)) as import("./operations.ts").Project;
+      for (const b of p.topicBatches?.filter((b) => b.closed) ?? []) {
+        for (const card of h.prepare("SELECT id FROM cards WHERE state='open' AND about=?").all(`topics:${b.id}`)) {
+          await hub.resolve(Number(card.id), "该批选题已逐条记录董事长决定");
+        }
+      }
+    }
+  } finally {
+    db.close();
+    h.close();
   }
 }

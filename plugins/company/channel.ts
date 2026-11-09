@@ -1,3 +1,4 @@
+import { cardTopics } from "./topics.ts";
 import { rabbitChannel, rabbitDraft, rabbitText, manualXKey } from "./rabbitrun.ts";
 import { parseXhsDraft } from "../xiaohongshu/publisher.ts";
 import { ARRANGEMENT_DETAILS } from "./arrangement.ts";
@@ -29,6 +30,7 @@ type Message = {
   thread_id?: string;
 };
 type Saved = {
+  topics?: { id: string; topics: string[] };
   version: number;
   ref: string | null;
   open: boolean;
@@ -76,6 +78,7 @@ export function interactiveCard(
   media?: PublicationMedia,
   manual?: { text: string; url?: string; published: boolean },
 ) {
+  const topics = card.title === "选题拍板" ? cardTopics(card.text) : undefined;
   const publication = publicationKey(card);
   const text = manual ? manual.text : publication ? card.text.replace(/\n发布稿件：[a-f0-9]{32}$/, "") : card.text;
   const answer = card.answer || (card.choice !== null ? card.options[card.choice] : "");
@@ -98,7 +101,7 @@ export function interactiveCard(
     ] as any[];
   });
   const background = arrangement ? extra.join(ARRANGEMENT_DETAILS) : paragraphs.slice(1).join("\n\n");
-  if (background)
+  if (background && !topics)
     elements.push({
       tag: "collapsible_panel",
       expanded: false,
@@ -131,6 +134,36 @@ export function interactiveCard(
         text: { tag: "plain_text", content: manual.published ? "X 已发" : "X 待发，通知已关闭" },
       });
   } else if (card.kind === "ask" && card.state === "open") {
+    if (topics) {
+      for (const [index, topic] of topics.topics.entries()) {
+        elements.push({
+          tag: "div",
+          text: { tag: "plain_text", content: paragraphs[index + 1] ?? `${index + 1}. 选题` },
+        });
+        elements.push({
+          tag: "form",
+          name: `topic_${topic}`,
+          elements: [
+            {
+              tag: "input",
+              name: `opinion_${topic}`,
+              label: { tag: "plain_text", content: `${index + 1}. 补充意见（可不填）` },
+              max_length: 200,
+              required: false,
+            },
+            ...[true, false].map((approve) => ({
+              tag: "button",
+              name: `topic_${topic}_${approve}`,
+              text: { tag: "plain_text", content: `${index + 1}. ${approve ? "通过" : "退回"}` },
+              form_action_type: "submit",
+              behaviors: [
+                { type: "callback", value: { card: card.id, version: card.version, action: "topic", topic, approve } },
+              ],
+            })),
+          ],
+        });
+      }
+    }
     elements.push(
       ...card.options.flatMap((label, choice) =>
         card.title === "发布预告" && choice !== 0
@@ -379,6 +412,7 @@ export class CompanyFeishu {
         if (native) cardRef = sent.data.message_id;
       }
       saved = {
+        topics: card.title === "选题拍板" ? cardTopics(card.text) : undefined,
         publicationMedia,
         interactive: native || saved?.interactive,
         layout: native ? 3 : saved?.layout,
@@ -439,6 +473,38 @@ export class CompanyFeishu {
       saved.version !== value.version
     )
       return false;
+    if (saved.topics && value.action === "topic") {
+      const index = saved.topics.topics.indexOf(value.topic);
+      const opinion = event.action.form_value?.[`opinion_${value.topic}`] ?? "";
+      if (
+        !this.onQuestion ||
+        index < 0 ||
+        typeof value.approve !== "boolean" ||
+        typeof opinion !== "string" ||
+        opinion.length > 200 ||
+        event.action.tag !== "button" ||
+        event.action.name !== `topic_${value.topic}_${value.approve}`
+      )
+        return false;
+      const question = `选题批次：${saved.topics.id}\n${index + 1}${value.approve ? "通过" : "退回"}${opinion ? "：" + opinion : ""}`;
+      await this.onQuestion({
+        id: `topic-card:${id}`,
+        type: "company.owner.question",
+        subject: "owner",
+        summary: "董事长选题拍板",
+        detail: JSON.stringify({
+          question,
+          message: saved.cardRef,
+          topicBatch: saved.topics.id,
+          topicChoice: { index, approve: value.approve, opinion: opinion || (value.approve ? "通过" : "退回") },
+          quoted: { text: `选题批次：${saved.topics.id}` },
+        }),
+      });
+      this.state.seen.push(id);
+      this.state.seen = this.state.seen.slice(-2000);
+      this.save();
+      return true;
+    }
     if (saved.manualX) {
       if (
         !this.manualX ||
@@ -523,7 +589,7 @@ export class CompanyFeishu {
       message: parent,
       ...(matched ? { card: Number(matched[0]) } : {}),
       type: quoted.msg_type,
-      text: text.slice(0, 2200),
+      text: matched?.[1].topics ? `选题批次：${matched[1].topics.id}\n` + text.slice(0, 2100) : text.slice(0, 2200),
       truncated: text.length > 2200,
     };
   }

@@ -3,7 +3,7 @@ import { manualXNotice } from "./rabbitrun.ts";
 import { collectFeedback } from "./feedback.ts";
 import { ModelBudget } from "./model-budget.ts";
 import { workflows } from "./company.ts";
-import { syncOwnerReplyCards } from "./owner-replies.ts";
+import { syncOwnerReplyCards, syncTopicCards } from "./owner-replies.ts";
 import { failedWork } from "./recovery.ts";
 import { hubClient } from "../../protocol/client.ts";
 import { existsSync, writeFileSync, renameSync } from "node:fs";
@@ -45,6 +45,7 @@ try {
         runs: any[] = [];
       try {
         await syncOwnerReplyCards(dirname(configFile), operations.executive(), client);
+        await syncTopicCards(dirname(configFile), client);
       } catch {
         /* Card sync is retried on the next tick without blocking task recovery. */
       }

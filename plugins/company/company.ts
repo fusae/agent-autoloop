@@ -1,3 +1,4 @@
+import { taskTopic, validateTopicSubmission } from "./topics.ts";
 import { registeredWeeklyReport, registeredReview, retrospective, type Retrospective } from "./weekly.ts";
 import { dailyReport, scheduledReport, validateReporting, validateDraftPlan, type DailyReport } from "./reporting.ts";
 import { validateWorkday, type permissions } from "./workday.ts";
@@ -46,6 +47,7 @@ export type CompanyConfig = {
   inspections?: boolean;
   ceoWake?: "legacy" | "events";
   dailyModelRuns?: Partial<Record<Role | "total" | "employee", number>>;
+  topics?: { startAt: string };
   workday?: { enabled: boolean; after: string; startDate?: string; prepareDrafts?: boolean };
   reporting?: { enabled: boolean; weekly?: boolean };
   health?: { enabled: boolean };
@@ -60,6 +62,7 @@ export type Context = {
   answers: { at?: string; card: number; choice: number | null; about: string; text?: string | null }[];
 };
 export type Report = {
+  topic?: string;
   at?: string;
   dailyReport?: DailyReport;
   retrospective?: Retrospective;
@@ -373,6 +376,14 @@ export class Company {
             : [],
         evidence: list(data.evidence, "核验依据", 150),
       };
+      const topic =
+        this.config.topics && task.kind !== "publish-content"
+          ? taskTopic(dirname(this.config.database), task.id)
+          : undefined;
+      if (topic && data.verdict === "pass") {
+        if (data.topic !== topic) throw new CompanyInputError("稿件交付必须关联原选题id（topic）");
+        report.topic = topic;
+      }
       const weekly = this.config.reporting?.weekly
         ? registeredReview(dirname(this.config.database), task.id)
         : undefined;
@@ -399,7 +410,11 @@ export class Company {
       if ((task.kind.startsWith("check-") || task.kind.startsWith("workday-")) && data.verdict === "pass") {
         try {
           report.inspection = inspection(data.inspection);
-          if (this.config.workday?.prepareDrafts && task.kind.startsWith("workday-"))
+          if (report.inspection.topics?.length) {
+            if (!this.config.topics) throw Error("选题流程尚未启用");
+            validateTopicSubmission(dirname(this.config.database), task.id, report.inspection.topics, now);
+          }
+          if (!this.config.topics && this.config.workday?.prepareDrafts && task.kind.startsWith("workday-"))
             validateDraftPlan(dirname(this.config.database), task.id, report.inspection, now);
         } catch (error) {
           throw new CompanyInputError((error as Error).message);
@@ -441,7 +456,10 @@ export class Company {
           throw new CompanyInputError((error as Error).message);
         }
       }
-      if (JSON.stringify(report).length > (weekly || task.kind === "ceo" ? 3500 : 1900))
+      if (
+        JSON.stringify(report).length >
+        (weekly || task.kind === "ceo" || report.inspection?.topics?.length ? 3500 : 1900)
+      )
         throw new CompanyInputError("报告 JSON 超过 1900 字，请将详情留在交付文件");
     } catch (error) {
       if (!(error instanceof CompanyInputError)) throw error;

@@ -1,3 +1,13 @@
+import { TopicWorkflow } from "./topic-workflow.ts";
+import {
+  submitTopics,
+  topicCanWrite,
+  topicId,
+  topicOfficeHours,
+  topicStats,
+  type Topic,
+  type TopicBatch,
+} from "./topics.ts";
 import { initNotes, appendNote, notebook, compactNote, seedNotes } from "./notes.ts";
 import { friday, previousWeek } from "./weekly.ts";
 import { metricCatalog, missingMetrics, metricNames, metricText } from "./feedback.ts";
@@ -133,6 +143,10 @@ export type Plan = ActionProposal & {
 };
 type Signal = { id: string; title: string; detail: string; source: string; role: Role | "all"; at: string };
 export type Project = {
+  topics?: Topic[];
+  topicBatches?: TopicBatch[];
+  topicMeeting?: { week: string; task?: string; completed?: boolean };
+  topicFollowup?: { task: string; signature: string };
   publishReservations?: PublishReservation[];
   business: string;
   owner: Role;
@@ -291,18 +305,21 @@ export class Operations {
               (["failed", "timeout"].includes(i.kind) && !!i.task && c.repairs?.[i.task]?.exhausted)))),
     )) {
       if (!canNotify(incident, now)) continue;
-      const action = incident.reminderOnly
-        ? "请查看原卡片并亲自决定或登记发布。"
-        : incident.kind === "auth"
-          ? "请恢复CEO登录认证。"
-          : "请检查并修复CEO运行故障。";
+      const action =
+        incident.kind === "topics"
+          ? "请查看选题卡逐条拍板。"
+          : incident.reminderOnly
+            ? "请查看原卡片并亲自决定或登记发布。"
+            : incident.kind === "auth"
+              ? "请恢复CEO登录认证。"
+              : "请检查并修复CEO运行故障。";
       const tried = incident.reminderOnly
         ? "程序已核对运行记录，保留原确认状态"
         : incident.kind === "auth"
           ? "程序已核对认证失败，CEO无法自行处理"
           : "CEO任务已经自动修复两次，仍未取得有效结果";
       (receipt.notice ??= []).push({
-        key: `health-${incident.id}-${c.health.revision}`,
+        key: `health-${incident.id}-${incident.kind === "topics" ? day(now) : c.health.revision}`,
         title: "CEO · 异常上报",
         text: `发生：${incident.title}。\n影响：${incident.impact}。\n已尝试：${tried}。\n需要董事长：${action}`,
       });
@@ -484,6 +501,8 @@ export class Operations {
         JSON.stringify(
           {
             weeklyGoal: s.weeklyGoal ?? null,
+            topics: p.topics ?? [],
+            topicMeeting: p.topicMeeting,
             reports: s.reports ?? [],
             ...(this.config.workday?.prepareDrafts && s.role === "growth"
               ? { draftStock: draftStock(p.plans, s.weeklyGoal, publicationResults(this.directory), now) }
@@ -777,6 +796,8 @@ export class Operations {
             ...b,
             plans: project.plans.map((a) => [a.id, a.status, a.priority, a.result]),
             signals: project.signals,
+            topics: project.topics,
+            topicMeeting: project.topicMeeting,
             week: weekOf(now),
             ...(this.dailyPlanning
               ? {
@@ -945,6 +966,12 @@ export class Operations {
           a.issues.every((id) => c.issues.some((i) => i.id === id && (!a.business || i.business === a.business))),
       );
     if (!valid) return "CEO 决策引用了不存在或暂停的项目、计划或问题，请重新核对编号。";
+    if ((d.topicReviews?.length || d.topicReplies?.length) && !this.config.topics) return "选题流程尚未启用";
+    try {
+      new TopicWorkflow(this.db, this.directory).validate(d);
+    } catch (error) {
+      return (error as Error).message;
+    }
     const responseError = this.validateResponses(c, businesses, tasks, d, now);
     if (responseError) return responseError;
     const weeklyGoals = d.weeklyGoals ?? [];
@@ -965,6 +992,22 @@ export class Operations {
         d.approvals.some((a) => a.approve && !executable(this.get(a.business, now).plans.find((p) => p.id === a.plan)!))
       )
         return "该动作不能作为内部任务开工：发布须成果审核，改目标须weeklyGoals；对外回复未接入，部署、花钱、换账号须升级董事长";
+    }
+    for (const directive of d.directives) {
+      const p = this.get(directive.business, now);
+      const existing = p.plans.find((p) => p.key === directive.action.key);
+      if (
+        !topicCanWrite(
+          p,
+          existing ?? {
+            ...directive.action,
+            id: hash(`${p.business}:ceo:${directive.action.key}`),
+            createdAt: now.toISOString(),
+          },
+          this.config.topics?.startAt,
+        )
+      )
+        return "新稿必须使用董事长已通过且未被占用的选题";
     }
     const staffPlans = d.staffPlans ?? [];
     if (staffPlans.length && !this.dailyPlanning) return "每日规划尚未启用";
@@ -1093,6 +1136,7 @@ export class Operations {
       if (p.plans.filter((p) => p.status !== "closed").length + additions.size > 30)
         return "该项目已有 30 项未结束计划，请先处理已有工作。";
     }
+    if (this.config.topics) new TopicWorkflow(this.db, this.directory).apply(d, now);
     if (this.config.ceoWake === "events") {
       delete c.nextReviewAt;
     } else c.nextReviewAt = new Date(now.getTime() + 30 * 60000).toISOString();
@@ -1464,6 +1508,7 @@ export class Operations {
   private ceoContext(c: Leadership, businesses: Portfolio, tasks: Task[], now: Date) {
     const active = businesses.filter((b) => b.autonomy && b.status === "active");
     return {
+      topicPolicy: this.config.topics ?? null,
       workNotes: this.config.reporting?.weekly ? notebook(this.db, "ceo") : undefined,
       weeklyCycles: this.config.reporting?.weekly
         ? (c.weeklyCycles ?? [])
@@ -1570,7 +1615,8 @@ export class Operations {
         t.status === "completed" &&
         inspection?.state === "idle" &&
         !inspection.questions?.length &&
-        !inspection.actions.length
+        !inspection.actions.length &&
+        !inspection.topics?.length
       )
         continue;
       c.eventOutcomes[t.id] = JSON.stringify([t.assignment, t.status, t.reason]);
@@ -1580,6 +1626,7 @@ export class Operations {
         day: day(new Date(now.getTime() - 9 * 3600_000)),
         results: Object.entries(c.eventOutcomes).sort(),
         answers: c.answeredCards,
+        topics: businesses.map((b) => this.get(b.id, now).topics ?? []),
         healthRevision: c.health?.revision ?? 0,
       }),
     );
@@ -1780,6 +1827,8 @@ export class Operations {
                 notes.through,
               ),
             weeklyGoal: employee.weeklyGoal,
+            topics: this.get(b.id, now).topics ?? [],
+            topicStats: topicStats(this.get(b.id, now), week, publicationResults(this.directory)),
             reports: employee.reports?.filter((r) => r.date >= week),
             missing: missingMetrics(this.directory, c.manualMetrics ?? [], now),
             feedback: "knowledge/feedback.json",
@@ -1789,7 +1838,7 @@ export class Operations {
         const request = taskRequest({
           title: `${employee.name ?? b.name + " · " + departments[employee.role]} · 本周复盘`.slice(0, 120),
           kind: `check-${employee.role}`,
-          goal: `读取knowledge/weekly/${id}.json、knowledge/feedback.json及content-guide。本轮只复盘本周目标vs实际、逐帖数据、好坏及原因、下周打算；未知不能当0。更新本人笔记，保留数字、退稿原因、写作教训和固定事实，合并旧条目至4000字。company.result.detail提交retrospective:{review,notes,through}；inspection用idle、actions:[]、reviews:[]；整个detail≤3500字，review400–800字、notes1500–2000字，不新增工作。`,
+          goal: `读取knowledge/weekly/${id}.json、knowledge/feedback.json及content-guide。本轮只复盘本周目标vs实际、逐帖数据、选题通过率及通过选题的成稿数据、好坏及原因、下周打算；未知不能当0。更新本人笔记，保留数字、退稿原因、写作教训和固定事实，合并旧条目至4000字。company.result.detail提交retrospective:{review,notes,through}；inspection用idle、actions:[]、reviews:[]；整个detail≤3500字，review400–800字、notes1500–2000字，不新增工作。`,
           acceptance: ["有依据的本周复盘，缺数据照常提交", "笔记保留最有用经验及固定事实，through原样返回"],
         });
         (receipt.events ??= []).push({
@@ -1915,6 +1964,7 @@ export class Operations {
             : undefined,
           projects: active.map((b) => ({
             business: b.id,
+            topicStats: topicStats(this.get(b.id, now), weekOf(now), publicationResults(this.directory)),
             name: b.name,
             staff: this.get(b.id, now)
               .staff.filter((s) => this.onDuty(s))
@@ -2202,6 +2252,14 @@ export class Operations {
         beforeProcessed = chief.processed;
       if (chief.enabled) this.manage(chief, businesses, tasks, answers, receipt, now);
       this.conversation(chief, businesses, tasks, events, receipt, now);
+      if (this.config.topics)
+        new TopicWorkflow(this.db, this.directory).tick(
+          answers,
+          events,
+          receipt,
+          now,
+          businesses.filter((b) => b.autonomy && b.status === "active").map((b) => b.id),
+        );
       if (chief.enabled && depth <= 1) this.inspectHealth(chief, businesses, tasks, receipt, now);
       if (chief.enabled) this.repairScheduling(chief, businesses, now);
       if (chief.enabled) {
@@ -2348,6 +2406,15 @@ export class Operations {
           const report = t.reports.at(-1),
             decision = report?.inspection;
           if (!decision) continue;
+          if (this.config.topics && decision.topics?.length)
+            submitTopics(
+              p,
+              s.role,
+              decision.topics,
+              now,
+              p.topicMeeting?.task === t.id ? p.topicMeeting.week : undefined,
+            );
+          if (p.topicMeeting?.task === t.id) p.topicMeeting.completed = true;
           s.processed = `${t.id}:${t.assignment}`;
           s.lastChecked = now.toISOString();
           s.finding = report!.summary;
@@ -2363,6 +2430,12 @@ export class Operations {
               s.workday?.actions?.push(id);
             // Stable employee keys deduplicate proposals across checks; a closed plan remains in history.
             if (p.plans.some((v) => v.id === id) || p.plans.filter((v) => v.status !== "closed").length >= 30) continue;
+            if (!topicCanWrite(p, { ...a, id, createdAt: now.toISOString() }, this.config.topics?.startAt)) {
+              s.finding = "选题未获董事长通过，不能写稿；请先报题或从选题池取题";
+              continue;
+            }
+            const topic = p.topics?.find((t) => t.id === a.topic);
+            if (topic) topic.plan = id;
             const autonomous =
               !!this.config.permissions && this.onDuty(s) && automatic(a.operation) && a.kind !== "software";
             if (t.kind.startsWith("workday-")) s.workday?.actions?.push(id);
@@ -2459,6 +2532,53 @@ export class Operations {
           });
           p.activity.push({ task: id, role, kind, at: now.toISOString() });
         };
+        if (this.config.topics && chief.enabled && topicOfficeHours(now, this.config.workday?.after)) {
+          for (const s of p.staff.filter((s) => this.onDuty(s) && s.role === "growth")) {
+            if (!capacity() || busy().some((a) => a.role === s.role) || s.weeklyGoal?.week !== weekOf(now)) continue;
+            const stock = draftStock(p.plans, s.weeklyGoal, publicationResults(this.directory), now);
+            const remaining = Math.max(0, (stock.target ?? 0) - stock.published - stock.ready - stock.making);
+            const available = (p.topics ?? []).filter(
+              (t) => t.role === s.role && t.state === "approved" && !t.plan,
+            ).length;
+            const replacements = (p.topics ?? []).filter((t) => t.role === s.role && t.state === "returned");
+            const pending = (p.topics ?? []).some(
+              (t) => t.role === s.role && ["screening", "ready", "pending"].includes(t.state),
+            );
+            const first = p.topicMeeting?.week !== weekOf(now);
+            if (first && remaining === 0) {
+              p.topicMeeting = { week: weekOf(now), completed: true };
+              continue;
+            }
+            if (!first && p.plans.some((a) => a.owner === s.role && ["planned", "working"].includes(a.status)))
+              continue;
+            const signature = topicId(
+              JSON.stringify([weekOf(now), remaining, available, (p.topics ?? []).map((t) => [t.id, t.state])]),
+            );
+            const writing = !first && !replacements.length && available > 0 && remaining > 0;
+            if (!first && !replacements.length && !writing && (pending || remaining <= available)) continue;
+            if (!first && p.topicFollowup?.signature === signature) continue;
+            const id = "T-" + topicId(`${b.id}:${s.role}:${signature}`);
+            emit(
+              id,
+              s.role,
+              "check",
+              taskRequest({
+                title: `${b.name} · ${first ? "周一选题会" : writing ? "选题池取题" : replacements.length ? "选题换题" : "补报选题"}`,
+                kind: `check-${s.role}`,
+                goal: writing
+                  ? `读取knowledge/staff/${b.id}/${s.role}.json和knowledge/operations/${b.id}.json，从已通过且无plan的选题中按排序取题，inspection.actions提出本地写稿计划，topic填选题id，带上董事长opinion；本轮只规划，不写正文。`
+                  : `读取knowledge/staff/${b.id}/${s.role}.json、knowledge/operations/${b.id}.json、knowledge/feedback.json和上周周报、自己的复盘笔记、最近10篇已发。${replacements.length ? "按初筛意见换题一轮，replaces填原选题id" : `本周剩余目标${remaining}篇（已扣除在途稿），报${Math.min(10, remaining + 1)}条选题含1条备选`}。inspection.topics提交key/title/angle/reason/outline/app/platform；state用idle、actions/reviews空。只报选题，不写稿；未通过期间可查资料。每条约150字，整个detail≤3500字。`.slice(
+                      0,
+                      500,
+                    ),
+                acceptance: ["六项选题卡齐全，依据真实数据或笔记经验", "已在途稿照旧，未拍板不写稿"],
+              }),
+            );
+            if (first) p.topicMeeting = { week: weekOf(now), task: id };
+            else p.topicFollowup = { task: id, signature };
+            s.lastTask = id;
+          }
+        }
         if (this.config.workday?.enabled && chief.enabled) {
           for (const s of p.staff) {
             if (
@@ -2508,6 +2628,9 @@ export class Operations {
             todayPriority(a) - todayPriority(b) || a.priority - b.priority || a.createdAt.localeCompare(b.createdAt),
         )) {
           const publishing = a.status === "publishing";
+          if (!publishing && !topicCanWrite(p, a, this.config.topics?.startAt)) continue;
+          const writingTopic = p.topics?.find((t) => t.id === a.topic);
+          if (writingTopic && !publishing) writingTopic.plan = a.id;
           // A fixed publisher has its own hub lane; model inspections must not prevent it reporting missing access.
           if (
             !capacity(publishing) ||
@@ -2557,7 +2680,7 @@ export class Operations {
               ...(publishing ? { publication: a.publicationKey } : {}),
               goal: publishing
                 ? `项目资料：knowledge/operations/${b.id}.json。计划 ${a.id} 已经 CEO 审核。固定发布入口仅发布已冻结的内容；缺渠道或账号则报告具体阻塞。验收必须核对真实平台结果，不能把本地草稿当已发布。`
-                : `项目资料：knowledge/operations/${b.id}.json。计划编号 ${a.id}。${a.goal}${a.revision ? ` 返工：${a.result}；读取上一交付任务 ${a.deliveryTask}，在本任务目录修改。` : ""} 仅交付本地成果，交 CEO 审核。`.slice(
+                : `项目资料：knowledge/operations/${b.id}.json。计划编号 ${a.id}。${a.topic ? `选题id：${a.topic}；董事长意见见本业务topics中该选题，交付须带topic。` : ""}${a.goal}${a.revision ? ` 返工：${a.result}；读取上一交付任务 ${a.deliveryTask}，在本任务目录修改。` : ""} 仅交付本地成果，交 CEO 审核。`.slice(
                     0,
                     500,
                   ),
@@ -2679,6 +2802,14 @@ export class Operations {
         if (JSON.stringify(p) !== before) this.save(p, "check", now);
         this.profile(p, b, tasks, now);
       }
+      if (this.config.topics)
+        new TopicWorkflow(this.db, this.directory).tick(
+          [],
+          [],
+          receipt,
+          now,
+          businesses.filter((b) => b.autonomy && b.status === "active").map((b) => b.id),
+        );
       if (chief.enabled) {
         if (chief.processed !== beforeProcessed && beforeCEO === chief.fingerprint)
           chief.fingerprint = this.ceoInputs(chief, businesses, tasks, now);
