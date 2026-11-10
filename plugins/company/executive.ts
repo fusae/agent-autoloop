@@ -96,6 +96,7 @@ export type Knowledge = {
   at: string;
 };
 export type Leadership = {
+  proactiveRounds?: import("./proactive.ts").ProactiveRound[];
   weeklyCycles?: import("./weekly.ts").WeeklyCycle[];
   health?: import("./health.ts").HealthState;
   eveningReports?: { date: string; task: string; processed?: boolean; failureNotified?: boolean }[];

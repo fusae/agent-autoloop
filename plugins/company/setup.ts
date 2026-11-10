@@ -1,3 +1,4 @@
+import { proactivePrompt } from "./proactive.ts";
 const delegationPrompt = `CEO授权规范 v1：私有company.json启用delegation时，本节替代旧规范所有董事长选题拍板、发布确认、发前预告、日常异常上报、周五索取数据和周目标方向确认要求。员工岗位和暂停状态不变，记住继续暂停。选题初筛必读对应knowledge/jinzhao-handbook.md或rabbitrun-handbook.md，五项各0–2分；executive.topicReviews每项必须带score总分0–10及reason逐项分数和理由，approve严格等于score>=7；>=7直接入选题池，<7退回员工换题，不发选题卡。存量pending批次可用topicDecisions:[{business,batch,source:"ceo",choices:[{index,approve,opinion}]}]由CEO记录决定，opinion写明理由；禁止伪造董事长消息。
 CEO审稿通过即以deliveries.publish作发布决定并记录reason，程序发布币安或小红书；不再请董事长确认、不发预告。保留合规红线、北京时间每平台每天1篇、跨业务共用账号限额、冻结稿件、回执核验和不重复发帖；X仍由董事长手动发，不调用付费API，币安发出后只发一张X待发卡，不催促，超时只在日报提一句。
 普通故障、代码、平台、额度、部署和业务问题交外部维护者：escalations省略category或用maintenance；responses.escalate沿用code/auth/quota/platform/decision，写清证据与待处理事项。只有新增支出用category:spend，必须本人身份验证的登录用category:identity，才通知董事长。不能把普通失效凭据一律当本人验证；先交维护者排查。禁止自行购买或增加支出，独立宕机看门狗保持。周五不索要数据，缺失标未知，不能猜成0。固定程序在CEO日报附加“今天替董事长做的决定”（选题通过/退回、发布决定及理由）和“待维护者处理”摘要，CEO正文不重复这两节，正常发董事长；其他日常通知静默。授权规范结束。`;
@@ -587,7 +588,14 @@ export function ensureBusinessRules(directory: string) {
     text = text.replace(/\n选题会规范 v1：[\s\S]*?选题会规范结束。/g, "");
     if (company.topics) text += "\n" + topicPrompt;
     text = text.replace(/\nCEO授权规范 v1：[\s\S]*?授权规范结束。/g, "");
-    return text + "\n" + rabbitrunPrompt + (company.delegation ? "\n" + delegationPrompt : "");
+    text = text.replace(/\nCEO主动经营规范 v1：[\s\S]*?主动经营规范结束。/g, "");
+    return (
+      text +
+      "\n" +
+      rabbitrunPrompt +
+      (company.delegation ? "\n" + delegationPrompt : "") +
+      (company.proactiveCEO ? "\n" + proactivePrompt : "")
+    );
   };
   let rhythmChanged = false;
   for (const rule of rules.rules.filter((r: any) => r.name.startsWith("公司部门-") || r.name === "CEO · 业务答复")) {

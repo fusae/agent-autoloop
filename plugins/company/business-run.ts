@@ -1,3 +1,4 @@
+import { registeredProactive } from "./proactive.ts";
 import { recoverRabbitPublications } from "./rabbitrun-recovery.ts";
 import { syncDecisionCards } from "./decision-cards.ts";
 import { publicationResults } from "./publication-policy.ts";
@@ -84,8 +85,11 @@ try {
     try {
       for (const task of queued) {
         const reportDate =
-          task.kind === "ceo" && config.reporting?.enabled ? scheduledReport(dirname(configFile), task.id) : undefined;
-        // Expired reports resume only to record their terminal state; dispatch never starts a model for them.
+          task.kind === "ceo"
+            ? ((config.reporting?.enabled ? scheduledReport(dirname(configFile), task.id) : undefined) ??
+              registeredProactive(dirname(configFile), task.id)?.date)
+            : undefined;
+        // Expired scheduled work resumes only to record its terminal state, without a model.
         if (
           !(reportDate && reportDate < localDay(now)) &&
           !budget.available(workflows[task.kind][task.stage], now, task.id)

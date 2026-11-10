@@ -1,3 +1,4 @@
+import { registeredProactive } from "./proactive.ts";
 import { registeredReview } from "./weekly.ts";
 import codex from "../codex/agent.ts";
 import claude from "../claude/agent.ts";
@@ -176,6 +177,10 @@ export class ModelBudget {
     const reportDate =
       role === "ceo" && this.config.reporting?.enabled ? scheduledReport(this.directory, task) : undefined;
     if (reportDate) return reportDate === modelDay(now);
+    if (role === "ceo" && task) {
+      const proactive = registeredProactive(this.directory, task);
+      if (proactive && proactive.date !== modelDay(now)) return false;
+    }
     if (!limits) return true;
     if (s.total >= (limits.total ?? Infinity) || (s.roles[role] ?? 0) >= (limits[role] ?? Infinity)) return false;
     if (role !== "ceo" && limits.employee !== undefined) {

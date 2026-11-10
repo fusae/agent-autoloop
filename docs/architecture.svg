@@ -10,6 +10,7 @@
 <desc>公司插件将真实董事长文字与按钮统一为拍板，CEO对话动作同轮有限纠正，通道根据执行账本更新原卡，内核不变。</desc>
 <desc>币安异常回执保留脱敏诊断；公司插件核验真实董事长答复，日志补账、更新原卡并恢复X待发卡，不重发、不派模型，内核不变。</desc>
 <desc>私有CEO授权模式：手册评分七分起选题直接入池，CEO审稿决定发布；普通问题记后台维护清单。仅支出、本人验证、日报、X手动待发和独立宕机看门狗通知董事长；停止周五索数，今朝下载接入既有feedback，内核不变。</desc>
+<desc>公司可选主动经营：工作日10:30复盘、15:30条件兜底，周一策略合并首轮；复用CEO动作和每日额度，结论写私有笔记及日报，每类每日去重，内核不变。</desc>
 <defs>
 <style>
 svg{--bg:#faf9f5;--ink:#1d1c19;--muted:#6e6b64;--line:#d6d3cb;--card:#fff;--item:#f4f2ec;--accent:#c2491d;--core:#1d1c19;--core-ink:#faf9f5;--core-duty:#33302a;--core-chip:#282621;--core-line:#423f38;--core-sub:#b9b5ab;--core-accent:#ef8a62;--tag-bg:#3d261c;--tag-ink:#ffb08e;--you-bg:#fff4ee}

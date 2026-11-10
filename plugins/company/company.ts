@@ -1,3 +1,4 @@
+import { registeredProactive } from "./proactive.ts";
 import { squareStatus } from "./rabbitrun-receipt.ts";
 import { taskTopic, validateTopicSubmission } from "./topics.ts";
 import { registeredWeeklyReport, registeredReview, retrospective, type Retrospective } from "./weekly.ts";
@@ -44,6 +45,7 @@ export type CompanyConfig = {
   ceoMode?: boolean;
   contentReview?: "qa" | "ceo";
   dailyPlanning?: boolean;
+  proactiveCEO?: boolean;
   activeRoles?: Role[];
   inspections?: boolean;
   ceoWake?: "legacy" | "events";
@@ -176,6 +178,10 @@ export class Company {
     validatePublishPolicy(config);
     validateWorkday(config);
     validateReporting(config);
+    if (config.proactiveCEO !== undefined && typeof config.proactiveCEO !== "boolean")
+      throw Error("主动经营开关不正确");
+    if (config.proactiveCEO && (!config.delegation || !config.workday?.enabled || !config.reporting?.enabled))
+      throw Error("主动经营需要CEO授权、自主上班及日报");
     if (config.health !== undefined && typeof config.health?.enabled !== "boolean") throw Error("程序巡检开关不正确");
     if (config.health?.enabled && !config.ceoMode) throw Error("程序巡检需要启用CEO");
     this.config = config;
@@ -264,6 +270,12 @@ export class Company {
       this.config.reporting?.enabled && task.kind === "ceo"
         ? scheduledReport(dirname(this.config.database), task.id)
         : undefined;
+    const proactive = task.kind === "ceo" ? registeredProactive(dirname(this.config.database), task.id) : undefined;
+    if (proactive && proactive.date < modelDay(now)) {
+      task.status = "blocked";
+      task.reason = "主动经营已跨日，保留未完成记录，不补跑历史轮次";
+      return;
+    }
     if (reportDate && reportDate < modelDay(now)) {
       task.status = "blocked";
       task.reason = "汇报已跨日，保留原日期未完成记录，不占用今天的汇报或管理轮次";
@@ -462,6 +474,11 @@ export class Company {
       if (task.kind === "ceo" && data.verdict === "pass") {
         try {
           report.executive = executiveDecision(data.executive);
+          if (
+            registeredProactive(dirname(this.config.database), task.id) &&
+            (!report.executive.report || report.executive.report.length > 500)
+          )
+            throw Error("主动经营必须提供executive.report经营结论（1–500字），没有新信息写无需动作");
           if (weeklyCEO) {
             report.retrospective = retrospective(data.retrospective);
             if (report.retrospective.through !== weeklyCEO.ceoThrough) throw Error("CEO笔记版本不符");

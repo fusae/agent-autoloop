@@ -1,6 +1,6 @@
 # rabbitrun 币圈内容
 
-`rabbitrun` 经营个人内容账号（X `@rabbitrun_eth`、币安广场 `rabbitrun_eth`），不推广 App；在岗员工为 growth 岗的“海外运营”。CEO 每周定 7 篇目标，每日最多 1 篇；上班时间沿用公司 workday 规则，09:00 后正常调度。每日额度：CEO 20、每位运营 20，运营合计 60、公司 80。
+`rabbitrun` 经营个人内容账号（X `@rabbitrun_eth`、币安广场 `rabbitrun_eth`），不推广 App；在岗员工为 growth 岗的“海外运营”。CEO 每周定 7 篇目标，每日最多 1 篇；上班时间沿用公司 workday 规则，09:00 后正常调度。每日额度：CEO 40、每位运营 20，运营合计 60、公司 100；主动经营与普通CEO轮次共用额度。
 
 ## 内容和确认
 
