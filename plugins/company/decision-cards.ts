@@ -1,3 +1,5 @@
+import { publicationResults } from "./publication-policy.ts";
+import { squareStatus } from "./rabbitrun-receipt.ts";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -6,6 +8,13 @@ import type { Card } from "../../host/channels.ts";
 // The hub ends a model turn before the business coordinator applies its actions.
 // Render completion from that coordinator's durable receipt, never the model's claim.
 export function decisionCard(directory: string, card: Card): Card {
+  const proof = publicationResults(directory).find((p) => p.confirmation?.card === card.id);
+  if (proof)
+    return {
+      ...card,
+      state: "done",
+      result: `${squareStatus(proof)}；发布阻塞已解除；${proof.x?.state === "published" ? "X 已发" : "X 待发，请使用本篇手动发布卡片"}`,
+    };
   const file = join(directory, "operations.db");
   if (!existsSync(file)) return card;
   const db = new DatabaseSync(file, { readOnly: true });
@@ -45,6 +54,31 @@ export async function syncDecisionCards(
     }
   } finally {
     db.close();
+    h.close();
+  }
+}
+
+export function publicationDecisionCards(directory: string): Card[] {
+  const ids = publicationResults(directory).flatMap((p) => (p.confirmation ? [p.confirmation.card] : []));
+  if (!ids.length) return [];
+  const h = new DatabaseSync(join(directory, "hub/hub.db"), { readOnly: true });
+  try {
+    return ids.flatMap((id) => {
+      const r = h
+        .prepare("SELECT data FROM projections WHERE collection='cards' AND json_extract(data,'$.id')=?")
+        .get(id);
+      if (!r) return [];
+      const card = JSON.parse(String(r.data));
+      return [
+        {
+          ...card,
+          options: typeof card.options === "string" ? JSON.parse(card.options) : card.options,
+          ref: null,
+          link: null,
+        },
+      ];
+    });
+  } finally {
     h.close();
   }
 }

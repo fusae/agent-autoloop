@@ -18,8 +18,10 @@
 - 图片走 v2 `image/presignedUrl` → PUT → `image/imageStatus`，最多轮询 10 次，与官方流程一致；上传请求不携带发布 Key。
 - Key 是 `/etc/agent-company/binance-square.env` 中的原始单行密钥，root:root 0600；不 source、不放环境、命令行、输出或版本库。该文件后缀只是部署约定。
 - root 所有的固定 `/usr/local/libexec/company-rabbitrun-publish` 禁止参数，清空环境后调用 `cli/company-rabbitrun-publish.ts publish`。sudo 白名单仅授权该固定命令，CEO/员工不能读取 Key。
-- 程序重新读取冻结稿、经营日志中的逐篇确认及内核确认卡，不能凭 stdin 中的文案或批准声明发帖。只在官方响应含可核验帖子 ID 时记成功。
-- 请求前持久化意图，响应丢失、504、未知结果不算成功且不重发；需要人工核对。根目录状态 `/var/lib/agent-company-publisher/rabbitrun`，后台投影是 `publications/<key>-result.json`。
+- 程序重新读取冻结稿、经营日志中的逐篇确认及内核确认卡，不能凭 stdin 中的文案或批准声明发帖。官方响应含精确帖子 ID 或匹配的币安帖子链接时记 API 成功；JSON 大整数按原值解析。
+- 请求前持久化意图，响应丢失、504、未知结果先只读核对，不自动记成功、不重发。保留脱敏错误类别、HTTP 状态、数字错误码和字段类型，不能恢复旧版未保存的原始响应。根目录状态 `/var/lib/agent-company-publisher/rabbitrun`，后台投影是 `publications/<key>-result.json`。
+
+发布异常卡的本人按钮或编号文字答复如“币安已发出”“已发出”，可附币安帖子链接。固定入口重新核对异常卡及冻结稿，登记 `confirmation`（来源 chairman、原卡编号、答复事件和时间）；没有链接则编号与链接为空，明确显示“董事长确认已发，链接待补”。公司任务及计划通过各自日志补账、解除阻塞，原卡按真实回执更新；不会派模型或再发帖子。普通聊天、发布前批准和 CEO 自述均不作为此回执。只读核实后可由维护人员补链接，不覆盖已有链接或代确认 X。
 
 ## X 手动发布
 

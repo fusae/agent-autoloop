@@ -151,7 +151,7 @@ function approval(dir: string) {
   mkdirSync(join(dir, "publications"));
   writeFileSync(join(dir, "publications", key + ".json"), JSON.stringify(request()));
   const db = new DatabaseSync(join(dir, "operations.db"));
-  db.exec("CREATE TABLE projects(id TEXT,body TEXT)");
+  db.exec("CREATE TABLE projects(id TEXT PRIMARY KEY,body TEXT)");
   db.prepare("INSERT INTO projects VALUES (?,?)").run(
     "rabbitrun",
     JSON.stringify({
@@ -521,3 +521,250 @@ test("closing the notice alone never claims that X was published", () => {
   assert.equal(rendered.header.title.content, "X 待发，请手动发布");
   assert.doesNotMatch(JSON.stringify(rendered), /X 已发/);
 });
+
+// An acknowledged live post must survive a lost API receipt without another POST,
+// and only the real owner's answer to this draft's exception can close its books.
+test("Square preserves large JSON IDs, accepts a validated link receipt and records only safe failure structure", () =>
+  temporary(async (dir) => {
+    const { squareJSON } = await import("../plugins/binance-square/publisher.ts");
+    assert.equal(
+      squareResult(squareJSON('{"code":"000000","data":{"id":1234567890123456789}}')).remoteId,
+      "1234567890123456789",
+    );
+    assert.equal(
+      squareResult({ code: "000000", data: { shareLink: "https://www.binance.com/zh-CN/square/post/123?ref=test" } })
+        .remoteId,
+      "123",
+    );
+    assert.throws(() =>
+      squareResult({ code: "000000", data: { id: "123", shareLink: "https://www.binance.com/square/post/456" } }),
+    );
+    const cases = [
+      { response: () => new Response("secret-fixture", { status: 504 }), outcome: "http" },
+      {
+        response: () => {
+          throw new DOMException("secret-fixture", "TimeoutError");
+        },
+        outcome: "timeout",
+      },
+      { response: () => Response.json({ code: "220003", message: "secret-fixture" }), outcome: "api" },
+      { response: () => Response.json({ code: "000000", data: { other: "secret-fixture" } }), outcome: "receipt" },
+    ];
+    for (const [i, entry] of cases.entries()) {
+      const folder = join(dir, String(i));
+      let posts = 0;
+      const send = () =>
+        squarePublish("secret-fixture", draft, (async () => {
+          posts++;
+          return entry.response();
+        }) as typeof fetch);
+      const result = await squarePublication(folder, request(), send);
+      assert.equal(result.state, "unknown");
+      assert.equal((await squarePublication(folder, request(), send)).state, "unknown");
+      assert.equal(posts, 1);
+      const saved = readFileSync(join(folder, key + ".json"), "utf8");
+      assert.equal(JSON.parse(saved).diagnostic.outcome, entry.outcome);
+      assert.doesNotMatch(saved + JSON.stringify(result), /secret-fixture/);
+    }
+  }));
+
+test("owner exception confirmation journals publication, unblocks its plan and updates the original card without dispatch", () =>
+  temporary(async (dir) => {
+    const { rabbitConfirmation } = await import("../plugins/company/rabbitrun-receipt.ts");
+    const { recoverRabbitPublications } = await import("../plugins/company/rabbitrun-recovery.ts");
+    const { decisionCard } = await import("../plugins/company/decision-cards.ts");
+    const { Company } = await import("../plugins/company/company.ts");
+    const { Operations } = await import("../plugins/company/operations.ts");
+    approval(dir);
+    const start = new Date("2026-11-10T02:20:00Z"),
+      at = "2026-11-10T02:31:00Z";
+    const o = new Operations(dir);
+    const config: any = { database: join(dir, "company.db"), workspace: join(dir, "workspace"), maxAssignments: 5 };
+    const office = new Company(config);
+    const db = new DatabaseSync(join(dir, "operations.db"));
+    const h = new DatabaseSync(join(dir, "hub/hub.db"));
+    const c = new DatabaseSync(config.database);
+    try {
+      const p = JSON.parse(String(db.prepare("SELECT body FROM projects").get()!.body));
+      Object.assign(p, { business: "rabbitrun" });
+      Object.assign(p.plans[0], { id: "plan", status: "blocked", task: "P-test" });
+      db.prepare("UPDATE projects SET body=?").run(JSON.stringify(p));
+      db.prepare("INSERT INTO leadership VALUES ('company',?)").run(
+        JSON.stringify({
+          questions: [{ id: "exception", issues: ["issue"], state: "answered" }],
+          issues: [{ id: "issue", business: "rabbitrun", state: "open" }],
+        }),
+      );
+      c.prepare("INSERT INTO tasks VALUES ('P-test',?)").run(
+        JSON.stringify({
+          id: "P-test",
+          kind: "publish-content",
+          status: "blocked",
+          publication: key,
+          assignment: 1,
+          stage: 0,
+          reports: [],
+        }),
+      );
+      const card: any = {
+        id: 2,
+        kind: "ask",
+        agent: "company-business",
+        grp: "company-business",
+        about: "ceo:exception",
+        by: "ou_owner",
+        answer_event: 30,
+        created_at: at,
+        decided_at: at,
+        state: "done",
+        choice: 0,
+        options: JSON.stringify(["币安已发出", "币安没发出"]),
+        text: `《${draft.title}》币安广场发布结果未知，请核对`,
+        version: 3,
+      };
+      const setCard = (patch: any = {}) => {
+        h.prepare("DELETE FROM projections WHERE json_extract(data,'$.id')=2").run();
+        h.prepare("INSERT INTO projections VALUES ('cards',?)").run(JSON.stringify({ ...card, ...patch }));
+      };
+      setCard();
+      const req = approvedRabbitRequest(dir, key, "lookup");
+      assert.equal(rabbitConfirmation(dir, req, start.toISOString())?.confirmation?.event, 30);
+      for (const patch of [
+        { choice: 1 },
+        { answer: "还没发" },
+        { by: null },
+        { answer_event: null },
+        { about: "publish:other" },
+        { created_at: "2020-01-01" },
+        { text: "其他稿件币安发布结果未知" },
+      ]) {
+        setCard(patch);
+        assert.equal(rabbitConfirmation(dir, req, start.toISOString()), undefined);
+      }
+      setCard({ choice: null, answer: "已发出 https://www.binance.com/zh-CN/square/post/123" });
+      assert.equal(rabbitConfirmation(dir, req, start.toISOString())?.url, "https://www.binance.com/square/post/123");
+      setCard({ choice: null, answer: "已发出 https://evil.example/post/123" });
+      assert.equal(rabbitConfirmation(dir, req, start.toISOString()), undefined);
+      setCard();
+      let posts = 0;
+      const state = join(dir, "publisher");
+      await squarePublication(
+        state,
+        request(),
+        async () => {
+          posts++;
+          throw Error("lost");
+        },
+        start,
+      );
+      const proof = publication(
+        await squarePublication(
+          state,
+          req,
+          async () => {
+            posts++;
+            throw Error("must not publish");
+          },
+          new Date(at),
+          async (started) => rabbitConfirmation(dir, req, started),
+        ),
+      );
+      assert.equal(posts, 1);
+      assert.equal(proof.url, "");
+      assert.equal(proof.x?.state, "pending");
+      assert.equal(proof.publishedAt, at);
+      assert.throws(() => publication({ ...proof, confirmation: undefined }));
+      writeFileSync(join(dir, "publications", key + "-result.json"), JSON.stringify(proof));
+      let lookups = 0;
+      recoverRabbitPublications(dir, office, o, (_dir, _key, only) => {
+        assert.equal(only, true);
+        lookups++;
+        return proof;
+      });
+      recoverRabbitPublications(dir, office, o, () => {
+        throw Error("replay must not look up or dispatch");
+      });
+      assert.equal(lookups, 1);
+      assert.equal(office.task("P-test")?.status, "completed");
+      assert.equal(office.history("P-test").length, 1);
+      const plan = JSON.parse(String(db.prepare("SELECT body FROM projects").get()!.body)).plans[0];
+      assert.equal(plan.status, "closed");
+      assert.match(plan.result, /董事长确认已发，链接待补/);
+      assert.equal(o.executive().issues[0].state, "answered");
+      assert.match(decisionCard(dir, card).result!, /董事长确认已发，链接待补.*阻塞已解除.*X 待发/);
+      const queue = rabbitQueue(dir, state, { action: "list" });
+      assert.ok(Array.isArray(queue));
+      assert.equal(queue.length, 1);
+      const sent: any[] = [];
+      const bridge = new CompanyFeishu(
+        join(dir, "feishu.json"),
+        "ou_owner",
+        { delivered: async () => {} } as any,
+        async (args) => {
+          sent.push(JSON.parse(args[args.indexOf("--content") + 1]));
+          return { data: { message_id: "om_pending" } };
+        },
+        undefined,
+        true,
+        { dashboardUrl: "https://company.example", complete: async () => {} },
+      );
+      await bridge.deliver({
+        ...card,
+        id: 3,
+        kind: "notice",
+        state: "open",
+        version: 1,
+        text: manualXNotice(key),
+        options: [],
+        result: null,
+      });
+      assert.match(JSON.stringify(sent), /董事长确认已发，链接待补/);
+      assert.match(JSON.stringify(sent), /我已在 X 发布/);
+      const channelFile = join(dir, "closed-card.json");
+      writeFileSync(
+        channelFile,
+        JSON.stringify({
+          cards: {
+            2: {
+              version: 3,
+              ref: "om_exception",
+              cardRef: "om_exception",
+              interactive: true,
+              open: false,
+              options: [],
+              execution: '["done","经营周期已检查。"]',
+            },
+          },
+          seen: [],
+          cursor: at,
+          chatId: "oc_owner",
+        }),
+      );
+      const patches: any[] = [];
+      const closed = new CompanyFeishu(
+        channelFile,
+        "ou_owner",
+        { delivered: async () => {} } as any,
+        async (args) => {
+          if (args[1] === "PATCH") {
+            patches.push(JSON.parse(args[args.indexOf("--data") + 1]));
+            return {};
+          }
+          assert.equal(args[1], "+chat-messages-list");
+          return { data: { messages: [] } };
+        },
+        undefined,
+        true,
+      );
+      await closed.poll();
+      await closed.poll();
+      assert.equal(patches.length, 1);
+      assert.match(JSON.stringify(patches), /董事长确认已发，链接待补/);
+    } finally {
+      c.close();
+      h.close();
+      db.close();
+      office.close();
+      o.close();
+    }
+  }));

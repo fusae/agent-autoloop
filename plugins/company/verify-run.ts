@@ -64,13 +64,17 @@ try {
         summary:
           result.state === "verified"
             ? "receiptOnly" in result
-              ? "币安官方发布回执已登记；X 状态单独跟踪，本阶段不抓取效果数据"
+              ? result.proof.confirmation
+                ? "董事长确认已发布；X 状态单独跟踪"
+                : "币安官方发布回执已登记；X 状态单独跟踪，本阶段不抓取效果数据"
               : "程序已核对作者、标题、正文、图片数和发布时间，进入效果观察"
             : result.reason,
         artifacts: result.state === "verified" ? [artifact] : [],
         evidence: [
           "receiptOnly" in result
-            ? "仅核对已登记的官方发布回执，不代表回读平台正文"
+            ? result.proof.confirmation
+              ? "核对已登记的董事长确认，不代表回读平台正文"
+              : "仅核对已登记的官方发布回执，不代表回读平台正文"
             : "独立只读通道回读平台；未执行发布",
         ],
         ...(result.state === "verified" ? { publication: result.proof } : {}),

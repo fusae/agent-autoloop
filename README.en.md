@@ -296,3 +296,5 @@ The optional company weekly rhythm keeps private employee notes, requests missin
 The company plugin optionally runs [topic meetings](docs/company.md#选题会与账号人设): employees propose topics, the CEO screens them, and the owner approves them in Feishu before new drafting begins. Per-topic buttons and authenticated text replies are supported. Existing drafts and publication approvals keep their original workflow; the home page and Friday review include topic progress.
 
 Topic decisions can also be recorded by the CEO from authenticated owner messages or follow-up card answers. Invalid actions are corrected internally; cards show coordinator-confirmed outcomes. See [decision handling](docs/company.md#董事长拍板与执行结果).
+
+A verified owner answer to the original Binance publication exception can reconcile an already published post, with owner provenance and an optional link. Reconciliation restores the manual X card without reposting or starting a model turn.

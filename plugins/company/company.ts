@@ -1,3 +1,4 @@
+import { squareStatus } from "./rabbitrun-receipt.ts";
 import { taskTopic, validateTopicSubmission } from "./topics.ts";
 import { registeredWeeklyReport, registeredReview, retrospective, type Retrospective } from "./weekly.ts";
 import { dailyReport, scheduledReport, validateReporting, validateDraftPlan, type DailyReport } from "./reporting.ts";
@@ -223,6 +224,34 @@ export class Company {
     this.db
       .prepare("INSERT INTO journal(task,kind,at,body) VALUES (?,?,?,?)")
       .run(task.id, kind, new Date().toISOString(), body);
+  }
+  reconcilePublication(key: string) {
+    const proof = verifiedPublication(dirname(this.config.database), key);
+    if (!proof.x) throw Error("仅核对币安回执");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const task = this.tasks().find((t) => t.kind === "publish-content" && t.publication === key);
+      if (task?.status === "blocked") {
+        task.status = "completed";
+        task.approval = null;
+        task.reason = squareStatus(proof);
+        task.reports.push({
+          at: proof.publishedAt,
+          assignment: task.assignment,
+          verdict: "pass",
+          role: "growth",
+          summary: task.reason,
+          artifacts: [],
+          evidence: [task.reason],
+          publication: proof,
+        });
+        this.save(task, "publication-reconciled");
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
   private notice(receipt: Receipt, task: string, text: string) {
     receipt.notice ??= [];

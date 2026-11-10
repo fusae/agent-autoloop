@@ -225,7 +225,7 @@ function homePosts(d) {
     const x = proof.x;
     const label = x.state === "published" ? "X 已发" : "X 待发";
     cards.push(
-      `<li class="post"><div class="post-title"><h3>rabbitrun 币圈内容</h3><span>${homeShortDate(proof.publishedAt)} ${homeClock(proof.publishedAt)}</span> ${draftButton(proof.key, "全文和配图")} <button type="button" class="text-action" data-copy-draft="${esc(proof.key)}">复制全文</button></div><p><a href="${esc(proof.url)}" target="_blank" rel="noopener noreferrer">币安广场</a> · ${x.state === "published" && x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${label}</a>` : label}</p><p class="post-note">只记录发布结果，暂不采集互动数据。</p></li>`,
+      `<li class="post"><div class="post-title"><h3>rabbitrun 币圈内容</h3><span>${homeShortDate(proof.publishedAt)} ${homeClock(proof.publishedAt)}</span> ${draftButton(proof.key, "全文和配图")} <button type="button" class="text-action" data-copy-draft="${esc(proof.key)}">复制全文</button></div><p>${proof.url ? `<a href="${esc(proof.url)}" target="_blank" rel="noopener noreferrer">币安广场</a>${proof.confirmation ? "（董事长确认）" : ""}` : "董事长确认已发，链接待补"} · ${x.state === "published" && x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${label}</a>` : label}</p><p class="post-note">只记录发布结果，暂不采集互动数据。</p></li>`,
     );
   }
   const waiting = (d.home?.operations ?? d.operations ?? []).flatMap((p) =>

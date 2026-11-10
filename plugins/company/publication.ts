@@ -1,3 +1,4 @@
+import { squareLink, type OwnerConfirmation } from "./rabbitrun-receipt.ts";
 import { rabbitChannel, rabbitDraft, xReceipt, type XReceipt } from "./rabbitrun.ts";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
@@ -12,6 +13,7 @@ export type Publication = {
   url: string;
   publishedAt: string;
   x?: XReceipt;
+  confirmation?: OwnerConfirmation;
 };
 type Request = {
   key: string;
@@ -66,12 +68,36 @@ export function freezePublication(
 export function publication(value: unknown): Publication {
   const p = value as Publication;
   if (!p || !/^[a-f0-9]{32}$/.test(p.key)) throw Error("发布结果缺少审核记录");
-  for (const name of ["channel", "remoteId", "url", "publishedAt"] as const)
+  const c = p.confirmation;
+  if (
+    c &&
+    (c.source !== "chairman" ||
+      p.channel !== rabbitChannel ||
+      !p.x ||
+      !Number.isSafeInteger(c.card) ||
+      c.card < 1 ||
+      !Number.isSafeInteger(c.event) ||
+      c.event < 1 ||
+      !Number.isFinite(Date.parse(c.at)) ||
+      c.at !== p.publishedAt)
+  )
+    throw Error("董事长确认回执无效");
+  const missingLink = !!c && p.remoteId === "" && p.url === "";
+  for (const name of (missingLink
+    ? ["channel", "publishedAt"]
+    : ["channel", "remoteId", "url", "publishedAt"]) as (keyof Pick<
+    Publication,
+    "channel" | "remoteId" | "url" | "publishedAt"
+  >)[])
     if (typeof p[name] !== "string" || !p[name].trim() || p[name].length > 200)
       throw Error("发布结果缺少渠道、链接、平台编号或时间");
-  const url = new URL(p.url);
-  if (url.protocol !== "https:" || url.username || url.password || !Number.isFinite(Date.parse(p.publishedAt)))
+  const url = missingLink ? null : new URL(p.url);
+  if (
+    (url && (url.protocol !== "https:" || url.username || url.password)) ||
+    !Number.isFinite(Date.parse(p.publishedAt))
+  )
     throw Error("发布链接或时间无效");
+  if (c && !missingLink && squareLink(p.url).remoteId !== p.remoteId) throw Error("币安回执链接不匹配");
   return {
     key: p.key,
     channel: p.channel,
@@ -79,12 +105,13 @@ export function publication(value: unknown): Publication {
     url: p.url,
     publishedAt: p.publishedAt,
     ...(p.x ? { x: xReceipt(p.x) } : {}),
+    ...(c ? { confirmation: { source: c.source, card: c.card, event: c.event, at: c.at } } : {}),
   };
 }
 export function verifiedPublication(directory: string, key: string): Publication {
   return publication(JSON.parse(readFileSync(file(directory, key, "-result"), "utf8")));
 }
-export function executePublication(directory: string, key: string): Publication {
+export function executePublication(directory: string, key: string, lookupOnly = false): Publication {
   const request: Request = JSON.parse(readFileSync(file(directory, key), "utf8"));
   if (request.key !== key) throw Error("发布审核记录不匹配");
   if (existsSync(file(directory, key, "-result")))
@@ -128,8 +155,12 @@ export function executePublication(directory: string, key: string): Publication 
     }
   };
   let result = call("lookup");
-  if (result.state === "absent") {
-    call("publish");
+  if (result.state === "absent" && !lookupOnly) {
+    try {
+      call("publish");
+    } catch {
+      /* A lost process response does not mean the platform rejected the post. */
+    }
     result = call("lookup");
   }
   if (result.state !== "published")

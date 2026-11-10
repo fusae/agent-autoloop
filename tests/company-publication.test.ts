@@ -81,3 +81,39 @@ test("publisher blockers reach CEO and unbounded timeouts are rejected", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// A publisher can finish the external write and lose its process response; reconciliation is read-only.
+test("lost publisher response reads back success, and lookup-only never creates a post", () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-readback-"));
+  try {
+    mkdirSync(join(dir, "workspace"));
+    writeFileSync(join(dir, "workspace/post.md"), "正文");
+    const key = freezePublication(dir, "app", "plan", {
+      id: "draft",
+      assignment: 1,
+      reports: [{ artifacts: ["post.md"] }],
+    } as Task);
+    const script = join(dir, "platform.mjs");
+    writeFileSync(
+      script,
+      `import fs from 'node:fs';
+      let raw=''; for await (const chunk of process.stdin) raw+=chunk;
+      const r=JSON.parse(raw), file='receipt.json';
+      if(r.action==='publish') {
+        if(fs.existsSync(file)) throw Error('duplicate');
+        fs.writeFileSync(file, JSON.stringify({state:'published',key:r.key,channel:r.channel,remoteId:'123',url:'https://example.com/123',publishedAt:'2026-11-10T02:22:00Z'}));
+        process.exit(1);
+      }
+      console.log(fs.existsSync(file)?fs.readFileSync(file,'utf8'):'{"state":"absent"}');`,
+    );
+    writeFileSync(
+      join(dir, "publishing.json"),
+      JSON.stringify({ projects: { app: { channel: "测试平台", command: [process.execPath, script] } } }),
+    );
+    assert.throws(() => executePublication(dir, key, true), /尚未确认/);
+    assert.equal(executePublication(dir, key).remoteId, "123");
+    assert.equal(executePublication(dir, key, true).remoteId, "123");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

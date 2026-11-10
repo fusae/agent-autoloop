@@ -1,4 +1,5 @@
-import { decisionCard } from "./decision-cards.ts";
+import { squareStatus } from "./rabbitrun-receipt.ts";
+import { decisionCard, publicationDecisionCards } from "./decision-cards.ts";
 import { cardTopics } from "./topics.ts";
 import { rabbitChannel, rabbitDraft, rabbitText, manualXKey } from "./rabbitrun.ts";
 import { parseXhsDraft } from "../xiaohongshu/publisher.ts";
@@ -364,7 +365,7 @@ export class CompanyFeishu {
       if (url.protocol !== "https:") throw Error("后台链接需要 HTTPS");
       url.searchParams.set("draft", manualKey);
       manual = {
-        text: `${rabbitText(draft)}\n\n币安广场：${proof.url}\n图片数：${draft.images.length}`,
+        text: `${rabbitText(draft)}\n\n${squareStatus(proof)}\n图片数：${draft.images.length}`,
         url: url.href,
         published: proof.x.state === "published",
       };
@@ -680,6 +681,15 @@ export class CompanyFeishu {
     }
   }
   async poll() {
+    for (const card of publicationDecisionCards(dirname(this.file))) {
+      const saved = this.state.cards[card.id];
+      if (!saved?.interactive || !saved.cardRef) continue;
+      const rendered = decisionCard(dirname(this.file), card);
+      if (saved.execution !== JSON.stringify([rendered.state, rendered.result])) {
+        saved.snapshot = card;
+        await this.deliver(card);
+      }
+    }
     for (const saved of Object.values(this.state.cards)) {
       if (saved.snapshot && saved.interactive && saved.cardRef) {
         const card = decisionCard(dirname(this.file), saved.snapshot);

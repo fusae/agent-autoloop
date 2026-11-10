@@ -1,3 +1,4 @@
+import { rabbitConfirmation } from "../plugins/company/rabbitrun-receipt.ts";
 import { readFileSync, statSync } from "node:fs";
 import { approvedRabbitRequest, rabbitQueue } from "../plugins/company/rabbitrun-bridge.ts";
 import { squarePublication, squarePublish } from "../plugins/binance-square/publisher.ts";
@@ -18,14 +19,20 @@ try {
   else {
     if (!["lookup", "publish"].includes(value.action)) throw Error("动作无效");
     const request = approvedRabbitRequest(directory, value.key, value.action);
-    result = await squarePublication(stateDirectory, request, async (draft) => {
-      const file = "/etc/agent-company/binance-square.env",
-        stat = statSync(file);
-      if (stat.uid !== 0 || (stat.mode & 0o777) !== 0o600 || !stat.isFile()) throw Error("密钥文件权限无效");
-      const key = readFileSync(file, "utf8").trim();
-      if (!key || /[\r\n]/.test(key)) throw Error("密钥格式无效");
-      return squarePublish(key, draft);
-    });
+    result = await squarePublication(
+      stateDirectory,
+      request,
+      async (draft) => {
+        const file = "/etc/agent-company/binance-square.env",
+          stat = statSync(file);
+        if (stat.uid !== 0 || (stat.mode & 0o777) !== 0o600 || !stat.isFile()) throw Error("密钥文件权限无效");
+        const key = readFileSync(file, "utf8").trim();
+        if (!key || /[\r\n]/.test(key)) throw Error("密钥格式无效");
+        return squarePublish(key, draft);
+      },
+      new Date(),
+      async (startedAt) => rabbitConfirmation(directory, request, startedAt),
+    );
   }
   process.stdout.write(JSON.stringify(result));
 } catch {

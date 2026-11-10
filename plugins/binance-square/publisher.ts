@@ -1,3 +1,4 @@
+import { squareLink, type SquareReceipt } from "../company/rabbitrun-receipt.ts";
 import {
   existsSync,
   mkdirSync,
@@ -36,28 +37,41 @@ export function squareRequest(key: string, endpoint: string, body: unknown) {
     },
   };
 }
-export function squareResult(value: any) {
+export function squareResult(value: any): SquareReceipt {
+  if (value?.code !== "000000") throw Error("币安接口拒绝操作");
   const id = value?.data?.id;
-  // Numeric IDs beyond JS precision cannot safely identify the published post.
-  if (
-    value?.code !== "000000" ||
-    !(typeof id === "string" || Number.isSafeInteger(id)) ||
-    !/^\d{1,30}$/.test(String(id))
-  )
-    throw Error("币安未返回可核验的帖子编号；请人工核对，不可重发");
-  const url = `https://www.binance.com/square/post/${id}`;
-  if (value.data.shareLink) {
-    const link = new URL(value.data.shareLink);
-    if (
-      link.protocol !== "https:" ||
-      link.hostname !== "www.binance.com" ||
-      link.username ||
-      link.password ||
-      !new RegExp(`^/(?:[a-z]{2}(?:-[A-Z]{2})?/)?square/post/${id}$`).test(link.pathname)
-    )
-      throw Error("币安回执链接不匹配");
+  const link = value?.data?.shareLink ? squareLink(value.data.shareLink) : undefined;
+  if (id === undefined || id === null) {
+    if (link) return link;
+    throw Error("币安未返回可核验的帖子编号；请只读核对，不可重发");
   }
-  return { remoteId: String(id), url };
+  if (!(typeof id === "string" || Number.isSafeInteger(id)) || !/^\d{1,30}$/.test(String(id)))
+    throw Error("币安帖子编号无效；请只读核对，不可重发");
+  if (link && link.remoteId !== String(id)) throw Error("币安回执链接不匹配");
+  return { remoteId: String(id), url: `https://www.binance.com/square/post/${id}` };
+}
+export type SquareDiagnostic = {
+  endpoint: string;
+  outcome: "http" | "timeout" | "network" | "json" | "api" | "receipt";
+  status?: number;
+  code?: string;
+  idType?: string;
+  linkType?: string;
+};
+class SquareFailure extends Error {
+  diagnostic: SquareDiagnostic;
+  constructor(diagnostic: SquareDiagnostic) {
+    super(
+      `币安接口未确认：${diagnostic.endpoint} ${diagnostic.outcome}${diagnostic.status ? ` HTTP ${diagnostic.status}` : ""}${diagnostic.code ? ` code ${diagnostic.code}` : ""}；请只读核对，不可重发`,
+    );
+    this.diagnostic = diagnostic;
+  }
+}
+// The reviver retains the original JSON integer, including IDs beyond Number precision.
+export function squareJSON(raw: string) {
+  return JSON.parse(raw, (name: string, value: unknown, context?: { source?: string }) =>
+    name === "id" && typeof value === "number" ? (context?.source ?? value) : value,
+  );
 }
 export function squareBody(draft: RabbitDraft, images: string[]) {
   if (images.length !== draft.images.length) throw Error("配图没有全部上传，禁止发布不完整稿件");
@@ -76,11 +90,35 @@ export function durableSave(path: string, value: unknown) {
 export async function squarePublish(key: string, draft: RabbitDraft, network = fetch, wait = delay) {
   const api = async (endpoint: string, body: unknown) => {
     const request = squareRequest(key, endpoint, body);
-    const response = await network(request.url, request.options);
-    // Never log upstream bodies, URLs from upload grants, headers or exception messages.
-    if (!response.ok) throw Error("币安接口未确认操作");
-    const value = (await response.json()) as any;
-    if (value.code !== "000000") throw Error("币安接口拒绝操作");
+    let response;
+    try {
+      response = await network(request.url, request.options);
+    } catch (error) {
+      throw new SquareFailure({ endpoint, outcome: (error as Error)?.name === "TimeoutError" ? "timeout" : "network" });
+    }
+    if (!response.ok) throw new SquareFailure({ endpoint, outcome: "http", status: response.status });
+    let value;
+    try {
+      value = squareJSON(await response.text());
+    } catch {
+      throw new SquareFailure({ endpoint, outcome: "json", status: response.status });
+    }
+    const diagnostic: SquareDiagnostic = {
+      endpoint,
+      outcome: "api",
+      status: response.status,
+      ...(typeof value?.code === "string" && /^\d{1,8}$/.test(value.code) ? { code: value.code } : {}),
+      idType: typeof value?.data?.id,
+      linkType: typeof value?.data?.shareLink,
+    };
+    if (value?.code !== "000000") throw new SquareFailure(diagnostic);
+    if (endpoint === "content/add") {
+      try {
+        squareResult(value);
+      } catch {
+        throw new SquareFailure({ ...diagnostic, outcome: "receipt" });
+      }
+    }
     return value;
   };
   const urls: string[] = [];
@@ -126,8 +164,9 @@ const day = (date: Date) => new Date(date.getTime() + 8 * 3600000).toISOString()
 export async function squarePublication(
   directory: string,
   request: RabbitRequest,
-  publish: (draft: RabbitDraft) => Promise<{ remoteId: string; url: string }>,
+  publish: (draft: RabbitDraft) => Promise<SquareReceipt>,
   now = new Date(),
+  reconcile?: (startedAt: string) => Promise<SquareReceipt | undefined>,
 ) {
   const draft = rabbitDraft(request);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -145,7 +184,23 @@ export async function squarePublication(
     const saved = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : null;
     if (saved && saved.fingerprint !== fingerprint) throw Error("已确认的稿件发生变化");
     if (saved?.proof) return { state: "published", ...saved.proof };
-    if (saved) return { state: "unknown", reason: "币安发布结果待人工核对；未取得回执，不可重发" };
+    const record = (state: any, result: SquareReceipt) => {
+      const at = result.confirmation?.at ?? state.startedAt;
+      const proof = {
+        key: request.key,
+        channel: rabbitChannel,
+        ...result,
+        publishedAt: at,
+        x: { state: "pending", attempts: 0, at } satisfies XReceipt,
+      };
+      durableSave(path, { ...state, proof });
+      return { state: "published", ...proof };
+    };
+    if (saved) {
+      const result = await reconcile?.(saved.startedAt);
+      if (result) return record(saved, result);
+      return { state: "unknown", reason: saved.reason ?? "币安发布结果待只读核对；未取得回执，不可重发" };
+    }
     if (request.action === "lookup") return { state: "absent" };
     const previous = readdirSync(directory)
       .filter((f) => /^[a-f0-9]{32}\.json$/.test(f))
@@ -158,18 +213,17 @@ export async function squarePublication(
     let result;
     try {
       result = await publish(draft);
-    } catch {
-      return { state: "unknown", reason: "币安发布失败或结果未知，请人工核对；不会自动重发" };
+    } catch (error) {
+      const reason =
+        error instanceof SquareFailure ? error.message : "币安发布失败或结果未知，请只读核对；不会自动重发";
+      durableSave(path, {
+        ...state,
+        reason,
+        ...(error instanceof SquareFailure ? { diagnostic: error.diagnostic } : {}),
+      });
+      return { state: "unknown", reason };
     }
-    const proof = {
-      key: request.key,
-      channel: rabbitChannel,
-      ...result,
-      publishedAt: now.toISOString(),
-      x: { state: "pending", attempts: 0, at: now.toISOString() } satisfies XReceipt,
-    };
-    durableSave(path, { ...state, proof });
-    return { state: "published", ...proof };
+    return record(state, result);
   } finally {
     rmSync(lock, { recursive: true, force: true });
   }

@@ -1,3 +1,4 @@
+import { recoverRabbitPublications } from "./rabbitrun-recovery.ts";
 import { syncDecisionCards } from "./decision-cards.ts";
 import { publicationResults } from "./publication-policy.ts";
 import { manualXNotice } from "./rabbitrun.ts";
@@ -34,6 +35,7 @@ try {
     )
     .digest("hex");
   await collectSources(dirname(configFile));
+  recoverRabbitPublications(dirname(configFile), office, operations);
   const tasks = office.tasks(),
     now = new Date();
   const depth = Math.max(0, ...context.events.map((e) => e.hops ?? 0));

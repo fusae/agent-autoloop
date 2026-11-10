@@ -1,3 +1,4 @@
+import { squareStatus } from "./rabbitrun-receipt.ts";
 import { TopicWorkflow } from "./topic-workflow.ts";
 import {
   submitTopics,
@@ -238,6 +239,56 @@ export class Operations {
           answeredCards: [],
           retries: {},
         };
+  }
+  reconcilePublication(key: string, now = new Date()) {
+    const proof = verifiedPublication(this.directory, key);
+    if (!proof.x) throw Error("仅核对币安回执");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const p = this.get("rabbitrun", now);
+      const plan = p.plans.find((p) => p.publicationKey === key && p.deliveryDecision === "publish");
+      if (plan && ["blocked", "publishing"].includes(plan.status)) {
+        plan.status = "closed";
+        plan.result = squareStatus(proof);
+        plan.deliveredAt = proof.publishedAt;
+        plan.followUpAt = null;
+        const chief = this.executive();
+        if (proof.confirmation) {
+          const h = new DatabaseSync(join(this.directory, "hub/hub.db"), { readOnly: true });
+          try {
+            const row = h
+              .prepare("SELECT data FROM projections WHERE collection='cards' AND json_extract(data,'$.id')=?")
+              .get(proof.confirmation.card);
+            const card = row ? JSON.parse(String(row.data)) : null;
+            const q = chief.questions.find((q) => `ceo:${q.id}` === card?.about);
+            if (q) {
+              q.state = "answered";
+              const options = typeof card.options === "string" ? JSON.parse(card.options) : card.options;
+              q.answer = [card.choice === null ? "" : options[card.choice], card.answer].filter(Boolean).join("；");
+              for (const issue of chief.issues.filter((i) => q.issues.includes(i.id))) {
+                issue.state = "answered";
+                issue.answer = plan.result;
+              }
+            }
+          } finally {
+            h.close();
+          }
+        }
+        chief.pendingRetries = chief.pendingRetries?.filter((r) => r.task !== plan.task);
+        for (const incident of chief.health?.incidents ?? []) {
+          if (incident.kind === "publish-failed" && incident.task === plan.task && !incident.resolvedAt) {
+            incident.resolvedAt = now.toISOString();
+            incident.actions.push({ at: now.toISOString(), action: "receipt", result: plan.result });
+          }
+        }
+        this.saveExecutive(chief);
+        this.save(p, "publication-reconciled", now);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
   private saveExecutive(c: Leadership) {
     this.db
