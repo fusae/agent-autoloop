@@ -1,0 +1,18 @@
+[Unit]
+Description=Company read-only sanitized status snapshot
+OnSuccess=agent-company-status-push.service
+
+[Service]
+Type=oneshot
+User=agentcompany
+Group=agentstatus
+ExecStart=/opt/agent-company/runtime/node_modules/.bin/node --disable-warning=ExperimentalWarning /opt/agent-company/app/cli/company-status-snapshot.ts collect /var/lib/agent-company/company /var/lib/agent-status-inbox
+TimeoutStartSec=90
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateNetwork=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/agent-status-inbox
+InaccessiblePaths=/var/lib/agent-status
+UMask=0027
