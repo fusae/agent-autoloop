@@ -441,3 +441,5 @@ Ship 使用本引擎仓库的 `plugins/delivery/action.yml`，项目固定到发
 公司拍板修复新增可选 `executive.topicDecisions`，兼容 `topicReplies`：依据真实本人消息或已答卡片记录通过/退回及意见、来源消息。CEO对话执行前校验并在同轮最多修正两次；公司通道从执行账本更新原卡结果，不以模型总结冒充完成。仅插件内部约定，内核与HTTP不变；见[拍板与执行结果](company.md#董事长拍板与执行结果)。
 
 公司发布回执可选 `confirmation: {source:"chairman", card, event, at}`，仅币安发布异常卡的真实本人明确已发答复可生成；缺链接时 `url` 与 `remoteId` 为空串，显示“董事长确认已发，链接待补”。旧 API 回执不变；新旧客户端须一起部署。只读补账关闭原发布阻塞并照常生成 X 待发卡，不派模型、不重发。
+
+公司通道按发布回执展示 X 待发卡：`/v1/tell` 的初始 FYI（closed、version=1、result=null）不表示本人关闭；只在通道呈现待发按钮，X 确认仍通过既有认证回调，内核卡片状态与协议不变。

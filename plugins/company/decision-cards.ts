@@ -1,3 +1,4 @@
+import { manualXKey } from "./rabbitrun.ts";
 import { publicationResults } from "./publication-policy.ts";
 import { squareStatus } from "./rabbitrun-receipt.ts";
 import { existsSync } from "node:fs";
@@ -8,7 +9,16 @@ import type { Card } from "../../host/channels.ts";
 // The hub ends a model turn before the business coordinator applies its actions.
 // Render completion from that coordinator's durable receipt, never the model's claim.
 export function decisionCard(directory: string, card: Card): Card {
-  const proof = publicationResults(directory).find((p) => p.confirmation?.card === card.id);
+  const results = publicationResults(directory);
+  const manual = results.find((p) => p.key === manualXKey(card));
+  // /tell creates a closed FYI at version 1, not a user-dismissed notice.
+  if (manual?.x && card.state === "closed" && card.version === 1 && card.result === null)
+    return {
+      ...card,
+      state: manual.x.state === "published" ? "closed" : "open",
+      result: manual.x.state === "published" ? "X 已发" : null,
+    };
+  const proof = results.find((p) => p.confirmation?.card === card.id);
   if (proof)
     return {
       ...card,
@@ -59,25 +69,26 @@ export async function syncDecisionCards(
 }
 
 export function publicationDecisionCards(directory: string): Card[] {
-  const ids = publicationResults(directory).flatMap((p) => (p.confirmation ? [p.confirmation.card] : []));
-  if (!ids.length) return [];
+  const results = publicationResults(directory);
+  if (!results.length) return [];
+  const ids = results.flatMap((p) => (p.confirmation ? [p.confirmation.card] : []));
   const h = new DatabaseSync(join(directory, "hub/hub.db"), { readOnly: true });
   try {
-    return ids.flatMap((id) => {
-      const r = h
-        .prepare("SELECT data FROM projections WHERE collection='cards' AND json_extract(data,'$.id')=?")
-        .get(id);
-      if (!r) return [];
-      const card = JSON.parse(String(r.data));
-      return [
-        {
-          ...card,
-          options: typeof card.options === "string" ? JSON.parse(card.options) : card.options,
-          ref: null,
-          link: null,
-        },
-      ];
-    });
+    return h
+      .prepare("SELECT data FROM projections WHERE collection='cards'")
+      .all()
+      .flatMap((r) => {
+        const card = JSON.parse(String(r.data));
+        if (!ids.includes(card.id) && !results.some((p) => p.x && p.key === manualXKey(card))) return [];
+        return [
+          {
+            ...card,
+            options: typeof card.options === "string" ? JSON.parse(card.options) : card.options,
+            ref: null,
+            link: null,
+          },
+        ];
+      });
   } finally {
     h.close();
   }

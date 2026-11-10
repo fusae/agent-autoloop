@@ -448,7 +448,7 @@ export class CompanyFeishu {
         acknowledged: acknowledged || (card.kind === "ask" && card.state !== "open" && !!text),
       };
       saved.execution = execution;
-      saved.snapshot = /^(处理中|未成功)/.test(card.result ?? "") ? snapshot : undefined;
+      saved.snapshot = manualKey || /^(处理中|未成功)/.test(card.result ?? "") ? snapshot : undefined;
       this.state.cards[card.id] = saved;
       this.save();
     }
@@ -683,9 +683,11 @@ export class CompanyFeishu {
   async poll() {
     for (const card of publicationDecisionCards(dirname(this.file))) {
       const saved = this.state.cards[card.id];
-      if (!saved?.interactive || !saved.cardRef) continue;
+      if (!saved) continue;
+      const unsentManual = !!manualXKey(card) && !saved.ref && card.version === 1 && card.result === null;
+      if (!unsentManual && (!saved.interactive || !saved.cardRef)) continue;
       const rendered = decisionCard(dirname(this.file), card);
-      if (saved.execution !== JSON.stringify([rendered.state, rendered.result])) {
+      if (unsentManual || saved.execution !== JSON.stringify([rendered.state, rendered.result])) {
         saved.snapshot = card;
         await this.deliver(card);
       }

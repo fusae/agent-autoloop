@@ -484,7 +484,13 @@ test("rabbitrun setup registers a separate employee and guide without scheduling
     assert.equal(readFileSync(join(home, "workspace/knowledge/content-guide.md"), "utf8"), "既有APP指南");
     const guide = readFileSync(join(home, "workspace/knowledge/crypto-content-guide.md"), "utf8");
     assert.equal(
-      createHash("sha256").update(guide.split("### 首篇原文")[0]).digest("hex"),
+      guide,
+      readFileSync(new URL("../examples/recipes/company/crypto-content-guide.md", import.meta.url), "utf8"),
+    );
+    // Training adds an explicit overlay; the imported original guide must remain intact beneath it.
+    const originalGuide = guide.replace(/^## 必读手册\n[\s\S]*?(?=^## 账号与定位)/m, "");
+    assert.equal(
+      createHash("sha256").update(originalGuide.split("### 首篇原文")[0]).digest("hex"),
       "50193b87ed7d30176a49631882966550ae7980cb966253dbd2d8b24a48cdaed9",
     );
     const b = new Businesses(home),
@@ -767,4 +773,92 @@ test("owner exception confirmation journals publication, unblocks its plan and u
       office.close();
       o.close();
     }
+  }));
+
+// /tell FYIs are closed at version 1; treating that as a dismissal silently acknowledges an unsent X card.
+test("closed tell FYI sends the full X card, repairs a null-ref acknowledgement and refreshes after confirmation", () =>
+  temporary(async (dir) => {
+    approval(dir);
+    const state = join(dir, "publisher");
+    const proof = await squarePublication(state, request(), async () => ({
+      remoteId: "123",
+      url: "https://www.binance.com/square/post/123",
+    }));
+    writeFileSync(join(dir, "publications", key + "-result.json"), JSON.stringify(proof));
+    const card: any = {
+      id: 3,
+      version: 1,
+      state: "closed",
+      kind: "notice",
+      title: "公司",
+      text: manualXNotice(key),
+      result: null,
+      options: "[]",
+      choice: null,
+      ref: null,
+    };
+    const h = new DatabaseSync(join(dir, "hub/hub.db"));
+    h.prepare("INSERT INTO projections VALUES ('cards',?)").run(JSON.stringify(card));
+    h.close();
+    const sent: any[] = [],
+      patches: any[] = [],
+      answers: any[] = [];
+    const lark = async (args: string[]) => {
+      if (args[1] === "PATCH") {
+        patches.push(JSON.parse(args[args.indexOf("--data") + 1]));
+        return {};
+      }
+      if (args[1] === "+chat-messages-list") return { data: { messages: [] } };
+      sent.push(JSON.parse(args[args.indexOf("--content") + 1]));
+      return { data: { message_id: "om_xpending", chat_id: "oc_owner" } };
+    };
+    const file = join(dir, "feishu.json");
+    const options = {
+      dashboardUrl: "https://company.example",
+      complete: async (key: string) => rabbitQueue(dir, state, { action: "complete", key }),
+    };
+    const hub: any = {
+      delivered: async () => {},
+      answer: async (...args: any[]) => {
+        answers.push(args);
+        return { changed: false, state: "closed" };
+      },
+    };
+    const first = new CompanyFeishu(file, "ou_owner", hub, lark, undefined, true, options);
+    await first.deliver({ ...card, options: [] });
+    assert.equal(sent.length, 1);
+    assert.ok(sent[0].body.elements[0].text.content.includes(rabbitText(draft)));
+    assert.match(JSON.stringify(sent[0]), /我已在 X 发布/);
+    // Reproduce the deployed old adapter's null-ref acknowledgement, then recover without retelling.
+    writeFileSync(
+      file,
+      JSON.stringify({
+        cards: { 3: { version: 1, ref: null, open: false, manualX: key, execution: '["closed",null]', options: [] } },
+        seen: [],
+        chatId: "oc_owner",
+        cursor: new Date().toISOString(),
+      }),
+    );
+    sent.length = 0;
+    const bridge = new CompanyFeishu(file, "ou_owner", hub, lark, undefined, true, options);
+    await bridge.poll();
+    await bridge.poll();
+    assert.equal(sent.length, 1);
+    assert.equal(
+      await bridge.receiveAction({
+        header: { event_id: "confirmed", event_type: "card.action.trigger" },
+        event: {
+          operator: { open_id: "ou_owner" },
+          context: { open_message_id: "om_xpending" },
+          action: { tag: "button", value: { card: 3, version: 1, action: "x-published" } },
+        },
+      }),
+      true,
+    );
+    assert.equal(answers.length, 1);
+    await bridge.poll();
+    await bridge.poll();
+    assert.equal(patches.length, 1);
+    assert.match(JSON.stringify(patches), /X 已发/);
+    assert.equal(sent.length, 1);
   }));
