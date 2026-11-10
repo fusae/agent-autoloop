@@ -148,3 +148,5 @@ CEO 改用 Claude 时保留 `use=company` 包装，只改模型执行器与 mode
 可选 `reporting:{"enabled":true,"weekly":true}` 启用私有工作笔记、周五复盘和每周数据补录；见[说明](../../../docs/company.md#工作笔记与周五复盘)。周报与周五日报21:00合并，员工复盘正常使用额度，不额外开CEO汇报轮。
 
 选题按钮、CEO追问按钮和本人文字决定统一落入董事长拍板；CEO仅凭真实来源代录，初筛不代替拍板，卡片以实际执行结果为准。
+
+员工选题与写作培训资料：今朝读 [今朝手册](jinzhao-handbook.md)，海外运营读 [rabbitrun 手册](rabbitrun-handbook.md)。部署到 `workspace/knowledge/` 同名文件，并更新现有 `content-guide.md`、`crypto-content-guide.md` 的必读说明；员工报题/写稿、CEO 初筛/审稿时与指南及工作笔记一起读取。CEO 将五项 0–2 分、总分及理由写入既有 `topicReviews[].reason`，满 7 分才推给董事长，不新增字段或自动评分功能。私有工作区 `AGENTS.md` 同步必读要求，笔记只追加到私有 `operations.db`，不提交工作区或数据库。资料更新无需重启服务，也不改变现有待批卡片或周目标。
