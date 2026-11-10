@@ -471,3 +471,65 @@ test("topic cards cannot overflow the receipt and lose a publication confirmatio
     assert.equal(receipt.ask.length, 5);
     assert.equal(plan.publishApproval, undefined, "deferred card must remain eligible for the next tick");
   }));
+
+test("delegation replaces permanent approval and preview but preserves the shared daily cap and idempotency", () =>
+  fixture(
+    ({ approve, publishes, tick, plans, proof, now, restart }: any) => {
+      const first = approve(0);
+      assert.equal(first.ask?.length ?? 0, 0);
+      assert.equal(publishes(first).length, 1);
+      assert.equal(publishes(approve(1)).length, 0);
+      restart();
+      assert.equal(publishes(tick()).length, 0);
+      proof(plans()[0].publicationKey, "2026-11-07T15:51:00Z");
+      assert.equal(publishes(tick()).length, 0);
+      now("2026-11-07T16:01:00Z");
+      assert.equal(publishes(tick()).length, 1);
+      assert.equal(publishes(tick()).length, 0);
+    },
+    {
+      delegation: { source: "测试授权" },
+      publishDailyLimit: 3,
+      publishApproval: { confirmFirst: 5, preview: true },
+      publishPolicies: { jizhu: { dailyLimit: 3, alwaysConfirm: true } },
+    },
+  ));
+
+test("maintenance can return an unstarted legacy approval through the CEO decision ledger without dispatch", () =>
+  fixture(({ approve, o, c, b, plans, dir, restart, publishes, tick }: any) => {
+    const card = approve(0).ask[0];
+    const original = plans()[0];
+    const config = JSON.parse(readFileSync(join(dir, "company.json"), "utf8"));
+    config.delegation = { source: "董事长授权，CEO决定" };
+    writeFileSync(join(dir, "company.json"), JSON.stringify(config));
+    const delegated = new Operations(dir);
+    try {
+      const d = decision({
+        deliveries: [
+          {
+            business: "jizhu",
+            plan: original.id,
+            task: original.deliveryTask,
+            reviewVersion: reviewVersion(c.task(original.deliveryTask)),
+            verdict: "revise",
+            reason: "按手册重写并说明获取方式",
+          },
+        ],
+      });
+      delegated.recordDelegatedDecision("return", b.list(), c.tasks(), d);
+      delegated.recordDelegatedDecision("return", b.list(), c.tasks(), d);
+      const plan = delegated
+        .snapshot(b.list(), c.tasks())
+        .find((p: any) => p.business === "jizhu")!
+        .plans.find((p: any) => p.id === original.id);
+      assert.ok(plan);
+      assert.equal(plan.revision, 1);
+      assert.equal(plan.status, "planned");
+      assert.equal(plan.publicationKey, undefined);
+      assert.equal(plan.publishApproval, undefined);
+      assert.equal(delegated.executive().decisions.filter((d: any) => d.task === "delegated:return").length, 1);
+      assert.ok(card.about.startsWith("publish:"));
+    } finally {
+      delegated.close();
+    }
+  }));

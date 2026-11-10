@@ -16,17 +16,18 @@ export type ExecutiveDecision = {
   topicDecisions?: {
     business: string;
     batch: string;
+    source?: "ceo";
     event?: number;
     card?: number;
     choices: import("./topics.ts").TopicChoice[];
   }[];
-  topicReviews?: { business: string; topic: string; approve: boolean; reason: string; rank: number }[];
+  topicReviews?: { business: string; topic: string; approve: boolean; reason: string; rank: number; score?: number }[];
   topicReplies?: { business: string; batch: string; event: number }[];
   responses?: {
     anomaly: string;
     action: "clear-wait" | "retry" | "review" | "pause" | "resume" | "plan" | "escalate" | "observe";
     reason: string;
-    category?: "code" | "auth" | "quota" | "platform" | "decision";
+    category?: "code" | "auth" | "quota" | "platform" | "decision" | "spend" | "identity";
     request?: string;
   }[];
   report?: string;
@@ -51,6 +52,7 @@ export type ExecutiveDecision = {
   ownerReplies?: { question: string; event: number }[];
   answers: { issue: string; answer: string; evidence: string }[];
   escalations: {
+    category?: "maintenance" | "spend" | "identity";
     key: string;
     business?: string;
     issues: string[];
@@ -71,6 +73,7 @@ export type Issue = {
   at: string;
 };
 export type OwnerQuestion = {
+  recipient?: "maintainer" | "chairman";
   answerEvent?: number;
   options?: string[];
   id: string;
@@ -106,7 +109,7 @@ export type Leadership = {
   issues: Issue[];
   questions: OwnerQuestion[];
   knowledge: Knowledge[];
-  decisions: { task: string; summary: string; at: string; decision: ExecutiveDecision }[];
+  decisions: { task: string; summary: string; at: string; decision: ExecutiveDecision; authority?: string }[];
   runs: { task: string; at: string }[];
   answeredCards: number[];
   ownerReplyEvents?: string[];
@@ -147,9 +150,10 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
       ? {
           topicDecisions: list("topicDecisions", 10).map((a) => {
             if (
-              (a.event === undefined) === (a.card === undefined) ||
-              !Number.isSafeInteger(a.event ?? a.card) ||
-              (a.event ?? a.card) < 1
+              a.source !== "ceo" &&
+              ((a.event === undefined) === (a.card === undefined) ||
+                !Number.isSafeInteger(a.event ?? a.card) ||
+                (a.event ?? a.card) < 1)
             )
               throw Error("代录董事长拍板必须引用一个真实消息事件或已回答卡片");
             if (!Array.isArray(a.choices) || !a.choices.length || a.choices.length > 8)
@@ -163,7 +167,11 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
             return {
               business: id(a.business),
               batch: id(a.batch),
-              ...(a.event !== undefined ? { event: a.event } : { card: a.card }),
+              ...(a.source === "ceo"
+                ? { source: "ceo" as const }
+                : a.event !== undefined
+                  ? { event: a.event }
+                  : { card: a.card }),
               choices,
             };
           }),
@@ -176,6 +184,14 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
               throw Error("选题初筛需要approve和排序rank");
             return {
               business: id(a.business),
+              ...(a.score !== undefined
+                ? {
+                    score: (() => {
+                      if (!Number.isInteger(a.score) || a.score < 0 || a.score > 10) throw Error("选题评分需要0–10分");
+                      return a.score;
+                    })(),
+                  }
+                : {}),
               topic: id(a.topic),
               approve: a.approve,
               reason: text(a.reason, 160),
@@ -197,7 +213,10 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
           responses: list("responses", 6).map((a) => {
             if (!["clear-wait", "retry", "review", "pause", "resume", "plan", "escalate", "observe"].includes(a.action))
               throw Error("异常处理动作不在CEO权限内");
-            if (a.action === "escalate" && !["code", "auth", "quota", "platform", "decision"].includes(a.category))
+            if (
+              a.action === "escalate" &&
+              !["code", "auth", "quota", "platform", "decision", "spend", "identity"].includes(a.category)
+            )
               throw Error("上报需要说明董事长处理类别");
             return {
               anomaly: id(a.anomaly),
@@ -325,9 +344,12 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
       evidence: text(a.evidence, 200),
     })),
     escalations: list("escalations", 2).map((a) => {
+      if (a.category !== undefined && !["maintenance", "spend", "identity"].includes(a.category))
+        throw Error("上报类别不正确");
       if (!Array.isArray(a.issues) || a.issues.length > 8 || (!a.issues.length && !a.business))
         throw new Error("上报需关联1–8个未解决问题；CEO新发现的问题可提供business项目编号并用issues:[]");
       return {
+        ...(a.category !== undefined ? { category: a.category } : {}),
         key: (() => {
           const key = text(a.key, 80, "escalations.key");
           if (!/^[A-Za-z0-9_-]+$/.test(key)) throw Error("上报编号只能用字母、数字、下划线和横线");

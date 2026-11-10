@@ -133,6 +133,7 @@ export function detectHealth(input: {
   for (const p of projects) {
     for (const batch of p.topicBatches ?? []) {
       if (
+        config.delegation ||
         !p.topics?.some((t) => t.batch === batch.id && t.state === "pending") ||
         ms - Date.parse(batch.at) <= 4 * 3600_000
       )
@@ -354,7 +355,7 @@ export function detectHealth(input: {
       severity: ceoUsed >= ceoLimit ? 2 : 1,
     });
   for (const card of runtime.cards.filter(
-    (c) => c.title === "发布确认" && c.state === "open" && ms - Date.parse(c.at) >= 4 * 3600_000,
+    (c) => !config.delegation && c.title === "发布确认" && c.state === "open" && ms - Date.parse(c.at) >= 4 * 3600_000,
   ))
     add(`approval:${card.id}`, {
       kind: "approval-overdue",
@@ -366,7 +367,7 @@ export function detectHealth(input: {
       reminderOnly: true,
     });
   for (const proof of publications.filter(
-    (p) => p.x && p.x.state !== "published" && ms - Date.parse(p.publishedAt) >= 86400_000,
+    (p) => !config.delegation && p.x && p.x.state !== "published" && ms - Date.parse(p.publishedAt) >= 86400_000,
   ))
     add(`x:${proof.key}`, {
       kind: "x-overdue",

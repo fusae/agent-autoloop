@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Project } from "./operations.ts";
-import type { Context, Receipt } from "./company.ts";
+import type { CompanyConfig, Context, Receipt } from "./company.ts";
 import type { ExecutiveDecision } from "./executive.ts";
 import { appendNote } from "./notes.ts";
 import { weekOf } from "./workday.ts";
@@ -25,7 +25,9 @@ function replyChoices(e: ReturnType<typeof ownerReplyEvidence>, batch: import(".
 export class TopicWorkflow {
   private db: DatabaseSync;
   private directory: string;
-  constructor(db: DatabaseSync, directory: string) {
+  private config: Partial<CompanyConfig>;
+  constructor(db: DatabaseSync, directory: string, config: Partial<CompanyConfig> = {}) {
+    this.config = config;
     this.db = db;
     this.directory = directory;
   }
@@ -45,6 +47,15 @@ export class TopicWorkflow {
   evidence(r: NonNullable<ExecutiveDecision["topicDecisions"]>[number], p: Project) {
     const b = p.topicBatches?.find((b) => b.id === r.batch);
     if (!b) throw Error("选题批次不存在");
+    if (r.source === "ceo") {
+      if (!this.config.delegation) throw Error("未授权CEO选题决定");
+      for (const choice of r.choices) {
+        const topic = p.topics?.find((t) => t.id === b.topics[choice.index] && t.batch === b.id);
+        if (!topic || !["pending", choice.approve ? "approved" : "rejected"].includes(topic.state))
+          throw Error("CEO决定引用了批次外或已有不同决定的选题");
+      }
+      return { b, e: { message: this.config.delegation.source, at: new Date().toISOString() } };
+    }
     const e = r.event
       ? ownerReplyEvidence(this.directory, r.event, b.at)
       : ownerAnswerEvidence(this.directory, r.card!, b.at);
@@ -86,6 +97,11 @@ export class TopicWorkflow {
     for (const r of d.topicReviews ?? []) {
       const t = projects.find((p) => p.business === r.business)?.topics?.find((t) => t.id === r.topic);
       if (!t || t.state !== "screening" || seen.has(t.id)) throw Error("选题初筛必须引用未初筛的选题，且不重复");
+      if (
+        this.config.delegation &&
+        (!Number.isInteger(r.score) || r.score! < 0 || r.score! > 10 || r.approve !== r.score! >= 7)
+      )
+        throw Error("CEO须按对应手册评分，7分起通过，低于7分退回，并记录理由");
       seen.add(t.id);
     }
     for (const r of d.topicDecisions ?? []) {
@@ -126,7 +142,7 @@ export class TopicWorkflow {
           this.db,
           agent,
           `topic-decision:${t.id}`,
-          `董事长${choice.approve ? "通过" : "退回并撤下"}《${t.title}》：${choice.opinion}（来源：${e.message}）`,
+          `${this.config.delegation ? "CEO" : "董事长"}${choice.approve ? "通过" : "退回并撤下"}《${t.title}》：${choice.opinion}（来源：${e.message}）`,
           e.at,
         );
     }
@@ -141,11 +157,27 @@ export class TopicWorkflow {
           r.reason,
           r.rank,
         );
+        if (this.config.delegation) {
+          const t = p.topics!.find((t) => t.id === r.topic)!;
+          t.score = r.score;
+          t.state = r.approve ? "approved" : "returned";
+          t.opinion = r.reason;
+          t.decidedAt = now.toISOString();
+          t.decisionSource = { message: this.config.delegation.source };
+          for (const agent of ["ceo", `${p.business}:${t.role}`])
+            appendNote(
+              this.db,
+              agent,
+              `topic-review:${t.id}`,
+              `CEO${r.approve ? "通过" : "退回换题"}《${t.title}》：${r.score}/10，${r.reason}`,
+              now.toISOString(),
+            );
+        }
         changed = true;
       }
       for (const r of d.topicDecisions?.filter((r) => r.business === p.business) ?? []) {
         const { b, e } = this.evidence(r, p);
-        this.record(p, b, r.choices, e);
+        this.record(p, b, r.choices, r.source === "ceo" ? { ...e, at: now.toISOString() } : e);
         changed = true;
       }
       for (const r of d.topicReplies?.filter((r) => r.business === p.business) ?? []) {
@@ -158,6 +190,15 @@ export class TopicWorkflow {
     }
   }
   tick(answers: Context["answers"], events: Context["events"], receipt: Receipt, now: Date, expected: string[] = []) {
+    if (this.config.delegation) {
+      for (const p of this.projects()) {
+        const legacy = p.topics?.filter((t) => t.state === "ready") ?? [];
+        if (!legacy.length) continue;
+        for (const t of legacy) t.state = "screening";
+        this.save(p, now);
+      }
+      return;
+    }
     const projects = this.projects();
     for (const p of projects) {
       const before = JSON.stringify(p);

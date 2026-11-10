@@ -373,3 +373,21 @@ test("registered employee retrospective failures enter bounded recovery and reta
       0,
     );
   }));
+
+test("delegation cancels Friday data requests and adds the decision and maintainer sections to the daily weekly report", () =>
+  fixture(
+    (f) => {
+      assert.equal(f.tick("14:05").notice?.some((n) => n.key.startsWith("weekly-data-")) ?? false, false);
+      for (const e of work(f.tick("18:05"), "WR-")) finish(f, e);
+      const r = f.tick("19:35");
+      const ceo = r.events?.find((e) => JSON.parse(e.detail).kind === "ceo");
+      assert.ok(ceo);
+      finish(f, ceo, true);
+      const report = f.tick("21:01").notice?.find((n) => n.title === "CEO · 日报+周报");
+      assert.ok(report);
+      assert.match(report.text, /今天替董事长做的决定/);
+      assert.match(report.text, /待维护者处理/);
+      assert.equal(f.tick("21:02").notice?.length ?? 0, 0);
+    },
+    { delegation: { source: "测试授权" } },
+  ));

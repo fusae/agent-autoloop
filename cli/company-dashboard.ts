@@ -358,6 +358,8 @@ export async function startDashboard(directory: string, port = 3361, options: { 
           }
           return cached({
             leadership: {
+              maintenance: operations.maintenance(),
+              delegated: !!companyConfig.delegation,
               enabled: chief.enabled,
               lastTask: chief.lastTask,
               nextReviewAt: chief.nextReviewAt,

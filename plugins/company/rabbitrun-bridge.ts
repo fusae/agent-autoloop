@@ -1,3 +1,4 @@
+import { delegated } from "./delegation.ts";
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, readFileSync, readdirSync, mkdirSync, rmSync, chownSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -6,40 +7,65 @@ import { rabbitChannel, rabbitDraft, xReceipt, type RabbitRequest } from "./rabb
 
 export function approvedRabbitRequest(directory: string, key: string, action: "lookup" | "publish"): RabbitRequest {
   if (!/^[a-f0-9]{32}$/.test(key)) throw Error("审核编号无效");
-  const db = new DatabaseSync(join(directory, "operations.db"), { readOnly: true });
   let approval;
+  const request = JSON.parse(readFileSync(join(directory, "publications", key + ".json"), "utf8"));
+  if (request.key !== key || request.business !== "rabbitrun") throw Error("审核稿不匹配");
+  const db = new DatabaseSync(join(directory, "operations.db"), { readOnly: true });
+  let ceoApproved = false;
   try {
     const row = db.prepare("SELECT body FROM projects WHERE id='rabbitrun'").get();
     const project = row ? JSON.parse(row.body as string) : null;
-    approval = project?.plans.find(
-      (p: any) => p.publicationKey === key && p.deliveryDecision === "publish",
-    )?.publishApproval;
-    if (!approval || approval.key !== key || approval.state !== "approved" || !Number.isSafeInteger(approval.card))
+    const plan = project?.plans.find((p: any) => p.publicationKey === key && p.deliveryDecision === "publish");
+    approval = plan?.publishApproval;
+    if (delegated(directory)) {
+      const row = db.prepare("SELECT body FROM leadership WHERE id='company'").get();
+      const chief = row ? JSON.parse(String(row.body)) : null;
+      ceoApproved =
+        !!plan &&
+        plan.id === request.plan &&
+        plan.deliveryTask === request.task &&
+        chief?.decisions.some((d: any) =>
+          d.decision.deliveries?.some(
+            (r: any) =>
+              r.business === "rabbitrun" &&
+              r.plan === plan.id &&
+              r.task === request.task &&
+              r.verdict === "publish" &&
+              r.reason?.trim(),
+          ),
+        );
+      if (!ceoApproved) throw Error("本篇尚无对应冻结稿的CEO发布决定");
+      if (action === "publish" && plan.status !== "publishing") throw Error("本篇不在发布阶段");
+    }
+    if (
+      !ceoApproved &&
+      (!approval || approval.key !== key || approval.state !== "approved" || !Number.isSafeInteger(approval.card))
+    )
       throw Error("本篇尚无董事长确认");
   } finally {
     db.close();
   }
-  const hub = new DatabaseSync(join(directory, "hub/hub.db"), { readOnly: true });
-  try {
-    const row = hub
-      .prepare("SELECT data FROM projections WHERE collection='cards' AND json_extract(data,'$.id')=?")
-      .get(approval.card);
-    const card = row ? JSON.parse(row.data as string) : null;
-    if (
-      !card ||
-      card.about !== approval.about ||
-      card.kind !== "ask" ||
-      card.agent !== "company-business" ||
-      card.grp !== "company-business" ||
-      !["decided", "done", "closed"].includes(card.state) ||
-      !(card.choice === 0 || (card.choice === null && card.answer?.trim() === "发布"))
-    )
-      throw Error("董事长确认卡尚未有效答复");
-  } finally {
-    hub.close();
+  if (!ceoApproved) {
+    const hub = new DatabaseSync(join(directory, "hub/hub.db"), { readOnly: true });
+    try {
+      const row = hub
+        .prepare("SELECT data FROM projections WHERE collection='cards' AND json_extract(data,'$.id')=?")
+        .get(approval.card);
+      const card = row ? JSON.parse(row.data as string) : null;
+      if (
+        !card ||
+        card.about !== approval.about ||
+        card.kind !== "ask" ||
+        card.agent !== "company-business" ||
+        card.grp !== "company-business" ||
+        !["decided", "done", "closed"].includes(card.state) ||
+        !(card.choice === 0 || (card.choice === null && card.answer?.trim() === "发布"))
+      )
+        throw Error("董事长确认卡尚未有效答复");
+    } finally {
+      hub.close();
+    }
   }
-  const request = JSON.parse(readFileSync(join(directory, "publications", key + ".json"), "utf8"));
-  if (request.key !== key || request.business !== "rabbitrun") throw Error("审核稿不匹配");
   const result = { ...request, channel: rabbitChannel, action };
   rabbitDraft(result);
   return result;

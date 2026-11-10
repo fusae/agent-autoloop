@@ -25,6 +25,7 @@ export type Topic = TopicProposal & {
   state: "screening" | "returned" | "withdrawn" | "ready" | "pending" | "approved" | "rejected";
   round: number;
   review?: string;
+  score?: number;
   rank?: number;
   batch?: string;
   opinion?: string;
@@ -62,7 +63,7 @@ export function submitTopics(p: Project, role: string, proposals: TopicProposal[
     const id = topicId(`${p.business}:${role}:${weekOf(now)}:${v.key}`);
     if (p.topics.some((t) => t.id === id)) continue;
     const parent = v.replaces ? p.topics.find((t) => t.id === v.replaces && t.role === role) : undefined;
-    if (v.replaces && (!parent || parent.state !== "returned" || parent.round !== 0)) throw Error("初筛只允许换题一轮");
+    if (v.replaces && (!parent || parent.state !== "returned")) throw Error("只能替换已退回选题");
     if (parent) parent.state = "withdrawn";
     p.topics.push({
       ...v,
@@ -71,7 +72,7 @@ export function submitTopics(p: Project, role: string, proposals: TopicProposal[
       week: weekOf(now),
       createdAt: now.toISOString(),
       state: "screening",
-      round: parent ? 1 : 0,
+      round: parent ? parent.round + 1 : 0,
       meeting: parent?.meeting ?? meeting,
     });
   }

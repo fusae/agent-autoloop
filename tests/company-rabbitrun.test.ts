@@ -862,3 +862,47 @@ test("closed tell FYI sends the full X card, repairs a null-ref acknowledgement 
     assert.match(JSON.stringify(patches), /X 已发/);
     assert.equal(sent.length, 1);
   }));
+
+test("delegated Binance bridge requires the CEO decision for the exact frozen version and preserves manual X lookup", () =>
+  temporary((dir) => {
+    approval(dir);
+    writeFileSync(join(dir, "company.json"), JSON.stringify({ ceoMode: true, delegation: { source: "测试授权" } }));
+    const frozen = { ...request(), plan: "plan", task: "draft-v2" };
+    writeFileSync(join(dir, "publications", key + ".json"), JSON.stringify(frozen));
+    const db = new DatabaseSync(join(dir, "operations.db"));
+    db.exec("CREATE TABLE leadership(id TEXT PRIMARY KEY,body TEXT)");
+    const plan = {
+      id: "plan",
+      deliveryTask: "draft-v2",
+      publicationKey: key,
+      deliveryDecision: "publish",
+      status: "publishing",
+    };
+    db.prepare("UPDATE projects SET body=?").run(JSON.stringify({ plans: [plan] }));
+    const save = (task: string) =>
+      db.prepare("INSERT OR REPLACE INTO leadership VALUES ('company',?)").run(
+        JSON.stringify({
+          decisions: [
+            {
+              decision: {
+                deliveries: [
+                  { business: "rabbitrun", plan: "plan", task, verdict: "publish", reason: "已核对手册和红线" },
+                ],
+              },
+            },
+          ],
+        }),
+      );
+    try {
+      save("draft-v1");
+      assert.throws(() => approvedRabbitRequest(dir, key, "publish"), /CEO发布决定/);
+      save("draft-v2");
+      assert.equal(approvedRabbitRequest(dir, key, "publish").key, key);
+      plan.status = "observing";
+      db.prepare("UPDATE projects SET body=?").run(JSON.stringify({ plans: [plan] }));
+      assert.throws(() => approvedRabbitRequest(dir, key, "publish"), /发布阶段/);
+      assert.equal(approvedRabbitRequest(dir, key, "lookup").key, key);
+    } finally {
+      db.close();
+    }
+  }));

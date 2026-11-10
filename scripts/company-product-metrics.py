@@ -25,8 +25,9 @@ def daily_counts(path, table, expression, now=None):
     return {'columns': ['day', 'count'], 'rows': [[day, rows.get(day, 0)] for day in days], 'truncated': False}
 
 
-def download_counts(folder, now=None):
+def download_counts(folder, now=None, prefix="/downloads/", since=None):
     today = (now or datetime.datetime.now(TZ)).astimezone(TZ).date()
+    started = datetime.datetime.fromisoformat(since).astimezone(TZ) if since else None
     counts = Counter()
     earliest = None
     latest = None
@@ -42,16 +43,18 @@ def download_counts(folder, now=None):
                     continue
                 stamp, method, uri, status, agent = match.groups()
                 at = datetime.datetime.strptime(stamp, '%d/%b/%Y:%H:%M:%S %z').astimezone(TZ)
+                if started and at < started:
+                    continue
                 earliest = min(earliest, at) if earliest else at
                 latest = max(latest, at) if latest else at
                 if method != 'GET' or status not in ('200', '206') or re.search(r'bot|spider|crawler|curl|wget|python|headless|scrapy', agent, re.I):
                     continue
-                if re.fullmatch(r'/downloads/[^/]+\.apk', urlsplit(uri).path, re.I):
+                if re.fullmatch(re.escape(prefix) + r'[^/]+\.apk', urlsplit(uri).path, re.I):
                     counts[at.date().isoformat()] += 1
     days = [(today - datetime.timedelta(days=n)) for n in range(21, 0, -1)]
     # The first retained day may be partial. Missing retention is unknown, never zero.
-    rows = [[day.isoformat(), counts[day.isoformat()]] for day in days if earliest and latest and earliest.date() < day <= latest.date()]
-    return {'daily': {'columns': ['day', 'count'], 'rows': rows, 'truncated': False}, 'note': '下载点击，不等于安装；nginx安装包GET成功请求数（200/206），去掉明显爬虫；分段或重复请求可能重复计数；不含vivo应用商店。日志覆盖以保留区间为限。'}
+    rows = [[day.isoformat(), counts[day.isoformat()]] for day in days if earliest and latest and max(started or earliest, earliest).date() < day <= latest.date()]
+    return {'daily': {'columns': ['day', 'count'], 'rows': rows, 'truncated': False}, 'current': {'day': today.isoformat(), 'count': counts[today.isoformat()] if started or earliest else None, 'since': since, 'partial': True}, 'note': '下载点击，不等于安装；nginx安装包GET成功请求数（200/206），去掉明显爬虫；分段或重复请求可能重复计数；不含vivo应用商店。日志覆盖以保留区间为限。'}
 
 
 def augment(out, business):
@@ -60,7 +63,8 @@ def augment(out, business):
         out['downloads'] = download_counts('/var/log/nginx')
     elif business == 'jinzhao':
         out['accounts']['registrations_daily'] = daily_counts('/var/lib/between/accounts.db', 'users', "date(created/1000.0,'unixepoch','+8 hours')")
-        out['downloads'] = {'note': '今朝官网安装包在旧机nginx，但下载location配置access_log off；未采集下载点击，需先开启该路径日志并积累完整自然日。'}
+        marker = pathlib.Path('/var/lib/agent-company/jinzhao-downloads-started-at')
+        out['downloads'] = download_counts('/var/log/nginx', prefix='/jinzhao/downloads/', since=marker.read_text().strip()) if marker.exists() else {'note': '今朝下载统计尚未接通，历史下载未知。'}
     else:
         raise ValueError('unsupported product')
     return out

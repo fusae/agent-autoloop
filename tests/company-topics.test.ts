@@ -814,3 +814,29 @@ test("unchanged unscreened topics stop after bounded empty reviews and resume wi
     }
     assert.equal(f.work(f.tick(), "ceo").length, 1);
   }));
+
+test("delegated CEO requires a handbook score and sends passed topics straight to the pool without chairman cards", () =>
+  fixture(
+    (f) => {
+      meeting(f);
+      const first = reviews(f).map((r: any, i: number) => ({
+        ...r,
+        score: i ? 6 : 7,
+        approve: !i,
+        reason: "手册五项：2+2+1+1+1，具体场景清楚",
+      }));
+      const missing = first.map(({ score, ...r }: any) => r);
+      assert.match(f.o.validateDecision(f.b.list(), f.c.tasks(), decision({ topicReviews: missing }), now), /评分/);
+      const out = f.decide({ topicReviews: first });
+      assert.equal(out.ask?.length ?? 0, 0);
+      const approved = getProject(f).topics[0];
+      assert.equal(approved.state, "approved");
+      assert.equal(approved.score, 7);
+      assert.equal(approved.decisionSource.message, "测试授权，CEO决定");
+      assert.equal(getProject(f, "other").topics[0].state, "returned");
+      f.restart();
+      assert.equal(getProject(f).topics[0].state, "approved");
+      assert.equal(f.tick().ask?.length ?? 0, 0);
+    },
+    { delegation: { source: "测试授权，CEO决定" } },
+  ));

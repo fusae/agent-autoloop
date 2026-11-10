@@ -285,16 +285,18 @@ Company content quality includes published and manual posts plus current drafts,
 
 The Claude Code adapter requires CLI 2.1.317 or newer and enforces sandboxing in every access mode; Linux also needs bubblewrap and socat. OAuth and API-key credentials cannot coexist. See [access boundaries](docs/plugins.md#access-实际能做什么).
 
-The company client also supports [rabbitrun overseas operations](examples/recipes/company/rabbitrun.md): Binance Square text/image publishing, permanent per-post owner approval, and manual X posting by the owner with a Feishu completion button. Credentials remain outside employee processes.
+The company client also supports [rabbitrun overseas operations](examples/recipes/company/rabbitrun.md): Binance Square text/image publishing, per-post owner approval in legacy mode, and manual X posting by the owner with a Feishu completion button. Credentials remain outside employee processes.
 
 Company waits require an open owner question or unfinished dependency; confirmed weekly goals initialize missing onboarding structures. See [scheduling recovery](docs/company.md#等待条件与接入修复).
 
 The company plugin supports deterministic health checks, constrained CEO recovery actions, unresolved incidents on home, daily incident reporting, and an independent systemd watchdog. See [health monitoring](docs/company.md#程序巡检与-ceo-处置).
 
-The optional company weekly rhythm keeps private employee notes, requests missing metrics once on Friday, and combines the CEO daily and weekly reports. See [company notes and retrospectives](docs/company.md#工作笔记与周五复盘); no kernel changes are required.
+The optional company weekly rhythm keeps private employee notes, requests missing metrics once on Friday in legacy mode, and combines the CEO daily and weekly reports. See [company notes and retrospectives](docs/company.md#工作笔记与周五复盘); no kernel changes are required.
 
 The company plugin optionally runs [topic meetings](docs/company.md#选题会与账号人设): employees propose topics, the CEO screens them, and the owner approves them in Feishu before new drafting begins. Per-topic buttons and authenticated text replies are supported. Existing drafts and publication approvals keep their original workflow; the home page and Friday review include topic progress.
 
 Topic decisions can also be recorded by the CEO from authenticated owner messages or follow-up card answers. Invalid actions are corrected internally; cards show coordinator-confirmed outcomes. See [decision handling](docs/company.md#董事长拍板与执行结果).
 
 A verified owner answer to the original Binance publication exception can reconcile an already published post, with owner provenance and an optional link. Reconciliation restores the manual X card without reposting or starting a model turn.
+
+Trusted private `delegation.source` enables CEO topic scoring and publication decisions, a maintainer backlog, and daily decision summaries. It removes routine approvals, previews and Friday data requests; only spending, personal identity verification, watchdog outages, daily reports and the manual X card reach the owner. Existing publication limits, verification and deduplication remain. See [CEO delegation](docs/company.md#ceo-授权与维护清单).

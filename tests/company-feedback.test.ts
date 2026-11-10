@@ -554,3 +554,22 @@ test("reader extracts other list cards without detail reads and keeps unknown li
     f.clean();
   }
 });
+
+test("Jinzhao downloads isolate the APK path and exclude pre-enablement days, crawlers and failed or HEAD requests", () => {
+  const f = fixture();
+  try {
+    const code = String.raw`import runpy,pathlib,datetime,json
+m=runpy.run_path('scripts/company-product-metrics.py');p=pathlib.Path(__import__('sys').argv[1]);lines=[]
+for day,method,path,status,agent in [(9,'GET','/jinzhao/downloads/a.apk',200,'Mozilla'),(10,'GET','/jinzhao/downloads/a.apk',206,'Mozilla'),(10,'GET','/downloads/a.apk',200,'Mozilla'),(10,'GET','/jinzhao/downloads/a.apk',200,'Googlebot'),(10,'HEAD','/jinzhao/downloads/a.apk',200,'Mozilla'),(10,'GET','/jinzhao/downloads/a.apk',404,'Mozilla'),(11,'GET','/jinzhao/downloads/a.apk?x=1',200,'Mozilla')]:
+ lines.append(f'127.0.0.1 - - [{day:02}/Nov/2026:09:00:00 +0800] "{method} {path} HTTP/1.1" {status} 10 "-" "{agent}"')
+(p/'access.log').write_text('\n'.join(lines));print(json.dumps(m['download_counts'](p,datetime.datetime.fromisoformat('2026-11-11T10:00:00+08:00'),'/jinzhao/downloads/','2026-11-10T08:00:00+08:00')))`;
+    const r = spawnSync("python3", ["-c", code, f.dir], { encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    const downloads = JSON.parse(r.stdout);
+    assert.deepEqual(downloads.daily.rows, []);
+    assert.equal(downloads.current.count, 1);
+    assert.equal(downloads.current.partial, true);
+  } finally {
+    f.clean();
+  }
+});

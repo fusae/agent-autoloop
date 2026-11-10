@@ -63,6 +63,7 @@ for (const event of context.events) {
         const reservations = projects.flatMap((p) => p.publishReservations ?? []);
         const usage = publicationUsage(results, reservations, channel, new Date());
         if (
+          !config.delegation &&
           (approved.publishApproval ||
             policy.alwaysConfirm ||
             usage.successes < (policy.publishApproval?.confirmFirst ?? 0)) &&

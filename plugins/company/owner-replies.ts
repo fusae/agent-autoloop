@@ -147,7 +147,16 @@ export async function syncTopicCards(directory: string, hub: Pick<Hub, "resolve"
       const p = JSON.parse(String(row.body)) as import("./operations.ts").Project;
       for (const b of p.topicBatches?.filter((b) => b.closed) ?? []) {
         for (const card of h.prepare("SELECT id FROM cards WHERE state='open' AND about=?").all(`topics:${b.id}`)) {
-          await hub.resolve(Number(card.id), "该批选题已逐条记录董事长决定");
+          await hub.resolve(
+            Number(card.id),
+            b.topics
+              .map((id) => {
+                const t = p.topics!.find((t) => t.id === id)!;
+                return `《${t.title}》${t.state === "approved" ? "通过" : "退回"}：${t.opinion ?? ""}（${t.decisionSource?.message ?? "董事长决定"}）`;
+              })
+              .join("\n")
+              .slice(0, 4000),
+          );
         }
       }
     }

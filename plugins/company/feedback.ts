@@ -130,6 +130,7 @@ export async function collectFeedback(
       product.label = business === "jizhu" ? "新增设备" : "注册";
       product.checkedAt = snapshot.database.checkedAt;
       product.downloadNote = data?.downloads?.note ?? "无可用下载日志";
+      product.downloadCurrent = data?.downloads?.current ?? null;
     }
     save(stateFile, state);
     const days: Daily[] = state.days;
@@ -225,6 +226,12 @@ export async function collectFeedback(
       "发布当天不纳入前后各3个完整自然日；基线为0不算百分比；下载点击不等于安装。",
       `账号粉丝：${followers.map((f) => `${f.at} ${f.count}（变化${fmt(f.change)}）`).join("；") || "未取得"}`,
     ];
+    for (const [business, product] of Object.entries(state.products) as [string, any][]) {
+      const current = product.downloadCurrent;
+      text.push(
+        `\n${business}下载点击：${current ? `${current.day}当前${current.count ?? "未知"}次（未满自然日，起点${current.since ?? "现存日志"}）` : "未知"}；${product.downloadNote}；采集于${product.checkedAt}`,
+      );
+    }
     for (const p of posts) {
       text.push(
         `\n## ${p.business} · ${p.title ?? p.samples.at(-1)?.title ?? p.remoteId}`,

@@ -18,6 +18,14 @@ export const publishDay = (date: Date) => new Date(date.getTime() + 8 * 3600_000
 export const nextPublishDay = (date: Date) =>
   new Date(Date.parse(`${publishDay(date)}T00:00:00+08:00`) + 86400_000).toISOString();
 export function validatePublishPolicy(config: Partial<CompanyConfig>) {
+  if (
+    config.delegation !== undefined &&
+    (!config.ceoMode ||
+      typeof config.delegation.source !== "string" ||
+      !config.delegation.source.trim() ||
+      config.delegation.source.length > 200)
+  )
+    throw Error("CEO授权需要启用CEO并记录授权来源");
   if (config.publishPolicies !== undefined) {
     if (!config.publishPolicies || Array.isArray(config.publishPolicies) || typeof config.publishPolicies !== "object")
       throw Error("业务发布规则无效");
@@ -51,9 +59,11 @@ export function validatePublishPolicy(config: Partial<CompanyConfig>) {
 export function businessPublishPolicy(config: Partial<CompanyConfig>, business: string) {
   const policy = config.publishPolicies?.[business];
   return {
-    publishDailyLimit: policy?.dailyLimit ?? config.publishDailyLimit,
-    publishApproval: config.publishApproval,
-    alwaysConfirm: policy?.alwaysConfirm === true,
+    publishDailyLimit: config.delegation
+      ? Math.min(1, policy?.dailyLimit ?? config.publishDailyLimit ?? 1)
+      : (policy?.dailyLimit ?? config.publishDailyLimit),
+    publishApproval: config.delegation ? { confirmFirst: 0, preview: false } : config.publishApproval,
+    alwaysConfirm: !config.delegation && policy?.alwaysConfirm === true,
   };
 }
 export function publicationChannel(directory: string, business: string): string | undefined {
@@ -107,7 +117,11 @@ export function publicationPreview(directory: string, key: string, business: str
 
 export type PublishPreview = { key: string; about: string; createdAt: string; publishAt: string };
 export function previewEnabled(config: Partial<CompanyConfig>, successes: number) {
-  return config.publishApproval?.preview === true && successes >= Math.max(5, config.publishApproval.confirmFirst);
+  return (
+    !config.delegation &&
+    config.publishApproval?.preview === true &&
+    successes >= Math.max(5, config.publishApproval.confirmFirst)
+  );
 }
 export function publicationTeaser(directory: string, key: string, business: string, at: string) {
   publicationPreview(directory, key, business);

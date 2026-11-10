@@ -1,3 +1,5 @@
+import { reconcileMaintenance, finishMaintenance } from "./delegation.ts";
+import { chairmanTitle, delegatedReport, maintenanceList, routeDelegatedReceipt } from "./delegation.ts";
 import { squareStatus } from "./rabbitrun-receipt.ts";
 import { TopicWorkflow } from "./topic-workflow.ts";
 import {
@@ -220,6 +222,53 @@ export class Operations {
       CREATE TABLE IF NOT EXISTS journal(seq INTEGER PRIMARY KEY,project TEXT NOT NULL,kind TEXT NOT NULL,at TEXT NOT NULL,body TEXT NOT NULL);`);
     initNotes(this.db);
   }
+  maintenance() {
+    return maintenanceList(this.db);
+  }
+  resolveMaintenance(key: string, result: string, now = new Date()) {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      finishMaintenance(this.db, key, result, now);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  recordDelegatedDecision(key: string, businesses: Portfolio, tasks: Task[], input: unknown, now = new Date()) {
+    if (!this.config.delegation) throw Error("未启用CEO授权");
+    const id = `delegated:${key}`;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      if (!this.db.prepare("SELECT id FROM batches WHERE id=?").get(id)) {
+        const chief = this.executive(),
+          receipt: Receipt = {};
+        const error = this.applyDecision(
+          chief,
+          businesses,
+          tasks,
+          executiveDecision(input),
+          id,
+          this.config.delegation.source,
+          receipt,
+          now,
+        );
+        if (error) throw Error(error);
+        reconcileMaintenance(this.db, chief, now);
+        routeDelegatedReceipt(this.db, this.config, receipt, now);
+        if (receipt.events?.length || receipt.ask?.length || receipt.notice?.length)
+          throw Error("维护录入不能触发派工或通知");
+        this.saveExecutive(chief);
+        this.db
+          .prepare("INSERT INTO batches VALUES (?,?)")
+          .run(id, JSON.stringify({ source: this.config.delegation.source }));
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   executive(): Leadership {
     const row = this.db.prepare("SELECT body FROM leadership WHERE id='company'").get();
     return row
@@ -371,6 +420,7 @@ export class Operations {
             (i.kind === "auth" ||
               (["failed", "timeout"].includes(i.kind) && !!i.task && c.repairs?.[i.task]?.exhausted)))),
     )) {
+      if (this.config.delegation && incident.reminderOnly) continue;
       if (!canNotify(incident, now)) continue;
       const action =
         incident.kind === "topics"
@@ -387,15 +437,15 @@ export class Operations {
           : "CEO任务已经自动修复两次，仍未取得有效结果";
       (receipt.notice ??= []).push({
         key: `health-${incident.id}-${incident.kind === "topics" ? day(now) : c.health.revision}`,
-        title: "CEO · 异常上报",
-        text: `发生：${incident.title}。\n影响：${incident.impact}。\n已尝试：${tried}。\n需要董事长：${action}`,
+        title: this.config.delegation ? "待维护者处理" : "CEO · 异常上报",
+        text: `发生：${incident.title}。\n影响：${incident.impact}。\n已尝试：${tried}。\n${this.config.delegation ? "待维护者处理" : "需要董事长"}：${action}`,
       });
       incident.notifiedAt = now.toISOString();
       incident.notifiedSeverity = incident.severity;
       incident.actions.push({
         at: now.toISOString(),
         action: "escalate",
-        result: "已向董事长提醒，未代确认或改变权限",
+        result: this.config.delegation ? "已记入待维护者处理" : "已向董事长提醒，未代确认或改变权限",
       });
     }
   }
@@ -466,8 +516,8 @@ export class Operations {
             .join("；") || "已核对巡检证据，暂无可安全执行的修复";
         (receipt.notice ??= []).push({
           key: `health-${i.id}-${decision}`,
-          title: "CEO · 异常上报",
-          text: `发生：${i.title}。\n影响：${i.impact}。\n已尝试：${tried}；${r.reason}。\n需要董事长：${r.request}`,
+          title: this.config.delegation ? chairmanTitle(r.category) : "CEO · 异常上报",
+          text: `发生：${i.title}。\n影响：${i.impact}。\n已尝试：${tried}；${r.reason}。\n${this.config.delegation && !["spend", "identity"].includes(r.category ?? "") ? "待维护者处理" : "需要董事长"}：${r.request}`,
         });
         i.notifiedAt = now.toISOString();
         i.notifiedSeverity = i.severity;
@@ -496,7 +546,7 @@ export class Operations {
         pause: "暂停员工后续派工",
         resume: "恢复员工后续派工",
         plan: "调整当天工作计划",
-        escalate: "已上报董事长",
+        escalate: this.config.delegation ? chairmanTitle(r.category) : "已上报董事长",
         observe: "核对证据后继续跟进",
       };
       i.actions.push({ at: now.toISOString(), action: r.action, result: `${labels[r.action]}：${r.reason}` });
@@ -1048,7 +1098,7 @@ export class Operations {
     if ((d.topicReviews?.length || d.topicReplies?.length || d.topicDecisions?.length) && !this.config.topics)
       return "选题流程尚未启用";
     try {
-      new TopicWorkflow(this.db, this.directory).validate(d);
+      new TopicWorkflow(this.db, this.directory, this.config).validate(d);
     } catch (error) {
       return (error as Error).message;
     }
@@ -1071,7 +1121,7 @@ export class Operations {
         d.directives.some((a) => !executable(a.action)) ||
         d.approvals.some((a) => a.approve && !executable(this.get(a.business, now).plans.find((p) => p.id === a.plan)!))
       )
-        return "该动作不能作为内部任务开工：发布须成果审核，改目标须weeklyGoals；对外回复未接入，部署、花钱、换账号须升级董事长";
+        return "该动作不能作为内部任务开工：发布须成果审核，改目标须weeklyGoals；对外回复未接入，部署、账号问题交维护者；新增支出和本人验证才找董事长";
     }
     const reservedTopics = new Set<string>();
     for (const directive of d.directives) {
@@ -1093,7 +1143,7 @@ export class Operations {
           this.config.topics?.startAt,
         )
       )
-        return "新稿必须使用董事长已通过且未被占用的选题";
+        return "新稿必须使用已通过且未被占用的选题";
     }
     if (this.config.workday?.prepareDrafts) {
       for (const b of active) {
@@ -1211,8 +1261,15 @@ export class Operations {
       return "同一成果不能重复审核";
     for (const a of deliveries) {
       const p = known(a.business) ? this.get(a.business, now).plans.find((p) => p.id === a.plan) : undefined;
-      const current = tasks.find((t) => t.id === p?.task);
-      if (!current || p?.task !== a.task || a.reviewVersion !== reviewVersion(current)) {
+      const pendingReturn =
+        !!this.config.delegation &&
+        a.verdict === "revise" &&
+        p?.status === "publishing" &&
+        !p.task &&
+        !this.get(a.business, now).publishReservations?.some((r) => r.key === p.publicationKey) &&
+        !publicationResults(this.directory).some((r) => r.key === p.publicationKey);
+      const current = tasks.find((t) => t.id === (pendingReturn ? p?.deliveryTask : p?.task));
+      if (!current || current.id !== a.task || a.reviewVersion !== reviewVersion(current)) {
         this.db.prepare("INSERT INTO journal(project,kind,at,body) VALUES (?,?,?,?)").run(
           a.business,
           "stale-delivery-review",
@@ -1228,8 +1285,9 @@ export class Operations {
       }
       if (
         !p ||
-        p.task !== a.task ||
+        (!pendingReturn && p.task !== a.task) ||
         !(
+          pendingReturn ||
           (p.status === "delivered" && tasks.find((t) => t.id === a.task)?.status === "completed") ||
           (a.verdict === "revise" && p.status === "blocked" && tasks.find((t) => t.id === a.task)?.status === "blocked")
         )
@@ -1265,7 +1323,7 @@ export class Operations {
     } catch (error) {
       return `审核未通过：${(error as Error).message}`;
     }
-    if (this.config.topics) new TopicWorkflow(this.db, this.directory).apply(d, now);
+    if (this.config.topics) new TopicWorkflow(this.db, this.directory, this.config).apply(d, now);
     if (this.config.ceoWake === "events") {
       delete c.nextReviewAt;
     } else c.nextReviewAt = new Date(now.getTime() + 30 * 60000).toISOString();
@@ -1287,11 +1345,17 @@ export class Operations {
             );
         }
     }
-    c.decisions.push({ task: decisionId, summary, at: now.toISOString(), decision: d });
+    c.decisions.push({
+      task: decisionId,
+      summary,
+      at: now.toISOString(),
+      decision: d,
+      ...(this.config.delegation ? { authority: this.config.delegation.source } : {}),
+    });
     for (const goal of weeklyGoals) {
       const p = this.get(goal.business, now),
         s = p.staff.find((s) => s.role === goal.role)!;
-      if (s.weeklyGoal && s.weeklyGoal.direction !== goal.direction) {
+      if (!this.config.delegation && s.weeklyGoal && s.weeklyGoal.direction !== goal.direction) {
         if (JSON.stringify(s.pendingGoal && weeklyGoal(s.pendingGoal)) !== JSON.stringify(goal)) {
           s.pendingGoal = { ...goal, confirmation: randomUUID() };
           receipt.ask ??= [];
@@ -1380,6 +1444,8 @@ export class Operations {
           issue.answer = `CEO 已退回新一版任务：${a.reason}`;
         }
         c.pendingRetries = (c.pendingRetries ?? []).filter((r) => r.task !== a.task);
+        if (plan.publicationKey)
+          p.publishReservations = p.publishReservations?.filter((r) => r.key !== plan.publicationKey);
         delete plan.publicationKey;
         delete plan.publishApproval;
         delete plan.publishPreview;
@@ -1502,12 +1568,16 @@ export class Operations {
         answer: null,
         at: now.toISOString(),
       };
-      c.questions.push(q);
+      const recipient =
+        this.config.delegation && !["spend", "identity"].includes(e.category ?? "")
+          ? ("maintainer" as const)
+          : ("chairman" as const);
+      c.questions.push({ ...q, recipient });
       for (const i of c.issues.filter((i) => ids.includes(i.id))) i.state = "owner";
       receipt.ask ??= [];
       receipt.ask.push({
         key: `ceo-${q.id}`,
-        title: "CEO · 待你决策",
+        title: this.config.delegation ? chairmanTitle(e.category) : "CEO · 待你决策",
         text: `${q.question}\n\n${q.context}`,
         options: q.options,
         about: `ceo:${q.id}`,
@@ -1671,6 +1741,8 @@ export class Operations {
   private ceoContext(c: Leadership, businesses: Portfolio, tasks: Task[], now: Date) {
     const active = businesses.filter((b) => b.autonomy && b.status === "active");
     return {
+      delegation: this.config.delegation ?? null,
+      maintenance: this.maintenance().filter((m) => !m.resolvedAt),
       topicPolicy: this.config.topics ?? null,
       workNotes: this.config.reporting?.weekly ? notebook(this.db, "ceo") : undefined,
       weeklyCycles: this.config.reporting?.weekly
@@ -1948,7 +2020,7 @@ export class Operations {
       cycle = { week, date, staff: [] };
       c.weeklyCycles.push(cycle);
     }
-    if (now.toISOString() >= reportTime(date, "14:00") && !cycle.requestedAt) {
+    if (!this.config.delegation && now.toISOString() >= reportTime(date, "14:00") && !cycle.requestedAt) {
       const missing = missingMetrics(this.directory, c.manualMetrics ?? [], now);
       if (missing.length) {
         cycle.missing = missing;
@@ -2074,8 +2146,14 @@ export class Operations {
           (d?.report ?? report.summary) +
           (cycle ? this.weeklyGaps(c, cycle.week, now) : "") +
           healthReport(c.health, entry.date) +
-          (this.config.health?.enabled ? "" : pendingXReminder(publicationResults(this.directory), entry.date)),
+          (this.config.health?.enabled && !this.config.delegation
+            ? ""
+            : pendingXReminder(publicationResults(this.directory), entry.date)),
       });
+      if (this.config.delegation) {
+        const notice = receipt.notice!.at(-1)!;
+        notice.text = notice.text.slice(0, 2100) + delegatedReport(this.db, c, entry.date);
+      }
       if (cycle) {
         const notice = receipt.notice!.at(-1)!;
         cycle.report = notice.text;
@@ -2182,7 +2260,12 @@ export class Operations {
       ),
     );
     const pendingReview =
-      pendingDelivery || active.some((b) => this.get(b.id, now).topics?.some((t) => t.state === "screening"));
+      pendingDelivery ||
+      active.some((b) =>
+        this.get(b.id, now).topics?.some(
+          (t) => t.state === "screening" || (!!this.config.delegation && t.state === "pending"),
+        ),
+      );
     // An emitted task may not have reached the office yet; queued includes quota deferrals.
     const reviewing =
       (c.lastTask && !latest) ||
@@ -2353,6 +2436,10 @@ export class Operations {
       })
       .concat(project.publishReservations ?? []);
     const usage = publicationUsage(results, reservations, channel, now);
+    if (this.config.delegation) {
+      delete plan.publishApproval;
+      delete plan.publishPreview;
+    }
     let approval = plan.publishApproval;
     if (approval?.state === "deferred" && Date.parse(approval.nextAt!) > now.getTime()) return false;
     if (
@@ -2466,7 +2553,7 @@ export class Operations {
         events.every((e) => e.source === "company-inbox" && e.type === "company.owner.question")
       ) {
         if (this.config.topics)
-          new TopicWorkflow(this.db, this.directory).tick(
+          new TopicWorkflow(this.db, this.directory, this.config).tick(
             [],
             events,
             receipt,
@@ -2474,6 +2561,7 @@ export class Operations {
             this.topicParticipants(businesses, now),
           );
         this.saveExecutive(chief);
+        routeDelegatedReceipt(this.db, this.config, receipt, now);
         this.db.prepare("INSERT INTO batches VALUES (?,?)").run(batch, JSON.stringify(receipt));
         this.db.exec("COMMIT");
         return receipt;
@@ -2484,7 +2572,7 @@ export class Operations {
       if (chief.enabled) this.manage(chief, businesses, tasks, answers, receipt, now);
       this.conversation(chief, businesses, tasks, events, receipt, now);
       if (this.config.topics)
-        new TopicWorkflow(this.db, this.directory).tick(
+        new TopicWorkflow(this.db, this.directory, this.config).tick(
           answers,
           events,
           receipt,
@@ -2662,7 +2750,7 @@ export class Operations {
             // Stable employee keys deduplicate proposals across checks; a closed plan remains in history.
             if (p.plans.some((v) => v.id === id) || p.plans.filter((v) => v.status !== "closed").length >= 30) continue;
             if (!topicCanWrite(p, { ...a, id, createdAt: now.toISOString() }, this.config.topics?.startAt)) {
-              s.finding = "选题未获董事长通过，不能写稿；请先报题或从选题池取题";
+              s.finding = "选题尚未通过，不能写稿；请先报题或从选题池取题";
               continue;
             }
             const topic = p.topics?.find((t) => t.id === a.topic);
@@ -2803,7 +2891,7 @@ export class Operations {
                 title: `${b.name} · ${first ? "周一选题会" : writing ? "选题池取题" : replacements.length ? "选题换题" : "补报选题"}`,
                 kind: `check-${s.role}`,
                 goal: writing
-                  ? `读取knowledge/staff/${b.id}/${s.role}.json和knowledge/operations/${b.id}.json，从已通过且无plan的选题中按排序取题，inspection.actions提出本地写稿计划，topic填选题id，带上董事长opinion；本轮只规划，不写正文。`
+                  ? `读取knowledge/staff/${b.id}/${s.role}.json和knowledge/operations/${b.id}.json，从已通过且无plan的选题中按排序取题，inspection.actions提出本地写稿计划，topic填选题id，带上选题opinion；本轮只规划，不写正文。`
                   : `读取knowledge/staff/${b.id}/${s.role}.json、knowledge/operations/${b.id}.json、knowledge/feedback.json和上周周报、自己的复盘笔记、最近10篇已发。${replacements.length ? "按初筛意见换题一轮，replaces填原选题id" : `本周剩余目标${remaining}篇（已扣除在途稿），报${Math.min(10, remaining + 1)}条选题含1条备选`}。inspection.topics提交key/title/angle/reason/outline/app/platform；state用idle、actions/reviews空。只报选题，不写稿；未通过期间可查资料。每条约150字，整个detail≤3500字。`.slice(
                       0,
                       500,
@@ -2917,7 +3005,7 @@ export class Operations {
               ...(publishing ? { publication: a.publicationKey } : {}),
               goal: publishing
                 ? `项目资料：knowledge/operations/${b.id}.json。计划 ${a.id} 已经 CEO 审核。固定发布入口仅发布已冻结的内容；缺渠道或账号则报告具体阻塞。验收必须核对真实平台结果，不能把本地草稿当已发布。`
-                : `项目资料：knowledge/operations/${b.id}.json。计划编号 ${a.id}。${a.topic ? `选题id：${a.topic}；董事长意见见本业务topics中该选题，交付须带topic。` : ""}${a.goal}${a.revision ? ` 返工：${a.result}；读取上一交付任务 ${a.deliveryTask}，在本任务目录修改。` : ""} 仅交付本地成果，交 CEO 审核。`.slice(
+                : `项目资料：knowledge/operations/${b.id}.json。计划编号 ${a.id}。${a.topic ? `选题id：${a.topic}；选题决定意见见本业务topics中该选题，交付须带topic。` : ""}${a.goal}${a.revision ? ` 返工：${a.result}；读取上一交付任务 ${a.deliveryTask}，在本任务目录修改。` : ""} 仅交付本地成果，交 CEO 审核。`.slice(
                     0,
                     500,
                   ),
@@ -3040,10 +3128,18 @@ export class Operations {
         this.profile(p, b, tasks, now);
       }
       if (this.config.topics)
-        new TopicWorkflow(this.db, this.directory).tick([], [], receipt, now, this.topicParticipants(businesses, now));
+        new TopicWorkflow(this.db, this.directory, this.config).tick(
+          [],
+          [],
+          receipt,
+          now,
+          this.topicParticipants(businesses, now),
+        );
       if (chief.enabled) {
         if (chief.processed !== beforeProcessed && beforeCEO === chief.fingerprint)
           chief.fingerprint = this.ceoInputs(chief, businesses, tasks, now);
+        if (this.config.delegation) reconcileMaintenance(this.db, chief, now);
+        routeDelegatedReceipt(this.db, this.config, receipt, now);
         this.weeklyRhythm(chief, businesses, tasks, receipt, now, depth <= 1);
         const reporting = this.reporting(chief, businesses, tasks, receipt, now, depth <= 1);
         // The owner's message already has a CEO conversation; record its evidence without opening a second round.
@@ -3053,6 +3149,7 @@ export class Operations {
         if (depth <= 1 && !reporting && !ownerConversation) this.scheduleCEO(chief, businesses, tasks, receipt, now);
         this.saveExecutive(chief);
       }
+      routeDelegatedReceipt(this.db, this.config, receipt, now);
       this.db.prepare("INSERT INTO batches VALUES (?,?)").run(batch, JSON.stringify(receipt));
       this.db.exec("COMMIT");
       return receipt;

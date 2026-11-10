@@ -1252,7 +1252,7 @@ function ceoHTML(d) {
   const c = d.leadership;
   if (!c?.enabled) return '<div class="empty"><strong>CEO 管理未启用</strong></div>';
   const business = (id) => d.businesses?.find((b) => b.id === id)?.name ?? id;
-  const state = { open: "CEO 处理中", owner: "待你回复", answered: "已解决" };
+  const state = { open: "CEO 处理中", owner: c.delegated ? "待处理" : "待你回复", answered: "已解决" };
   const channel = d.channels?.find((v) => v.id === "company-feishu");
   const latest = c.latestTask ?? d.tasks.find((t) => t.id === c.lastTask),
     repair = c.repairs?.[c.lastTask];
@@ -1274,6 +1274,7 @@ function ceoHTML(d) {
       .join("") || '<p class="muted">等待 CEO 分配目标</p>'
   }</div></section>
   ${approvalsHTML(d)}
+  <section class="panel"><div class="panel-heading"><h2>待维护者处理</h2></div><div class="approval-list">${(c.maintenance ?? []).filter((m) => !m.resolvedAt).map((m) => `<article class="report"><span class="meta">${time(m.at)}</span><h3>${esc(m.title)}</h3><p>${esc(m.text)}</p></article>`).join("") || '<p class="muted">暂无</p>'}</div></section>
   <section class="panel"><div class="panel-heading"><h2>员工问题</h2><span class="count-badge">${c.openIssues ?? c.issues.filter((i) => i.state !== "answered").length}</span></div><div class="approval-list">${
     c.issues
       .slice()

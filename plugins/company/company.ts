@@ -48,6 +48,7 @@ export type CompanyConfig = {
   inspections?: boolean;
   ceoWake?: "legacy" | "events";
   dailyModelRuns?: Partial<Record<Role | "total" | "employee", number>>;
+  delegation?: { source: string };
   topics?: { startAt: string };
   workday?: { enabled: boolean; after: string; startDate?: string; prepareDrafts?: boolean };
   reporting?: { enabled: boolean; weekly?: boolean };
