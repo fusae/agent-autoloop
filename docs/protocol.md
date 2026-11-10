@@ -447,3 +447,5 @@ Ship 使用本引擎仓库的 `plugins/delivery/action.yml`，项目固定到发
 公司可选 `delegation.source` 启用CEO决定，`topicReviews.score`、`topicDecisions.source:"ceo"`、上报类别 `spend|identity` 及后台维护清单是插件兼容扩展。旧配置保持原审批；授权模式初筛≥7直接入池、审稿即发布决定、取消预告和周五索数；日报和X手动卡保留。固定发布入口同步校验CEO决定与冻结稿，不改变内核、权限或HTTP协议；详见[CEO授权](company.md#ceo-授权与维护清单)。
 
 公司可选 `proactiveCEO`、经营记录 `proactiveRounds` 是插件内部兼容扩展，缺省关闭；三类主动经营复用现有CEO动作、额度和经营日志，`executive.report` 保存结论并进入日报。不增加内核字段或HTTP接口；见[主动经营](company.md#ceo-主动经营)。
+
+公司固定发布程序的未知回执复查复用既有 `later`（15分钟、再1小时），到期只读原发布编号；旧任务、派工版本和冻结编号不符时忽略。CEO 自身决定不作为新事件再次唤醒。均为插件行为修复，不新增内核字段或改变 HTTP 协议；旧发布记录缺少本人验证阻塞字段时仍按未知处理。

@@ -15,6 +15,7 @@ export type Publication = {
   x?: XReceipt;
   confirmation?: OwnerConfirmation;
 };
+export class PublicationPending extends Error {}
 type Request = {
   key: string;
   business: string;
@@ -147,11 +148,11 @@ export function executePublication(directory: string, key: string, lookupOnly = 
       },
     );
     if (result.error || result.status !== 0)
-      throw Error("发布入口调用失败，尚未确认平台结果；保留原发布编号核对，不能重复发布");
+      throw new PublicationPending("发布入口调用失败，尚未确认平台结果；保留原发布编号核对，不能重复发布");
     try {
       return JSON.parse(result.stdout);
     } catch {
-      throw Error("发布入口未返回可核验结果，不能视为发布成功");
+      throw new PublicationPending("发布入口未返回可核验结果，不能视为发布成功");
     }
   };
   let result = call("lookup");
@@ -163,12 +164,14 @@ export function executePublication(directory: string, key: string, lookupOnly = 
     }
     result = call("lookup");
   }
-  if (result.state !== "published")
-    throw Error(
+  if (result.state !== "published") {
+    const reason =
       typeof result.reason === "string" && result.reason.trim()
         ? result.reason.slice(0, 400)
-        : "平台尚未确认发布成功，需要检查账号、审核状态或发布入口",
-    );
+        : "平台尚未确认发布成功，需要检查账号、审核状态或发布入口";
+    if (result.state === "blocked" || /扫码|登录已失效|账号.*不一致/.test(reason)) throw Error(reason);
+    throw new PublicationPending(reason);
+  }
   const proof = publication(result);
   if (proof.key !== key || proof.channel !== target.channel) throw Error("平台发布结果与本次审核或配置渠道不匹配");
   save(file(directory, key, "-result"), proof);

@@ -2634,6 +2634,7 @@ export class Operations {
       }
       if (this.config.ceoWake === "events") delete chief.nextReviewAt;
       const beforeCEO = this.ceoInputs(chief, businesses, tasks, now),
+        beforeEvents = this.config.ceoWake === "events" ? this.eventInputs(chief, businesses, tasks, now) : undefined,
         beforeProcessed = chief.processed;
       if (chief.enabled) this.manage(chief, businesses, tasks, answers, receipt, now);
       this.conversation(chief, businesses, tasks, events, receipt, now);
@@ -3210,6 +3211,14 @@ export class Operations {
       if (chief.enabled) {
         if (chief.processed !== beforeProcessed && beforeCEO === chief.fingerprint)
           chief.fingerprint = this.ceoInputs(chief, businesses, tasks, now);
+        // A CEO's own topic decisions are not new input. Preserve concurrently arrived employee/owner evidence.
+        if (
+          chief.processed !== beforeProcessed &&
+          beforeEvents === chief.eventInputs &&
+          !answers.length &&
+          !events.some((e) => e.type === "company.owner.question" || e.type === "company.ceo.decision")
+        )
+          chief.eventInputs = this.eventInputs(chief, businesses, tasks, now);
         if (this.config.delegation) reconcileMaintenance(this.db, chief, now);
         routeDelegatedReceipt(this.db, this.config, receipt, now);
         this.weeklyRhythm(chief, businesses, tasks, receipt, now, depth <= 1);

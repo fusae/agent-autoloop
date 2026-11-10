@@ -306,3 +306,37 @@ test("frozen company delivery runs the real adapter over HTTP and replays withou
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// A public profile can stay logged in while the creator center rejects publishing before submission.
+test("creator login rejection survives lookup without exposing private upstream details or reposting", async () => {
+  const { XhsLoginRequired, xhsApi } = await import("../plugins/xiaohongshu/publisher.ts");
+  const { createServer } = await import("node:http");
+  const server = createServer((_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ code: "PUBLISH_FAILED", details: "创作者中心登录失效，请重新扫码登录" }));
+  });
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const f = fixture();
+  let writes = 0;
+  try {
+    const api = xhsApi({ endpoint: `http://127.0.0.1:${(server.address() as any).port}`, token: "test" });
+    await assert.rejects(api("/api/v1/publish", {}), XhsLoginRequired);
+    const call = async (path: string, body?: unknown) => {
+      if (path === "/api/v1/publish") {
+        writes++;
+        throw new XhsLoginRequired();
+      }
+      return f.call(path, body);
+    };
+    await assert.rejects(xhsPublication(config, f.directory, request("publish"), call), /需董事长本人验证/);
+    for (const action of ["lookup", "publish"]) {
+      const result = await xhsPublication(config, f.directory, request(action), call);
+      assert.equal(result.state, "blocked");
+      assert.match(result.reason, /扫码/);
+    }
+    assert.equal(writes, 1);
+  } finally {
+    f.close();
+    await new Promise<void>((done) => server.close(() => done()));
+  }
+});

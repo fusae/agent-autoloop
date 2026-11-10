@@ -22,6 +22,12 @@ type Request = {
 };
 type Draft = { title: string; content: string; images: { mime: string; base64: string }[] };
 type Call = (path: string, body?: unknown) => Promise<any>;
+export class XhsLoginRequired extends Error {
+  constructor() {
+    super("小红书创作者中心登录已失效，需董事长本人验证：重新扫码后再恢复原任务");
+    this.name = "XhsLoginRequired";
+  }
+}
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const normalize = (s: string) => s.replace(/\r\n/g, "\n").trim();
 const normalizeContent = (s: string) =>
@@ -82,6 +88,9 @@ export function xhsApi(config: Pick<Config, "endpoint" | "token">): Call {
     });
     const result = (await response.json()) as any;
     if (!response.ok || result.success !== true) {
+      // Only this known pre-submit error proves an identity block; never expose raw upstream details.
+      if (result.code === "PUBLISH_FAILED" && result.details === "创作者中心登录失效，请重新扫码登录")
+        throw new XhsLoginRequired();
       const error = Error("小红书接口未完成操作，请检查登录或平台提示");
       error.name = response.status >= 500 ? "XhsUnavailable" : "XhsAccessError";
       throw error;
@@ -156,7 +165,7 @@ export async function xhsPublication(
       };
     }
     // A missing note after a write may still be under moderation. It never authorizes another write.
-    if (saved) return unknown;
+    if (saved) return saved.blockedReason ? { state: "blocked", reason: saved.blockedReason } : unknown;
     if (request.action === "lookup") return { state: "absent" };
     const images = draft.images.map((image, i) => {
       const path = join(
@@ -167,14 +176,20 @@ export async function xhsPublication(
       return path;
     });
     // Persist before the network write; even a lost response must not permit duplicate publication.
-    save(stateFile, { fingerprint, startedAt: Date.now() });
-    await call("/api/v1/publish", {
-      title: draft.title,
-      content: draft.content,
-      images,
-      visibility: "公开可见",
-      is_original: false,
-    });
+    const attempt = { fingerprint, startedAt: Date.now() };
+    save(stateFile, attempt);
+    try {
+      await call("/api/v1/publish", {
+        title: draft.title,
+        content: draft.content,
+        images,
+        visibility: "公开可见",
+        is_original: false,
+      });
+    } catch (error) {
+      if (error instanceof XhsLoginRequired) save(stateFile, { ...attempt, blockedReason: error.message });
+      throw error;
+    }
     return unknown;
   } finally {
     rmSync(lock, { recursive: true, force: true });

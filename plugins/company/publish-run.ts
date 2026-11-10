@@ -11,17 +11,28 @@ import {
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
-import { executePublication } from "./publication.ts";
+import { executePublication, PublicationPending, type Publication } from "./publication.ts";
+import { verificationDelay } from "./verification.ts";
 import { taskId, type Receipt } from "./company.ts";
+import type { Result } from "../../protocol/validate.ts";
 
 const [configFile, contextFile] = process.argv.slice(2);
 const directory = dirname(configFile),
   context = JSON.parse(readFileSync(contextFile, "utf8"));
 const events: NonNullable<Receipt["events"]> = [];
-for (const event of context.events) {
-  if (event.source !== "company-office" || event.type !== "company.work.publish") continue;
-  const data = JSON.parse(event.detail),
-    task = taskId(event.subject);
+const later: NonNullable<Result["later"]> = [];
+const inputs = [
+  ...context.events
+    .filter((e: any) => e.source === "company-office" && e.type === "company.work.publish")
+    .map((e: any) => ({ ...JSON.parse(e.detail), task: e.subject, attempt: 0 })),
+  ...(context.timers ?? [])
+    .filter((t: any) => t.key.startsWith("publish-lookup-"))
+    .map((t: any) => JSON.parse(t.about)),
+];
+for (const data of inputs) {
+  const task = taskId(data.task);
+  if (!Number.isSafeInteger(data.attempt) || data.attempt < 0 || data.attempt > 2) continue;
+  const timer = `publish-lookup-${task}-${data.assignment}`;
   let report;
   try {
     const config = JSON.parse(readFileSync(configFile, "utf8"));
@@ -51,11 +62,14 @@ for (const event of context.events) {
         current.assignment !== data.assignment ||
         current.publication !== data.publication ||
         !approved
-      )
+      ) {
+        if (data.attempt > 0) continue;
         throw Error("发布任务不在当前已审核范围内");
+      }
       const channel = publicationChannel(directory, project.business);
       const policy = businessPublishPolicy(config, project.business);
       if (
+        data.attempt === 0 &&
         channel &&
         (policy.publishDailyLimit !== undefined || policy.publishApproval !== undefined || policy.alwaysConfirm)
       ) {
@@ -98,7 +112,22 @@ for (const event of context.events) {
       office.close();
       operations.close();
     }
-    const proof = executePublication(directory, data.publication);
+    let proof: Publication;
+    try {
+      // A timer can only read back the original frozen publication, never submit it again.
+      proof = executePublication(directory, data.publication, data.attempt > 0);
+    } catch (error) {
+      const delay = verificationDelay(data.attempt);
+      if (error instanceof PublicationPending && delay !== undefined) {
+        later.push({
+          key: timer,
+          at: new Date(Date.now() + delay).toISOString(),
+          about: JSON.stringify({ ...data, attempt: data.attempt + 1 }),
+        });
+        continue;
+      }
+      throw error;
+    }
     const artifact = `tasks/${task}/publication.json`;
     mkdirSync(join(directory, "workspace/tasks", task), { recursive: true, mode: 0o700 });
     writeFileSync(join(directory, "workspace", artifact), JSON.stringify(proof, null, 2), { mode: 0o600 });
@@ -126,5 +155,6 @@ for (const event of context.events) {
     summary: report.summary,
     detail: JSON.stringify(report),
   });
+  later.push({ key: timer, cancel: true });
 }
-process.stdout.write(`发布处理结束。\n\n\`\`\`agent-autoloop\n${JSON.stringify({ events })}\n\`\`\`\n`);
+process.stdout.write(`发布处理结束。\n\n\`\`\`agent-autoloop\n${JSON.stringify({ events, later })}\n\`\`\`\n`);

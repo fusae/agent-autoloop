@@ -840,3 +840,39 @@ test("delegated CEO requires a handbook score and sends passed topics straight t
     },
     { delegation: { source: "测试授权，CEO决定" } },
   ));
+
+// Screening is the CEO's own output, not another employee result that needs a new management turn.
+test("screened topics waiting for the chairman do not wake an empty CEO round", () =>
+  fixture((f: any) => {
+    const first = f.tick();
+    const initial = f.work(first, "ceo")[0];
+    f.send("company-inbox", initial.type, initial.subject, JSON.parse(initial.detail));
+    f.send("company-ceo", "company.result", initial.subject, {
+      assignment: 1,
+      verdict: "pass",
+      summary: "安排完成",
+      artifacts: [],
+      evidence: ["资料"],
+      executive: decision(),
+    });
+    f.tick();
+    for (const e of f.work(first, "check-growth")) deliverTopics(f, e, [proposal()]);
+    const review = f.work(f.tick(), "ceo")[0];
+    assert.ok(review);
+    const id = review.subject;
+    f.send("company-inbox", review.type, id, JSON.parse(review.detail));
+    f.send("company-ceo", "company.result", id, {
+      assignment: 1,
+      verdict: "pass",
+      summary: "初筛完成，等待决定",
+      artifacts: [],
+      evidence: ["完整选题"],
+      executive: decision({ topicReviews: reviews(f) }),
+    });
+    const r = f.o.plan("consume-review", f.b.list(), f.c.tasks(), now, [], 1, [
+      { id: "cron", source: "clock", type: "cron", subject: "tick", detail: "" },
+    ]);
+    assert.equal(getProject(f).topics[0].state, "pending");
+    assert.equal(f.work(r, "ceo").length, 0);
+    assert.equal(f.work(f.tick(new Date(+now + 5 * 60000)), "ceo").length, 0);
+  }));
