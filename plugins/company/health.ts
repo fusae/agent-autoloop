@@ -100,6 +100,7 @@ function outputSignature(task: Task | undefined, round: HealthRuntime["rounds"][
           d.ownerReplies ?? [],
           d.topicReviews ?? [],
           d.topicReplies ?? [],
+          d.topicDecisions ?? [],
           (d.responses ?? []).filter((r) => r.action !== "observe").map(({ anomaly, action }) => ({ anomaly, action })),
           d.report ? [d.report] : [],
         ]

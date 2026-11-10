@@ -13,6 +13,13 @@ export type StaffPlan = {
   reviewAt: string;
 };
 export type ExecutiveDecision = {
+  topicDecisions?: {
+    business: string;
+    batch: string;
+    event?: number;
+    card?: number;
+    choices: import("./topics.ts").TopicChoice[];
+  }[];
   topicReviews?: { business: string; topic: string; approve: boolean; reason: string; rank: number }[];
   topicReplies?: { business: string; batch: string; event: number }[];
   responses?: {
@@ -136,6 +143,32 @@ export function executiveDecision(v: unknown): ExecutiveDecision {
     return d[key].map(object);
   };
   return {
+    ...(d.topicDecisions !== undefined
+      ? {
+          topicDecisions: list("topicDecisions", 10).map((a) => {
+            if (
+              (a.event === undefined) === (a.card === undefined) ||
+              !Number.isSafeInteger(a.event ?? a.card) ||
+              (a.event ?? a.card) < 1
+            )
+              throw Error("代录董事长拍板必须引用一个真实消息事件或已回答卡片");
+            if (!Array.isArray(a.choices) || !a.choices.length || a.choices.length > 8)
+              throw Error("拍板需要1–8项通过或退回决定");
+            const choices = a.choices.map((v: any) => {
+              if (!Number.isSafeInteger(v.index) || v.index < 0 || v.index > 7 || typeof v.approve !== "boolean")
+                throw Error("拍板选题序号或决定不正确");
+              return { index: v.index, approve: v.approve, opinion: text(v.opinion, 200, "拍板意见") };
+            });
+            if (new Set(choices.map((v: any) => v.index)).size !== choices.length) throw Error("拍板选题不能重复");
+            return {
+              business: id(a.business),
+              batch: id(a.batch),
+              ...(a.event !== undefined ? { event: a.event } : { card: a.card }),
+              choices,
+            };
+          }),
+        }
+      : {}),
     ...(d.topicReviews !== undefined
       ? {
           topicReviews: list("topicReviews", 30).map((a) => {

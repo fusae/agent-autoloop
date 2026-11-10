@@ -1,3 +1,7 @@
+import { Operations } from "./operations.ts";
+import { Businesses } from "./business.ts";
+import { Company } from "./company.ts";
+import { readFileSync } from "node:fs";
 import { retrospective } from "./weekly.ts";
 import { writeFileSync } from "node:fs";
 import codex from "../codex/agent.ts";
@@ -17,6 +21,7 @@ function modelReading(
   stdout: string,
   code: number | null,
   stderr: string,
+  validation?: { directory: string; repairs: number; run: number; cards: number[]; open: number[] },
   work?: {
     task: string;
     assignment: number;
@@ -28,8 +33,11 @@ function modelReading(
   if (reading.session) reading.session = `company:${engine}:${reading.session}`;
   if (!reading.text || reading.error) return reading;
   const { result, problem } = resultFrom(readMessage(reading.text), {});
-  if (problem) return reading;
+  if (problem && !validation) return reading;
   try {
+    if (problem) throw Error(problem);
+    if (validation && (result.events ?? []).filter((e) => e.type === "company.ceo.decision").length > 1)
+      throw Error("一次董事长决定只能提交一项company.ceo.decision，请合并动作后重试");
     if (
       work &&
       ["done", "nothing"].includes(result.outcome) &&
@@ -58,6 +66,7 @@ function modelReading(
           );
       }
     }
+    let hasDecision = false;
     for (const event of result.events ?? []) {
       if (!["company.ceo.decision", "company.result"].includes(event.type)) continue;
       const detail = JSON.parse(event.detail ?? "{}");
@@ -76,6 +85,7 @@ function modelReading(
           !d.report &&
           ![
             d.topicReviews,
+            d.topicDecisions,
             d.deliveries,
             d.directives,
             d.approvals,
@@ -89,12 +99,63 @@ function modelReading(
             "本次资料仍有 state=screening 的待初筛选题，不能交空决策或只说无待审稿件；按既有规范提交 topicReviews，真实受阻则说明并上报，不代董事长批准，不重做已完成业务。",
           );
       }
-      if (event.type === "company.ceo.decision" || detail.executive !== undefined) executiveDecision(detail.executive);
+      if (event.type === "company.ceo.decision" || detail.executive !== undefined) {
+        const d = executiveDecision(detail.executive);
+        if (validation) {
+          const config = JSON.parse(readFileSync(join(validation.directory, "company.json"), "utf8"));
+          const operations = new Operations(validation.directory),
+            businesses = new Businesses(validation.directory),
+            office = new Company(config);
+          try {
+            const error = operations.validateDecision(businesses.list(), office.tasks(), d);
+            if (error)
+              throw Error(
+                `${error}。topicReviews只用于screening初筛；董事长按钮/原话用topicDecisions代录，引用event或card及choices。只纠正未执行的动作，不重做业务。`,
+              );
+          } finally {
+            operations.close();
+            businesses.close();
+            office.close();
+          }
+        }
+        if (event.type === "company.ceo.decision" && validation) {
+          hasDecision = true;
+          detail.completionCards = [
+            ...new Set([
+              ...validation.cards,
+              ...(result.resolve ?? []).filter((r) => validation.open.includes(r.card)).map((r) => r.card),
+            ]),
+          ];
+          event.detail = JSON.stringify(detail);
+        }
+      }
       if (detail.retrospective !== undefined) retrospective(detail.retrospective);
       if (detail.dailyReport !== undefined) dailyReport(detail.dailyReport);
       if (detail.inspection !== undefined) inspection(detail.inspection);
     }
+    if (hasDecision) {
+      delete result.resolve;
+      delete result.notice;
+      reading.text = `处理中，CEO 正在执行董事长决定。\n\n\`\`\`agent-autoloop\n${JSON.stringify({ events: result.events, ask: result.ask })}\n\`\`\``;
+    }
   } catch (error) {
+    if (validation && validation.repairs >= 2) {
+      reading.text = `未成功，CEO 正在核对处理。\n\n\`\`\`agent-autoloop\n${JSON.stringify({
+        events: [
+          {
+            id: `decision-rejected-${validation.run}`,
+            type: "company.ceo.decision",
+            subject: "owner",
+            detail: JSON.stringify({
+              summary: "董事长决定未执行，内部纠正两次仍未成功",
+              rejected: (error as Error).message,
+              completionCards: validation.cards,
+            }),
+          },
+        ],
+      })}\n\`\`\``;
+      return reading;
+    }
     reading.receiptProblem = (error as Error).message;
   }
   return reading;
@@ -141,8 +202,10 @@ export default {
     const first = stdout.split("\n")[0];
     try {
       const marker = JSON.parse(first);
-      if (marker.companyModel === "codex") return modelReading("codex", stdout, code, stderr, marker.companyWork);
-      if (marker.companyModel === "claude") return modelReading("claude", stdout, code, stderr, marker.companyWork);
+      if (marker.companyModel === "codex")
+        return modelReading("codex", stdout, code, stderr, marker.companyValidation, marker.companyWork);
+      if (marker.companyModel === "claude")
+        return modelReading("claude", stdout, code, stderr, marker.companyValidation, marker.companyWork);
       if (marker.companyDeferred)
         return {
           text: `今日模型次数已用完，工作保留到明天。\n\n\`\`\`agent-autoloop\n${JSON.stringify(marker.companyDeferred)}\n\`\`\``,

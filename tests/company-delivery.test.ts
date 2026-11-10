@@ -155,7 +155,7 @@ test("a completed draft waits for CEO review; reject schedules a new revision an
     tick();
     assert.equal(plan().status, "delivered");
     const stale = decide({ deliveries: [{ ...review, verdict: "publish" }] });
-    assert.match(stale.notice?.[0].text, /未执行/);
+    assert.equal(stale.notice, undefined, "stale internal reviews do not notify the chairman");
     assert.equal(plan().status, "delivered");
     assert.equal(c.task(work.subject).status, "completed");
   }));

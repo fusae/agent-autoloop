@@ -1,3 +1,4 @@
+import { decisionCard } from "./decision-cards.ts";
 import { cardTopics } from "./topics.ts";
 import { rabbitChannel, rabbitDraft, rabbitText, manualXKey } from "./rabbitrun.ts";
 import { parseXhsDraft } from "../xiaohongshu/publisher.ts";
@@ -30,6 +31,8 @@ type Message = {
   thread_id?: string;
 };
 type Saved = {
+  execution?: string;
+  snapshot?: Card;
   topics?: { id: string; topics: string[] };
   version: number;
   ref: string | null;
@@ -82,6 +85,8 @@ export function interactiveCard(
   const publication = publicationKey(card);
   const text = manual ? manual.text : publication ? card.text.replace(/\n发布稿件：[a-f0-9]{32}$/, "") : card.text;
   const answer = card.answer || (card.choice !== null ? card.options[card.choice] : "");
+  const pending = /^(处理中|未成功)/.test(card.result ?? "");
+  const failedNotice = /安排未执行/.test(card.text);
   const deferred = card.state !== "open" && answer?.trim() === "暂缓";
   const arrangement = card.kind === "notice" && card.title === "CEO · 工作安排";
   const [overview, ...extra] = arrangement ? text.split(ARRANGEMENT_DETAILS) : [text];
@@ -216,7 +221,17 @@ export function interactiveCard(
       tag: "div",
       text: {
         tag: "plain_text",
-        content: deferred ? "已暂缓，事项尚未解决" : card.state === "decided" ? "已提交 CEO" : "答复已记录",
+        content: pending
+          ? "处理中，执行结果尚未确认"
+          : failedNotice
+            ? "未执行成功"
+            : deferred
+              ? "已暂缓，事项尚未解决"
+              : card.state === "decided"
+                ? "处理中，已提交 CEO"
+                : card.kind === "notice"
+                  ? "通知"
+                  : "处理已结束",
       },
     });
   }
@@ -233,10 +248,12 @@ export function interactiveCard(
           : card.kind === "ask" && card.state !== "open"
             ? deferred
               ? "CEO · 已暂缓"
-              : "CEO · 答复已记录"
+              : pending || card.state === "decided"
+                ? "CEO · 处理中"
+                : "CEO · 处理结果"
             : card.title,
       },
-      template: deferred ? "grey" : card.state === "open" ? "blue" : "green",
+      template: deferred || pending || failedNotice ? "grey" : card.state === "open" ? "blue" : "green",
     },
     body: { elements },
   };
@@ -331,6 +348,9 @@ export class CompanyFeishu {
     return media;
   }
   async deliver(card: Card) {
+    const snapshot = card;
+    card = decisionCard(dirname(this.file), card);
+    const execution = JSON.stringify([card.state, card.result]);
     const manualKey = manualXKey(card);
     let manual: { text: string; url?: string; published: boolean } | undefined;
     if (manualKey) {
@@ -355,7 +375,7 @@ export class CompanyFeishu {
       (!saved?.interactive || saved.layout !== 4 || (publicationKey(card) && saved.publicationMedia?.version !== 2)) &&
       card.kind === "ask" &&
       card.state === "open";
-    if (!saved || saved.version < card.version || promote) {
+    if (!saved || saved.version < card.version || promote || (saved.snapshot && saved.execution !== execution)) {
       // Old closed states have already sent their acknowledgement; do not replay them on upgrade.
       const acknowledged = saved?.acknowledged ?? (!!saved && saved.version > 1 && !saved.open);
       let text: string | null;
@@ -426,6 +446,8 @@ export class CompanyFeishu {
         options: card.options,
         acknowledged: acknowledged || (card.kind === "ask" && card.state !== "open" && !!text),
       };
+      saved.execution = execution;
+      saved.snapshot = /^(处理中|未成功)/.test(card.result ?? "") ? snapshot : undefined;
       this.state.cards[card.id] = saved;
       this.save();
     }
@@ -658,6 +680,12 @@ export class CompanyFeishu {
     }
   }
   async poll() {
+    for (const saved of Object.values(this.state.cards)) {
+      if (saved.snapshot && saved.interactive && saved.cardRef) {
+        const card = decisionCard(dirname(this.file), saved.snapshot);
+        if (saved.execution !== JSON.stringify([card.state, card.result])) await this.deliver(saved.snapshot);
+      }
+    }
     if (!this.state.chatId) {
       // Bot history requires chat_id. Resolve it from a message we sent to this owner, without sending a probe.
       const ref = Object.values(this.state.cards)

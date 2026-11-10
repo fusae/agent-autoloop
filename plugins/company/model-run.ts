@@ -58,6 +58,17 @@ if (!allowed) {
   process.stdout.write(
     JSON.stringify({
       companyModel: engine,
+      ...(owner && config.ceoMode
+        ? {
+            companyValidation: {
+              directory: dirname(configFile),
+              repairs: entry.repairs,
+              run: entry.run,
+              open: ((context as Context & { open?: { card: number }[] }).open ?? []).map((a: any) => a.card),
+              cards: context.answers.map((a) => a.card),
+            },
+          }
+        : {}),
       ...(event
         ? {
             companyWork: {

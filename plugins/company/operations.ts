@@ -959,6 +959,14 @@ export class Operations {
       c.lastReportDay = day(now);
     }
   }
+  validateDecision(businesses: Portfolio, tasks: Task[], d: ExecutiveDecision, now = new Date()) {
+    this.db.exec("SAVEPOINT decision_check");
+    try {
+      return this.applyDecision(this.executive(), businesses, tasks, d, "validation", "", {}, now, true);
+    } finally {
+      this.db.exec("ROLLBACK TO decision_check; RELEASE decision_check");
+    }
+  }
   private applyDecision(
     c: Leadership,
     businesses: Portfolio,
@@ -968,10 +976,14 @@ export class Operations {
     summary: string,
     receipt: Receipt,
     now: Date,
+    validateOnly = false,
   ): string | null {
     const active = businesses.filter((b) => b.autonomy && b.status === "active");
     const known = (id: string) => active.some((b) => b.id === id);
     const valid =
+      [...(d.topicReviews ?? []), ...(d.topicReplies ?? []), ...(d.topicDecisions ?? [])].every((a) =>
+        known(a.business),
+      ) &&
       d.briefs.every((a) => known(a.business)) &&
       d.directives.every((a) => known(a.business)) &&
       d.approvals.every((a) => known(a.business) && this.get(a.business, now).plans.some((p) => p.id === a.plan)) &&
@@ -982,7 +994,8 @@ export class Operations {
           a.issues.every((id) => c.issues.some((i) => i.id === id && (!a.business || i.business === a.business))),
       );
     if (!valid) return "CEO 决策引用了不存在或暂停的项目、计划或问题，请重新核对编号。";
-    if ((d.topicReviews?.length || d.topicReplies?.length) && !this.config.topics) return "选题流程尚未启用";
+    if ((d.topicReviews?.length || d.topicReplies?.length || d.topicDecisions?.length) && !this.config.topics)
+      return "选题流程尚未启用";
     try {
       new TopicWorkflow(this.db, this.directory).validate(d);
     } catch (error) {
@@ -1173,6 +1186,18 @@ export class Operations {
         return "成果已变化或不在待审核状态，请核对当前计划和交付任务。";
       if (a.verdict === "publish" && p.kind !== "content") return "当前发布入口仅支持已审核的运营内容";
     }
+    for (const business of new Set(d.directives.map((v) => v.business))) {
+      const p = this.get(business, now);
+      const additions = new Set(
+        d.directives
+          .filter((v) => v.business === business)
+          .map((v) => hash(`${business}:ceo:${v.action.key}`))
+          .filter((id) => !p.plans.some((p) => p.id === id)),
+      );
+      if (p.plans.filter((p) => p.status !== "closed").length + additions.size > 30)
+        return "该项目已有 30 项未结束计划，请先处理已有工作。";
+    }
+    if (validateOnly) return null;
     const publications = new Map<string, string>();
     try {
       for (const a of deliveries.filter((a) => a.verdict === "publish"))
@@ -1188,17 +1213,6 @@ export class Operations {
         );
     } catch (error) {
       return `审核未通过：${(error as Error).message}`;
-    }
-    for (const business of new Set(d.directives.map((v) => v.business))) {
-      const p = this.get(business, now);
-      const additions = new Set(
-        d.directives
-          .filter((v) => v.business === business)
-          .map((v) => hash(`${business}:ceo:${v.action.key}`))
-          .filter((id) => !p.plans.some((p) => p.id === id)),
-      );
-      if (p.plans.filter((p) => p.status !== "closed").length + additions.size > 30)
-        return "该项目已有 30 项未结束计划，请先处理已有工作。";
     }
     if (this.config.topics) new TopicWorkflow(this.db, this.directory).apply(d, now);
     if (this.config.ceoWake === "events") {
@@ -1464,13 +1478,15 @@ export class Operations {
       const decisionId = `CHAT-${hash(`${e.source}:${e.id}`)}`;
       const key = `ceo-chat-${hash(`${e.source}:${e.id}`)}`;
       if (this.db.prepare("SELECT 1 FROM batches WHERE id=?").get(key)) continue;
+      let data: any = {};
       let text = "",
         summary = "",
         decision: ExecutiveDecision | undefined;
       try {
         if (!c.enabled) throw Error("CEO 管理尚未启用");
-        const data = JSON.parse(e.detail);
+        data = JSON.parse(e.detail);
         summary = words(data.summary, 400);
+        if (data.rejected) throw Error(String(data.rejected).slice(0, 400));
         decision = executiveDecision(data.executive);
       } catch (error) {
         text = `安排未执行：${(error as Error).message}`;
@@ -1492,9 +1508,28 @@ export class Operations {
           delete c.stalled;
         }
       }
-      receipt.notice ??= [];
-      receipt.notice.push({ key, title: "CEO · 工作安排", text });
-      this.db.prepare("INSERT INTO batches VALUES (?,?)").run(key, JSON.stringify({ text }));
+      const failed = text.startsWith("安排未执行：");
+      const completionCards = Array.isArray(data?.completionCards) ? data.completionCards : [];
+      if (failed) {
+        c.fingerprint = null;
+        const business = businesses.find((b) => b.autonomy && b.status === "active")?.id;
+        if (business && !c.issues.some((i) => i.id === hash(key)))
+          c.issues.push({
+            id: hash(key),
+            business,
+            role: "ceo",
+            task: null,
+            question: "董事长的决定未执行成功，需要CEO按原话纠正动作",
+            context: `${summary}；${text}`,
+            state: "open",
+            answer: null,
+            at: now.toISOString(),
+          });
+      } else {
+        receipt.notice ??= [];
+        receipt.notice.push({ key, title: "CEO · 工作安排", text });
+      }
+      this.db.prepare("INSERT INTO batches VALUES (?,?)").run(key, JSON.stringify({ text, failed, completionCards }));
     }
   }
   private recover(c: Leadership, businesses: Portfolio, tasks: Task[], receipt: Receipt, now: Date) {

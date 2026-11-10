@@ -82,7 +82,8 @@ test("CEO chat rejects unknown projects and external task types atomically; othe
       decision({ ...valid, directives: [{ business: "app", action: { ...action, kind: "publish" } }] }),
     ].entries()) {
       const result = o.plan("invalid-" + i, b.list(), c.tasks(), now, [], 1, events("company-ceo", d, i + 2));
-      assert.match(result.notice?.[0].text ?? "", /未执行/);
+      assert.equal(result.notice, undefined, "internal action rejection must not notify the owner");
+      assert.match(o.executive().issues.at(-1)!.context, /未执行/);
       assert.equal(o.executive().briefs.app, undefined);
       assert.equal(o.snapshot(b.list(), c.tasks())[0].plans.length, 0);
     }
@@ -610,7 +611,8 @@ test("CEO can raise a new project question without inventing issue IDs and dupli
     );
     assert.equal(chat("answered-question", parsed).ask, undefined);
     const closed = chat("closed-issue", decision({ escalations: [{ ...escalation, issues: [issue.id] }] }));
-    assert.match(closed.notice![0].text, /已答复/);
+    assert.equal(closed.notice, undefined);
+    assert.match(o.executive().issues.at(-1)!.context, /已答复/);
     assert.equal(closed.ask, undefined);
     const invalid = chat(
       "unknown-project",
@@ -619,7 +621,8 @@ test("CEO can raise a new project question without inventing issue IDs and dupli
         escalations: [{ ...escalation, business: "missing" }],
       }),
     );
-    assert.match(invalid.notice![0].text, /未执行/);
+    assert.equal(invalid.notice, undefined);
+    assert.match(o.executive().issues.at(-1)!.context, /未执行/);
     assert.notEqual(o.executive().briefs.app, "不可写入");
     assert.throws(() => executiveDecision(decision({ escalations: [{ ...escalation, business: undefined }] })));
     assert.throws(() => executiveDecision(decision({ escalations: [{ ...escalation, issues: Array(9).fill("x") }] })));

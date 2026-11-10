@@ -168,6 +168,37 @@ test("three outputless rounds trigger idle; real artifacts or changed plans brea
   f.tasks.push({ id: "t3", reports: [{ at: now.toISOString(), artifacts: ["tasks/result.md"] }] } as Task);
   assert.ok(!kinds(f).includes("idle"));
 });
+test("recording chairman topic decisions counts as real CEO progress", () => {
+  const f = fixture();
+  f.runtime.rounds = [1, 2, 3].map((id) => ({
+    id,
+    role: "ceo",
+    task: `t${id}`,
+    at: now.toISOString(),
+    state: "done",
+    attempts: 1,
+  }));
+  f.tasks.push({
+    id: "t3",
+    reports: [
+      {
+        at: now.toISOString(),
+        artifacts: [],
+        executive: {
+          briefs: [],
+          directives: [],
+          approvals: [],
+          answers: [],
+          escalations: [],
+          topicDecisions: [
+            { business: "app", batch: "batch", event: 1, choices: [{ index: 0, approve: true, opinion: "通过" }] },
+          ],
+        },
+      },
+    ],
+  } as unknown as Task);
+  assert.ok(!kinds(f).includes("idle"));
+});
 test("80 percent quota is per employee and CEO; pending confirmations and X only allow one reminder", () => {
   const f = fixture();
   f.runtime.employees = { "app:growth": 8, "other:growth": 0 };

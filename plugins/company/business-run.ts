@@ -1,3 +1,4 @@
+import { syncDecisionCards } from "./decision-cards.ts";
 import { publicationResults } from "./publication-policy.ts";
 import { manualXNotice } from "./rabbitrun.ts";
 import { collectFeedback } from "./feedback.ts";
@@ -48,6 +49,7 @@ try {
       try {
         await syncOwnerReplyCards(dirname(configFile), operations.executive(), client);
         await syncTopicCards(dirname(configFile), client);
+        await syncDecisionCards(dirname(configFile), client);
       } catch {
         /* Card sync is retried on the next tick without blocking task recovery. */
       }

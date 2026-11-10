@@ -46,6 +46,48 @@ export function ownerReplyEvidence(directory: string, event: number | string, af
   }
 }
 
+export function ownerCardMessage(directory: string, card: number) {
+  const file = join(directory, "hub/hub.db");
+  if (!existsSync(file)) return `card:${card}`;
+  const db = new DatabaseSync(file, { readOnly: true });
+  try {
+    const table = db.prepare("SELECT name FROM sqlite_master WHERE name='deliveries'").get();
+    const row = table
+      ? db.prepare("SELECT ref FROM deliveries WHERE card_id=? AND ref IS NOT NULL LIMIT 1").get(card)
+      : undefined;
+    return String(row?.ref ?? `card:${card}`);
+  } finally {
+    db.close();
+  }
+}
+
+export function ownerAnswerEvidence(directory: string, card: number, after: string) {
+  const db = new DatabaseSync(join(directory, "hub/hub.db"), { readOnly: true });
+  db.function("card_token", { deterministic: true }, (_id, _at) => null);
+  try {
+    const row = db.prepare("SELECT * FROM cards WHERE id=?").get(card);
+    if (!row || !row.answer_event || !row.decided_at || Date.parse(String(row.decided_at)) < Date.parse(after))
+      throw Error("拍板必须引用实际收到回答的卡片");
+    const options = JSON.parse(String(row.options));
+    const selected = row.choice === null ? "" : options[Number(row.choice)];
+    const text = [selected, row.answer].filter(Boolean).join("；");
+    if (!text.trim()) throw Error("卡片没有董事长决定");
+    const delivery = db.prepare("SELECT ref FROM deliveries WHERE card_id=? AND ref IS NOT NULL LIMIT 1").get(card);
+    return {
+      card,
+      event: Number(row.answer_event),
+      at: String(row.decided_at),
+      text,
+      message: String(delivery?.ref ?? `card:${card}`),
+      context: `${row.text}\n${row.about}`,
+      topicBatch: undefined,
+      topicChoice: undefined,
+    };
+  } finally {
+    db.close();
+  }
+}
+
 // Supplementary opinions are knowledge only: a chat message never confirms publication or X completion.
 export function ownerCardFeedback(directory: string, event: number | string) {
   if (!existsSync(join(directory, "publications"))) return undefined;

@@ -29,6 +29,7 @@ export type Topic = TopicProposal & {
   batch?: string;
   opinion?: string;
   decidedAt?: string;
+  decisionSource?: { event?: number; card?: number; message: string };
   plan?: string;
 };
 export type TopicBatch = { id: string; topics: string[]; at: string; card?: number; closed?: boolean };
@@ -103,12 +104,18 @@ export function cardTopics(text: string) {
 }
 export type TopicChoice = { index: number; approve: boolean; opinion: string };
 export function parseTopicReply(text: string, count: number): TopicChoice[] {
-  const s = text.trim();
-  if (/^(全部|全都)(通过|退回)[。！!]?$/.test(s))
-    return Array.from({ length: count }, (_, index) => ({ index, approve: s.includes("通过"), opinion: s }));
+  const s = text.trim().replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, (v) => String("①②③④⑤⑥⑦⑧⑨⑩".indexOf(v) + 1));
+  if (/^(全部|全都)(通过|退回|撤下)(?:[，,]另报新题)?[。！!]?$/.test(s))
+    return Array.from({ length: count }, (_, index) => ({ index, approve: s.includes("通过"), opinion: text.trim() }));
+  const only = /^只有\s*第?\s*(\d+)\s*(?:个|题)?\s*(?:我)?(?:是)?\s*满意(?:的)?[。！!，,]?$/.exec(s);
+  if (only) {
+    const index = Number(only[1]) - 1;
+    // Satisfaction approves this item; it does not decide what to do with the others.
+    return index >= 0 && index < count ? [{ index, approve: true, opinion: text.trim() }] : [];
+  }
   const result: TopicChoice[] = [];
   for (const clause of s.split(/[，,；;\n]+(?=\s*\d)/).filter(Boolean)) {
-    const m = /^\s*(\d+(?:\s*[、和]\s*\d+)*)\s*(通过|退回|换个角度)([\s\S]*)$/.exec(clause);
+    const m = /^\s*(\d+(?:\s*[、和]\s*\d+)*)\s*(通过|退回|撤下|换个角度)([\s\S]*)$/.exec(clause);
     if (!m) return [];
     for (const n of m[1].split(/[、和]/).map(Number)) {
       if (n < 1 || n > count || result.some((r) => r.index === n - 1)) return [];
@@ -117,13 +124,20 @@ export function parseTopicReply(text: string, count: number): TopicChoice[] {
   }
   return result;
 }
-export function decideTopics(p: Project, batch: TopicBatch, choices: TopicChoice[], at: string) {
+export function decideTopics(
+  p: Project,
+  batch: TopicBatch,
+  choices: TopicChoice[],
+  at: string,
+  source?: Topic["decisionSource"],
+) {
   for (const choice of choices) {
     const t = p.topics?.find((t) => t.id === batch.topics[choice.index] && t.batch === batch.id);
     if (!t || t.state !== "pending") continue;
     t.state = choice.approve ? "approved" : "rejected";
     t.opinion = choice.opinion;
     t.decidedAt = at;
+    if (source) t.decisionSource = source;
   }
 }
 export function topicCanWrite(

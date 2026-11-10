@@ -184,7 +184,8 @@ test("invalid daily assignments reject the entire decision before creating work"
         directives: [{ business: "app", action }],
         staffPlans: [daily(patch)],
       });
-      assert.match(r.notice?.[0].text ?? "", /未执行/);
+      assert.equal(r.notice, undefined);
+      assert.match(o.executive().issues.at(-1)!.context, /未执行/);
       assert.equal(o.snapshot(b.list(), c.tasks(), now)[0].plans.length, 0);
       assert.equal(o.executive().briefs.app, undefined);
     }
@@ -226,7 +227,8 @@ test("today's selected work takes precedence and a closed directive key cannot r
       directives: [{ business: "app", action: { ...action, key: "today" } }],
       staffPlans: [daily({ plan: "today" })],
     });
-    assert.match(invalid.notice?.[0].text ?? "", /已关闭计划/);
+    assert.equal(invalid.notice, undefined);
+    assert.match(o.executive().issues.at(-1)!.context, /已关闭计划/);
     const followup = decide({
       staffPlans: [daily({ mode: "followup", plan: plan.id, focus: "核对这份图文的实际发布" })],
     });
