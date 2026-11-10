@@ -302,3 +302,5 @@ A verified owner answer to the original Binance publication exception can reconc
 Trusted private `delegation.source` enables CEO topic scoring and publication decisions, a maintainer backlog, and daily decision summaries. It removes routine approvals, previews and Friday data requests; only spending, personal identity verification, watchdog outages, daily reports and the manual X card reach the owner. Existing publication limits, verification and deduplication remain. See [CEO delegation](docs/company.md#ceo-授权与维护清单).
 
 Optional `proactiveCEO:true` adds weekday 10:30 reviews, conditional 15:30 follow-ups, and strategy in Monday’s first CEO round (Beijing time). These use the existing CEO quota and actions; conclusions are saved in private notes and daily reports. See [proactive management](docs/company.md#ceo-主动经营).
+
+The separate `company` stdio MCP exposes six read-only tools over restricted SSH without model calls. See [read-only company queries](docs/company.md#公司只读查询); GitHub status snapshot publishing has been removed.

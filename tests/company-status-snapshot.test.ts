@@ -1,17 +1,14 @@
-// Prevent credential/identity leakage, source mutations, missing business evidence and timestamp-only commits.
+// Prevent credential/identity leakage, source mutations, missing business evidence.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   collectSnapshot,
-  publishSnapshot,
   redact,
   renderMarkdown,
-  sameContent,
   scanSensitive,
   writeSnapshot,
 } from "../cli/company-status-snapshot.ts";
@@ -218,9 +215,10 @@ test("exports real business evidence, full daily report and only 200 draft chara
     assert.deepEqual(scanSensitive(s), []);
     assert.ok(!JSON.stringify(s).includes("personal_account_123"));
     assert.ok(renderMarkdown(s).includes(f.fullReport));
-    const changedTime = { ...s, generatedAt: "2026-11-10T20:05:00.000+08:00" };
-    assert.ok(sameContent(s, changedTime));
-    assert.ok(!sameContent(s, { ...changedTime, date: "2026-11-11" }));
+    const output = join(f.dir, "local-export");
+    writeSnapshot(s, output);
+    assert.deepEqual(JSON.parse(readFileSync(join(output, "snapshot.json"), "utf8")).snapshot, s);
+    assert.throws(() => writeSnapshot({ ...s, dailyReport: { text: "token=privatevalue" } }, output), /脱敏扫描拒绝/);
   } finally {
     f.cleanup();
   }
@@ -252,53 +250,6 @@ test("redacts known secrets before truncating an excerpt across a credential", (
     assert.ok(!s.drafts[0].excerpt.includes("shortPrivate"));
     assert.match(s.drafts[0].excerpt, /已隐藏/);
   } finally {
-    f.cleanup();
-  }
-});
-
-test("push rejects leaks, preserves failed commits, retries without duplicate commits and only targets private snapshot repo", () => {
-  const f = fixture(),
-    savedPath = process.env.PATH;
-  try {
-    const bin = join(f.dir, "bin"),
-      inbox = join(f.dir, "inbox"),
-      repo = join(f.dir, "repo"),
-      key = join(f.dir, "id_ed25519");
-    mkdirSync(bin);
-    writeFileSync(key, "test key", { mode: 0o600 });
-    // Exercise real git objects locally; only the network operation is replaced.
-    writeFileSync(
-      join(bin, "git"),
-      '#!/bin/sh\nfor arg in "$@"; do\n if [ "$arg" = push ]; then\n  echo pushed >> ../pushes\n  test ! -e ../fail-push\n  exit $?\n fi\ndone\nexec /usr/bin/git "$@"\n',
-      { mode: 0o755 },
-    );
-    process.env.PATH = bin + ":" + savedPath;
-    const s = collectSnapshot(f.dir, now);
-    s.generatedAt = new Date().toISOString();
-    writeSnapshot(s, inbox);
-    writeFileSync(join(f.dir, "fail-push"), "");
-    assert.throws(() => publishSnapshot(inbox, repo, "fusae/agent-company-status", key), /Git push 失败/);
-    const head = execFileSync("/usr/bin/git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
-    rmSync(join(f.dir, "fail-push"));
-    s.generatedAt = new Date(Date.now() + 1000).toISOString();
-    writeSnapshot(s, inbox);
-    assert.equal(publishSnapshot(inbox, repo, "fusae/agent-company-status", key), head);
-    assert.equal(
-      execFileSync("/usr/bin/git", ["rev-list", "--count", "HEAD"], { cwd: repo, encoding: "utf8" }).trim(),
-      "1",
-    );
-    assert.throws(() => publishSnapshot(inbox, repo, "fusae/public-repo", key), /不允许/);
-    chmodSync(key, 0o644);
-    assert.throws(() => publishSnapshot(inbox, repo, "fusae/agent-company-status", key), /权限/);
-    chmodSync(key, 0o600);
-    const leaked = { ...s, dailyReport: { text: "token=highlyprivate", date: s.date } };
-    assert.throws(() => writeSnapshot(leaked, inbox), /脱敏扫描拒绝/);
-    writeFileSync(join(inbox, "snapshot.json"), JSON.stringify({ snapshot: leaked, markdown: renderMarkdown(leaked) }));
-    assert.throws(() => publishSnapshot(inbox, repo, "fusae/agent-company-status", key), /脱敏扫描拒绝/);
-    assert.equal(readFileSync(join(f.dir, "pushes"), "utf8").trim().split("\n").length, 2);
-    assert.ok(!existsSync(join(repo, "snapshot.json")));
-  } finally {
-    process.env.PATH = savedPath;
     f.cleanup();
   }
 });

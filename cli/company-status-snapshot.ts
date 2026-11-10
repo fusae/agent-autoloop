@@ -1,5 +1,5 @@
 // Read-only export: never construct Company/Operations, whose constructors can write projections.
-// Collection has no network; a separate OS user receives only this sanitized document and a repository-scoped key.
+// Collection has no network; read-only clients reuse the sanitized business summary.
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -66,6 +66,7 @@ const clip = (v: unknown, n = 400) => [...text(v)].slice(0, n).join("");
 const secretField =
   /^(?:.*(?:token|password|passwd|secret|cookie|api[_-]?key|private[_-]?key)|open[_-]?id|chat[_-]?id|account[_-]?id|user[_-]?id|app[_-]?id|authorization)$/i;
 const patterns: [string, RegExp][] = [
+  ["Cookie", /\b(?:set-cookie|cookie)\s*:\s*[^\r\n]+/gi],
   ["私钥", /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g],
   [
     "凭据",
@@ -702,68 +703,7 @@ export function writeSnapshot(snapshot: Snapshot, output: string) {
   writeFileSync(join(output, "snapshot.tmp"), envelope, { mode: 0o640 });
   renameSync(join(output, "snapshot.tmp"), join(output, "snapshot.json"));
 }
-export function sameContent(a: Snapshot, b: Snapshot): boolean {
-  const { generatedAt: _a, ...left } = a,
-    { generatedAt: _b, ...right } = b;
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-export function publishSnapshot(input: string, worktree: string, repository: string, key: string) {
-  if (!["fusae/agent-company-status", "fusae/agent-company-status-private"].includes(repository))
-    throw Error("不允许的目标仓库");
-  const envelope = readJSON(join(input, "snapshot.json"), null);
-  if (!envelope?.snapshot || envelope.markdown !== renderMarkdown(envelope.snapshot)) throw Error("快照不完整");
-  assertSafe(envelope);
-  if (
-    !Number.isFinite(Date.parse(envelope.snapshot.generatedAt)) ||
-    Math.abs(Date.now() - Date.parse(envelope.snapshot.generatedAt)) > 15 * 60000
-  )
-    throw Error("快照已过期");
-  if (!/^[A-Za-z0-9/_-]+$/.test(key) || (statSync(key).mode & 0o777) !== 0o600) throw Error("部署密钥权限必须为600");
-  mkdirSync(worktree, { recursive: true, mode: 0o700 });
-  const env = {
-    PATH: process.env.PATH,
-    HOME: process.env.HOME,
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_TERMINAL_PROMPT: "0",
-    GIT_SSH_COMMAND: `ssh -F /dev/null -i ${key} -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${key}.known_hosts -o ConnectTimeout=15`,
-  };
-  const git = (...args: string[]) => {
-    const r = spawnSync(
-      "git",
-      ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "credential.helper=", ...args],
-      { cwd: worktree, env, encoding: "utf8", timeout: 90000, maxBuffer: 1000000 },
-    );
-    if (r.status !== 0 || r.error) throw Error(`Git ${args[0]} 失败；本地快照保留，等待下次定时运行`);
-    return r.stdout.trim();
-  };
-  if (!existsSync(join(worktree, ".git"))) git("init", "--initial-branch=main");
-  if (git("symbolic-ref", "--short", "HEAD") !== "main") throw Error("快照只允许main分支");
-  const tracked = git("ls-files").split("\n").filter(Boolean);
-  if (tracked.some((f) => !["status.json", "status.md"].includes(f))) throw Error("工作目录包含额外文件");
-  const previous = readJSON(join(worktree, "status.json"), null);
-  if (!previous || !sameContent(previous, envelope.snapshot)) {
-    writeFileSync(join(worktree, "status.json"), JSON.stringify(envelope.snapshot, null, 2) + "\n", { mode: 0o600 });
-    writeFileSync(join(worktree, "status.md"), envelope.markdown, { mode: 0o600 });
-  }
-  assertSafe(JSON.parse(readFileSync(join(worktree, "status.json"), "utf8")));
-  assertSafe(readFileSync(join(worktree, "status.md"), "utf8"));
-  git("add", "--", "status.json", "status.md");
-  if (git("diff", "--cached", "--name-only"))
-    git(
-      "-c",
-      "user.name=Company Status",
-      "-c",
-      "user.email=company-status@users.noreply.github.com",
-      "commit",
-      "-m",
-      `status ${envelope.snapshot.generatedAt}`,
-    );
-  // Always push: the previous invocation may have committed successfully but lost network access.
-  git("push", `git@github.com:${repository}.git`, "HEAD:refs/heads/main");
-  return git("rev-parse", "HEAD");
-}
-function serviceStates(): Record<string, string> {
+export function serviceStates(): Record<string, string> {
   return Object.fromEntries(
     [
       "agent-company",
@@ -783,13 +723,11 @@ function serviceStates(): Record<string, string> {
 }
 if (process.argv[1] && resolve(process.argv[1]) === import.meta.filename) {
   try {
-    const [command, source, target, repository, key] = process.argv.slice(2);
+    const [command, source, target] = process.argv.slice(2);
     if (command === "collect" && source && target) {
       writeSnapshot(collectSnapshot(source, new Date(), serviceStates()), target);
       console.log("脱敏快照生成成功");
-    } else if (command === "push" && source && target && repository && key)
-      console.log(`快照推送成功 ${publishSnapshot(source, target, repository, key)}`);
-    else throw Error("用法：collect 公司目录 输出目录 | push 输出目录 工作目录 仓库 密钥文件");
+    } else throw Error("用法：collect 公司目录 输出目录");
   } catch (error) {
     // Never log raw data, subprocess output, filenames from content, or credential-bearing exceptions.
     const message =

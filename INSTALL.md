@@ -144,3 +144,5 @@ Claude Code 需 2.1.317 或更新版本；Linux 安装 `bubblewrap`、`socat`。
 公司可在私有配置启用 `delegation.source`：CEO 按手册评分拍板选题并决定发布，普通问题交后台维护清单；董事长仅收日报、X 待发及支出/本人验证/宕机通知，不再周五索要数据。每日发布限额、合规与回执核验保持，旧配置兼容；见[CEO 授权](docs/company.md#ceo-授权与维护清单)。
 
 CEO主动经营在私有配置启用 `proactiveCEO:true`（需授权、自主上班和日报），沿用 `dailyModelRuns.ceo:40`；同步公司改动模块并刷新既有规则/手册，无需新服务。无运行模型时备份，仅重启公司引擎和后台，只读核验，见[主动经营](docs/company.md#ceo-主动经营)。
+
+公司只读 MCP 的桌面注册、专用 SSH 身份、root 入口和 sudoers 模板见[公司只读查询](docs/company.md#公司只读查询)。本地使用 Node 24，Linux SQL/文件读取器使用系统 Python 3.11+；部署配置与凭据不入库。

@@ -568,3 +568,21 @@ CEO对话动作在交回执前校验，被拒时复用原轮次最多修正两�
 部署只同步改动程序、刷新既有规则和手册，在私有配置启用开关；确认无运行模型、备份后重启加载这些模块的公司引擎与后台。仅只读核验，不发飞书测试消息、不发布、不手动触发轮次。笔记、决定、经营数据、运行记录和服务器地址不提交公开仓库。
 
 事件唤醒模式中，CEO 本轮初筛、发布决定及其派生状态不是新的外部输入，不再为自己的决定追加空轮；期间新来的员工结果、本人答复及未处理审核仍按原规则唤醒。
+
+## 公司只读查询
+
+`cli/company-mcp.ts` 是独立 stdio MCP，服务名 `company`；桌面设备桥接后可呈现为 `mcp__remote-devices__company__*`。六个工具为 `company_status/sql/read/ls/logs/xhs`，直接 SSH 查询，不调用模型、不发事件、不回答卡片。原有 `agent-autoloop mcp` 不变，它包含写操作，不能替代本入口。
+
+- `status` 复用 `company-status-snapshot.ts` 的只读汇总：服务与心跳、今日轮次额度、本周目标进度、稿件选题、今日及近7天发布链接、董事长与维护者待办、异常、最近日报摘要；小红书观测带采集时间，实时状态用 `xhs`。
+- `sql` 只接收 operations/hub/model-runs/company/business 白名单库及单条 SELECT/WITH；SQLite `mode=ro`、query_only、授权回调拒绝写入和附加数据库，最多200行，执行预算5秒。Linux 入口使用系统 Python 3.11+，SQLite单值最大200KB。
+- `read/ls` 只在公司目录内通过逐层目录描述符访问，拒绝绝对路径、穿越、符号链接、凭据文件名、数据库和特殊文件。文件上限200KB；目录最多1000项，隐藏敏感文件名。
+- `logs` 限公司主服务、网页、卡片、卡片回调、看门狗与看门狗定时器，最多500行、最近1至10080分钟，关键词为字面过滤。
+- `xhs` 复用现有受限读取 SSH 通道，只增加 `{"action":"status"}`，GET登录状态和systemd状态；不调用登录、发布或已有读取缓存流程，账号与凭据不输出。旧 `read` 请求保持兼容。
+
+所有输出复用脱敏规则，删除密钥字段，隐藏token、飞书标识、Cookie、IP及非公开内容链接；结果仍是内部经营资料，只给获授权设备，不提交仓库。异常返回固定文本，不回显原始stderr。SSH最长60秒，服务器45秒；超时不会重试或派业务任务。
+
+部署使用 `plugins/company/readonly-entry.sh` 和 `readonly-ssh.py` 模板，分别安装为root拥有的 `/usr/local/libexec/company-ro` 与 `/usr/local/libexec/company-ro-ssh`。为Mac单独创建只读系统账号与SSH密钥，authorized_keys使用 `restrict,command="/usr/local/libexec/company-ro-ssh"`，sudoers只授予 `(root) NOPASSWD: /usr/local/libexec/company-ro *`。不授予管理组、交互shell、端口转发或其他sudo。现有管理员账号不交给MCP。入口脚本与所有导入文件、父目录均不可由查询账号或公司Agent写入。
+
+桌面配置 `mcpServers.company.command` 为Node 24绝对路径，`args` 为本地 `cli/company-mcp.ts` 绝对路径；私有 `env` 设置 `COMPANY_SSH_HOST`（现有SSH别名）、`COMPANY_SSH_USER`、`COMPANY_SSH_KEY`（绝对路径）。无需新增监听服务；桌面应用重载配置后注册，设备桥接确认由本人完成。真实地址、账号、私钥及配置仅保存在机器上。
+
+GitHub状态快照推送已撤除：不再提供push命令、定时器、推送服务或专用Git凭据；保留本地 `collect` 与汇总代码供只读查询使用。
