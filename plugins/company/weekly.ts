@@ -9,8 +9,6 @@ export type Retrospective = { review: string; notes: string; through: number };
 export type WeeklyCycle = {
   week: string;
   date: string;
-  requestedAt?: string;
-  missing?: import("./feedback.ts").MissingMetric[];
   staff: { business: string; role: Role; task: string; through: number; result?: Retrospective }[];
   report?: string;
   ceoThrough?: number;

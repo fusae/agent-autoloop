@@ -230,7 +230,7 @@ function posts(f: ReturnType<typeof create>) {
     }),
   );
 }
-test("missing list distinguishes platforms, retains unknowns, deduplicates weekly request and skips empty list", () =>
+test("missing list distinguishes platforms and retains unknowns without requesting chairman data", () =>
   fixture((f) => {
     assert.equal(f.tick("14:00").notice?.some((n) => n.key.startsWith("weekly-data")) ?? false, false);
     posts(f);
@@ -238,9 +238,7 @@ test("missing list distinguishes platforms, retains unknowns, deduplicates weekl
     assert.equal(missing.length, 4);
     assert.deepEqual(missing.find((p) => p.publication === "a".repeat(32))!.fields, ["reads"]);
     assert.deepEqual(missing.find((p) => p.publication.endsWith(":x"))!.fields, ["reads", "likes", "comments"]);
-    const r = f.tick("14:05").notice!.filter((n) => n.key.startsWith("weekly-data"));
-    assert.equal(r.length, 1);
-    assert.match(r[0].text, /回复格式随意，看不到的可以不填/);
+    assert.equal(f.tick("14:05").notice?.some((n) => n.key.startsWith("weekly-data")) ?? false, false);
     f.restart();
     assert.equal(f.tick("15:00").notice?.filter((n) => n.key.startsWith("weekly-data")).length ?? 0, 0);
     assert.equal(

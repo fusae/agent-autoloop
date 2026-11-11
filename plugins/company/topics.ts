@@ -83,21 +83,6 @@ export function screenTopic(t: Topic, approve: boolean, reason: string, rank: nu
   t.review = reason;
   t.rank = rank;
 }
-export function topicCard(p: Project, batch: TopicBatch) {
-  const text = batch.topics
-    .map((id, i) => {
-      const t = p.topics!.find((t) => t.id === id)!;
-      return `${i + 1}. ${t.title}${t.state === "approved" ? "（已通过）" : t.state === "rejected" ? "（已退回）" : ""}\n角度：${t.angle}\n依据：${t.reason}\n结构：${t.outline}\n关联：${t.app}｜平台：${t.platform}`;
-    })
-    .join("\n\n");
-  return {
-    key: `topics-${batch.id}`,
-    title: "选题拍板",
-    about: `topics:${batch.id}`,
-    text: `业务：${p.business}\n请逐条通过或退回，可附意见；未回复不动笔。\n\n${text}\n\n选题批次：${batch.id}\n选题编号：${batch.topics.join(",")}`,
-    options: ["全部通过", "全部退回"],
-  };
-}
 export function cardTopics(text: string) {
   const batch = /\n选题批次：([a-f0-9]{24})\n选题编号：([a-f0-9,]+)$/.exec(text);
   if (!batch || !batch[2].split(",").every((id) => /^[a-f0-9]{24}$/.test(id))) return;

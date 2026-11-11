@@ -4,6 +4,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import { staffAgentRole } from "./staff-model.ts";
+
 type PendingVerification = { rule: string; key: string; about: string };
 export function pendingVerifications(directory: string): PendingVerification[] {
   const file = join(directory, "hub/hub.db");
@@ -32,7 +34,11 @@ export function failedWork(
           ? [t.stage === 0 ? "company-publisher" : "company-verifier", `company-${role}`]
           : [`company-${role}`];
     const run = runs
-      .filter((r) => agents.includes(r.agent) && r.events?.some((e: any) => e.subject === t.id))
+      .filter(
+        (r) =>
+          (agents.includes(r.agent) || staffAgentRole(r.agent) === role) &&
+          r.events?.some((e: any) => e.subject === t.id),
+      )
       .sort((a, b) => b.id - a.id)[0];
     if (!run || !["failed", "cancelled", "done", "nothing"].includes(run.state) || !run.finishedAt) continue;
     if (

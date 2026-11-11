@@ -280,6 +280,7 @@ export async function startDashboard(directory: string, port = 3361, options: { 
           };
           return cached({
             name: companyConfig.name,
+            activeRoles: companyConfig.activeRoles ?? Object.keys(departments),
             maxAssignments: companyConfig.maxAssignments,
             contentReview: companyConfig.ceoMode ? (companyConfig.contentReview ?? "qa") : "qa",
             dailyPlanning: !!companyConfig.dailyPlanning && !!companyConfig.ceoMode,

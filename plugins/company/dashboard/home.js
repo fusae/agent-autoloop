@@ -291,7 +291,9 @@ function homeTopics(d) {
 function homeHTML(d) {
   const asks = (d.cards ?? []).filter((c) => c.kind === "ask");
   const growth = (d.home?.operations ?? d.operations ?? []).flatMap((p) =>
-    (p.staff ?? []).filter((s) => s.role === "growth" && s.onDuty !== false).map((s) => ({ p, s })),
+    (p.staff ?? [])
+      .filter((s) => s.role === "growth" && s.enabled !== false && s.onDuty !== false)
+      .map((s) => ({ p, s })),
   );
   const stock = d.home?.stock ?? {};
   return `<div class="home">

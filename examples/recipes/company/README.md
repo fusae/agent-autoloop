@@ -145,11 +145,11 @@ CEO 改用 Claude 时保留 `use=company` 包装，只改模型执行器与 mode
 
 个人账号双平台运营配置见 [rabbitrun 海外运营](rabbitrun.md)，内容要求见 [币圈内容指南](crypto-content-guide.md)；不替换现有 APP 内容指南。
 
-可选 `reporting:{"enabled":true,"weekly":true}` 启用私有工作笔记、周五复盘和每周数据补录；见[说明](../../../docs/company.md#工作笔记与周五复盘)。周报与周五日报21:00合并，员工复盘正常使用额度，不额外开CEO汇报轮。
+可选 `reporting:{"enabled":true,"weekly":true}` 启用私有工作笔记、周五复盘和已提供数据补录（不主动索数）；见[说明](../../../docs/company.md#工作笔记与周五复盘)。周报与周五日报21:00合并，员工复盘正常使用额度，不额外开CEO汇报轮。
 
 选题按钮、CEO追问按钮和本人文字决定统一落入董事长拍板；CEO仅凭真实来源代录，初筛不代替拍板，卡片以实际执行结果为准。
 
-员工选题与写作培训资料：今朝同时读 [今朝手册](jinzhao-handbook.md) 和 [开发故事素材库](jinzhao-stories.md)，海外运营读 [rabbitrun 手册](rabbitrun-handbook.md)。部署到 `workspace/knowledge/` 同名文件，并更新现有 `content-guide.md`、`crypto-content-guide.md` 的必读说明；员工报题/写稿、CEO 初筛/审稿时与指南及工作笔记一起读取。CEO 将五项 0–2 分、总分及理由写入既有 `topicReviews[].reason`，未启用授权时满 7 分才推给董事长；启用 `delegation.source` 后须同时填 `score`，满 7 分直接入池，低分退回并记录理由。私有工作区 `AGENTS.md` 同步必读要求，笔记只追加到私有 `operations.db`，不提交工作区或数据库。资料更新无需重启服务，也不改变现有待批卡片或周目标。今朝选题沿用 `reason` 字段写“引用故事卡：S编号”及事实依据；CEO 初筛、审稿核对一致性，缺引用或引用不符直接退回，真实性项记 0 分、总分最高 6 分。
+员工选题与写作培训资料：今朝同时读 [今朝手册](jinzhao-handbook.md) 和 [开发故事素材库](jinzhao-stories.md)，海外运营读 [rabbitrun 手册](rabbitrun-handbook.md)。部署到 `workspace/knowledge/` 同名文件，并更新现有 `content-guide.md`、`crypto-content-guide.md` 的必读说明；员工报题/写稿、CEO 初筛/审稿时与指南及工作笔记一起读取。CEO 将五项 0–2 分、总分及理由写入既有 `topicReviews[].reason`，未启用授权时保持待审，不再生成董事长选题卡；启用 `delegation.source` 后须同时填 `score`，满 7 分直接入池，低分退回并记录理由。私有工作区 `AGENTS.md` 同步必读要求，笔记只追加到私有 `operations.db`，不提交工作区或数据库。资料更新无需重启服务，也不改变现有待批卡片或周目标。今朝选题沿用 `reason` 字段写“引用故事卡：S编号”及事实依据；CEO 初筛、审稿核对一致性，缺引用或引用不符直接退回，真实性项记 0 分、总分最高 6 分。
 
 现行CEO授权、后台维护清单及发布决定见[公司约定](../../../docs/company.md#ceo-授权与维护清单)；记住暂停状态保持，今朝获取引导只写“目前只有安卓版，还在小范围内测，下载方式见主页简介”。
 

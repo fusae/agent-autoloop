@@ -173,7 +173,6 @@ test("individual topic button uses the same recorded chairman action", () =>
           detail: JSON.stringify({ question: `选题批次：${f.batch}\n2通过`, topicBatch: f.batch }),
         },
       ],
-      {},
       now,
     );
     assert.equal(f.project().topics[1].state, "approved");

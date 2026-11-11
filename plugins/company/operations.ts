@@ -194,16 +194,6 @@ export class Operations {
       (!!this.config.workday?.enabled && Date.parse(s.daily.issuedAt) < Date.parse(`${day(now)}T09:00:00+08:00`))
     );
   }
-  private topicParticipants(businesses: Portfolio, now: Date) {
-    return businesses
-      .filter(
-        (b) =>
-          b.autonomy &&
-          b.status === "active" &&
-          this.get(b.id, now).staff.some((s) => this.onDuty(s) && s.role === "growth"),
-      )
-      .map((b) => b.id);
-  }
   constructor(directory: string) {
     this.directory = directory;
     const configFile = join(directory, "company.json");
@@ -2060,22 +2050,6 @@ export class Operations {
       cycle = { week, date, staff: [] };
       c.weeklyCycles.push(cycle);
     }
-    if (!this.config.delegation && now.toISOString() >= reportTime(date, "14:00") && !cycle.requestedAt) {
-      const missing = missingMetrics(this.directory, c.manualMetrics ?? [], now);
-      if (missing.length) {
-        cycle.missing = missing;
-        cycle.requestedAt = now.toISOString();
-        (receipt.notice ??= []).push({
-          key: `weekly-data-${week}`,
-          title: "CEO · 本周缺失数据",
-          text:
-            "请补充本周以下帖子的效果数据，回复格式随意，看不到的可以不填。\n" +
-            missing
-              .map((p) => `- ${p.platform}《${p.title}》：${p.fields.map((k) => metricNames[k]).join("、")}`)
-              .join("\n"),
-        });
-      }
-    }
     if (now.toISOString() < reportTime(date, "18:00")) return;
     for (const b of active)
       for (const employee of this.get(b.id, now).staff.filter((s) => this.onDuty(s))) {
@@ -2628,14 +2602,7 @@ export class Operations {
         !answers.length &&
         events.every((e) => e.source === "company-inbox" && e.type === "company.owner.question")
       ) {
-        if (this.config.topics)
-          new TopicWorkflow(this.db, this.directory, this.config).tick(
-            [],
-            events,
-            receipt,
-            now,
-            this.topicParticipants(businesses, now),
-          );
+        if (this.config.topics) new TopicWorkflow(this.db, this.directory, this.config).tick([], events, now);
         this.saveExecutive(chief);
         routeDelegatedReceipt(this.db, this.config, receipt, now);
         this.db.prepare("INSERT INTO batches VALUES (?,?)").run(batch, JSON.stringify(receipt));
@@ -2648,14 +2615,7 @@ export class Operations {
         beforeProcessed = chief.processed;
       if (chief.enabled) this.manage(chief, businesses, tasks, answers, receipt, now);
       this.conversation(chief, businesses, tasks, events, receipt, now);
-      if (this.config.topics)
-        new TopicWorkflow(this.db, this.directory, this.config).tick(
-          answers,
-          events,
-          receipt,
-          now,
-          this.topicParticipants(businesses, now),
-        );
+      if (this.config.topics) new TopicWorkflow(this.db, this.directory, this.config).tick(answers, events, now);
       if (chief.enabled && depth <= 1) this.inspectHealth(chief, businesses, tasks, receipt, now);
       if (chief.enabled) this.repairScheduling(chief, businesses, now);
       if (chief.enabled) {
@@ -3218,14 +3178,7 @@ export class Operations {
         if (JSON.stringify(p) !== before) this.save(p, "check", now);
         this.profile(p, b, tasks, now);
       }
-      if (this.config.topics)
-        new TopicWorkflow(this.db, this.directory, this.config).tick(
-          [],
-          [],
-          receipt,
-          now,
-          this.topicParticipants(businesses, now),
-        );
+      if (this.config.topics) new TopicWorkflow(this.db, this.directory, this.config).tick([], [], now);
       if (chief.enabled) {
         if (chief.processed !== beforeProcessed && beforeCEO === chief.fingerprint)
           chief.fingerprint = this.ceoInputs(chief, businesses, tasks, now);

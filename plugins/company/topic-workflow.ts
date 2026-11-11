@@ -1,11 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Project } from "./operations.ts";
-import type { CompanyConfig, Context, Receipt } from "./company.ts";
+import type { CompanyConfig, Context } from "./company.ts";
 import type { ExecutiveDecision } from "./executive.ts";
 import { appendNote } from "./notes.ts";
-import { weekOf } from "./workday.ts";
 import { ownerReplyEvidence, ownerAnswerEvidence, ownerCardMessage } from "./owner-replies.ts";
-import { decideTopics, parseTopicReply, screenTopic, topicCard, topicId } from "./topics.ts";
+import { decideTopics, parseTopicReply, screenTopic } from "./topics.ts";
 
 function replyChoices(e: ReturnType<typeof ownerReplyEvidence>, batch: import("./topics.ts").TopicBatch) {
   const c = e.topicChoice;
@@ -189,7 +188,7 @@ export class TopicWorkflow {
       if (changed) this.save(p, now);
     }
   }
-  tick(answers: Context["answers"], events: Context["events"], receipt: Receipt, now: Date, expected: string[] = []) {
+  tick(answers: Context["answers"], events: Context["events"], now: Date) {
     if (this.config.delegation) {
       for (const p of this.projects()) {
         const legacy = p.topics?.filter((t) => t.state === "ready") ?? [];
@@ -244,42 +243,8 @@ export class TopicWorkflow {
             });
         }
         b.closed = b.topics.every((id) => p.topics!.find((t) => t.id === id)?.state !== "pending");
-        if (!b.closed && answers.some((a) => a.about === `topics:${b.id}`)) {
-          (receipt.ask ??= []).push(topicCard(p, b));
-        }
       }
       if (before !== JSON.stringify(p)) this.save(p, now);
-    }
-    // Send all businesses from the Monday meeting together, after the single replacement round.
-    const readyProjects = this.projects();
-    const weeklyWaiting = expected.some((id) => {
-      const p = readyProjects.find((p) => p.business === id);
-      return p?.topicMeeting?.week !== weekOf(now) || !p.topicMeeting.completed;
-    });
-    const screening = readyProjects.some((p) =>
-      p.topics?.some((t) => t.meeting === weekOf(now) && ["screening", "returned"].includes(t.state)),
-    );
-    for (const p of readyProjects) {
-      const ready = (p.topics ?? [])
-        .filter((t) => t.state === "ready" && (t.meeting !== weekOf(now) || !(weeklyWaiting || screening)))
-        .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
-      if (!ready.length || (receipt.ask?.length ?? 0) >= 5) continue;
-      // Each packet fits the existing 4,000-character card boundary without dropping proposal fields.
-      while (ready.length && (receipt.ask?.length ?? 0) < 5) {
-        const selected = ready.splice(0, 8);
-        const batch = {
-          id: topicId(selected.map((t) => t.id).join(":")),
-          topics: selected.map((t) => t.id),
-          at: now.toISOString(),
-        };
-        for (const t of selected) {
-          t.batch = batch.id;
-          t.state = "pending";
-        }
-        (p.topicBatches ??= []).push(batch);
-        (receipt.ask ??= []).push(topicCard(p, batch));
-      }
-      this.save(p, now);
     }
   }
 }

@@ -317,3 +317,38 @@ test("employee notes and weekly report stay read-only and escape embedded markup
   assert.match(html, /2 条原始事实待周五整理/);
   assert.doesNotMatch(html, /<textarea[^>]*notes|<script>bad/);
 });
+
+test("disabled departments and employees have no status or quota placeholders", async () => {
+  const b = await browser();
+  const d = { ...overview(), activeRoles: ["growth"] };
+  b.waits.get("/api/overview")!(Response.json(d));
+  b.waits.delete("/api/overview");
+  await b.flush();
+  b.location.hash = "#departments";
+  await b.app.enterView();
+  assert.match(b.node("#view-content").innerHTML, /data-department="growth"/);
+  assert.doesNotMatch(
+    b.node("#view-content").innerHTML,
+    /data-department="(?:engineering|qa|finance|support|product)"|6 个部门/,
+  );
+  b.replies.set("/api/operations", () =>
+    Response.json({
+      operations: [
+        {
+          business: "app",
+          name: "应用",
+          owner: "growth",
+          status: "active",
+          staff: [
+            { role: "growth", enabled: true, onDuty: true, checks: [] },
+            { role: "qa", enabled: false, onDuty: false, checks: [], duty: "闲置验收占位" },
+          ],
+        },
+      ],
+      tasks: [],
+    }),
+  );
+  b.location.hash = "#employees";
+  await b.app.enterView();
+  assert.doesNotMatch(b.node("#view-content").innerHTML, /闲置验收占位|data-employee="qa"/);
+});

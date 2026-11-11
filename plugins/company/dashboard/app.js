@@ -408,12 +408,18 @@ function statsHTML(d) {
     .join("");
 }
 function departmentHTML(d) {
-  return `<section class="panel ${view === "departments" ? "full-dept" : ""}"><div class="panel-heading"><h2>部门</h2>${view === "overview" ? '<a class="text-link" href="#departments">全部部门 ↗</a>' : '<span class="muted">CEO · 6 个部门</span>'}</div><div class="dept-grid">${Object.entries(
+  return `<section class="panel ${view === "departments" ? "full-dept" : ""}"><div class="panel-heading"><h2>部门</h2>${view === "overview" ? '<a class="text-link" href="#departments">全部部门 ↗</a>' : ""}</div><div class="dept-grid">${Object.entries(
     roleNames,
   )
+    .filter(([role]) => role === "ceo" || !d.activeRoles || d.activeRoles.includes(role))
     .map(([role, name]) => {
       const agent = d.agents.find((a) => a.id === `company-${role}`),
-        running = d.runs.some((r) => r.agent === `company-${role}` && r.state === "claimed");
+        running = d.runs.some(
+          (r) =>
+            (r.agent === `company-${role}` ||
+              (r.agent?.startsWith("company-staff-") && r.agent.endsWith(`-${role}`))) &&
+            r.state === "claimed",
+        );
       const taskCount =
         d.taskStats?.departments?.[role] ??
         d.tasks.filter((t) => t.status === "active" && taskFlow(t)[t.stage] === role).length;
@@ -515,7 +521,7 @@ function spendingHTML(d) {
       ? d.runs
           .map(
             (r) =>
-              `<div class="latest-run"><div>${esc(roleNames[r.agent?.replace("company-", "")] ?? "公司调度")}<small>${esc(r.summary || r.error || "等待结果")}</small></div><span class="muted">${esc({ claimed: "执行中", queued: "待执行", done: "已完成", failed: "失败", cancelled: "已取消", nothing: "无需处理", unknown: "状态待确认" }[r.state] ?? r.state)}</span></div>`,
+              `<div class="latest-run"><div>${esc(roleNames[r.agent?.replace(/^company-(?:staff-.*-)?/, "")] ?? "公司调度")}<small>${esc(r.summary || r.error || "等待结果")}</small></div><span class="muted">${esc({ claimed: "执行中", queued: "待执行", done: "已完成", failed: "失败", cancelled: "已取消", nothing: "无需处理", unknown: "状态待确认" }[r.state] ?? r.state)}</span></div>`,
           )
           .join("")
       : '<div class="empty">还没有执行记录</div>'
@@ -1088,6 +1094,7 @@ function employeesHTML(d) {
         .map(
           (p) =>
             `<section class="employee-project"><div class="panel-heading"><h2>${esc(p.name)}</h2><span class="muted">负责人：${roleNames[p.owner]} · ${businessStatus[p.status]}</span></div><div class="employee-grid">${p.staff
+              .filter((s) => s.enabled !== false && s.onDuty !== false)
               .map((s) => {
                 const current = s.currentTask,
                   waiting = current && ["active", "blocked", "awaiting_approval", "rejected"].includes(current.status);
@@ -1137,7 +1144,15 @@ function plansHTML(d) {
 function operationsBusinessHTML(id) {
   const p = operationById(id);
   if (!p) return '<section class="detail-section"><h3>员工职责</h3><p>等待同步</p></section>';
-  return `<section class="detail-section"><div class="panel-heading"><h3>员工职责</h3><button class="text-button" data-project-view="employees" data-project="${esc(id)}">全部员工</button></div><div class="plan-meta"><span>负责人：${roleNames[p.owner]}</span><span>今日派工 ${p.todayTasks}</span><span>在途上限 ${p.maxActive}</span><button class="text-button" data-settings="${esc(id)}">任务并发</button></div>${p.staff.map((s) => `<div class="routine-row"><div><strong>${esc(s.name ?? roleNames[s.role])}</strong><p class="note">${esc(s.duty)}</p><p class="note">${esc(s.finding)}</p></div><button class="secondary" data-employee="${s.role}" data-project="${esc(id)}">编辑</button></div>`).join("")}</section><section class="detail-section"><div class="panel-heading"><h3>项目计划</h3><button class="text-button" data-project-view="plans" data-project="${esc(id)}">全部计划</button></div><p>${p.plans.filter((a) => ["working", "publishing"].includes(a.status)).length} 项执行中 · ${p.plans.filter((a) => ["observing", "review"].includes(a.status)).length} 项效果跟进 · ${p.alerts.length} 项异常</p></section><section class="detail-section"><h3>业务动态</h3>${
+  return `<section class="detail-section"><div class="panel-heading"><h3>员工职责</h3><button class="text-button" data-project-view="employees" data-project="${esc(id)}">全部员工</button></div><div class="plan-meta"><span>负责人：${roleNames[p.owner]}</span><span>今日派工 ${p.todayTasks}</span><span>在途上限 ${p.maxActive}</span><button class="text-button" data-settings="${esc(id)}">任务并发</button></div>${p.staff
+    .filter((s) => s.enabled !== false && s.onDuty !== false)
+    .map(
+      (s) =>
+        `<div class="routine-row"><div><strong>${esc(s.name ?? roleNames[s.role])}</strong><p class="note">${esc(s.duty)}</p><p class="note">${esc(s.finding)}</p></div><button class="secondary" data-employee="${s.role}" data-project="${esc(id)}">编辑</button></div>`,
+    )
+    .join(
+      "",
+    )}</section><section class="detail-section"><div class="panel-heading"><h3>项目计划</h3><button class="text-button" data-project-view="plans" data-project="${esc(id)}">全部计划</button></div><p>${p.plans.filter((a) => ["working", "publishing"].includes(a.status)).length} 项执行中 · ${p.plans.filter((a) => ["observing", "review"].includes(a.status)).length} 项效果跟进 · ${p.alerts.length} 项异常</p></section><section class="detail-section"><h3>业务动态</h3>${
     p.signals.length
       ? p.signals
           .slice(-5)
@@ -1274,7 +1289,15 @@ function ceoHTML(d) {
       .join("") || '<p class="muted">等待 CEO 分配目标</p>'
   }</div></section>
   ${approvalsHTML(d)}
-  <section class="panel"><div class="panel-heading"><h2>待维护者处理</h2></div><div class="approval-list">${(c.maintenance ?? []).filter((m) => !m.resolvedAt).map((m) => `<article class="report"><span class="meta">${time(m.at)}</span><h3>${esc(m.title)}</h3><p>${esc(m.text)}</p></article>`).join("") || '<p class="muted">暂无</p>'}</div></section>
+  <section class="panel"><div class="panel-heading"><h2>待维护者处理</h2></div><div class="approval-list">${
+    (c.maintenance ?? [])
+      .filter((m) => !m.resolvedAt)
+      .map(
+        (m) =>
+          `<article class="report"><span class="meta">${time(m.at)}</span><h3>${esc(m.title)}</h3><p>${esc(m.text)}</p></article>`,
+      )
+      .join("") || '<p class="muted">暂无</p>'
+  }</div></section>
   <section class="panel"><div class="panel-heading"><h2>员工问题</h2><span class="count-badge">${c.openIssues ?? c.issues.filter((i) => i.state !== "answered").length}</span></div><div class="approval-list">${
     c.issues
       .slice()

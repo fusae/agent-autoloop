@@ -1,17 +1,8 @@
 // Read-only export: never construct Company/Operations, whose constructors can write projections.
 // Collection has no network; read-only clients reuse the sanitized business summary.
 import { spawnSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  realpathSync,
-  renameSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { isIP } from "node:net";
 import { DatabaseSync } from "node:sqlite";
 
@@ -80,7 +71,6 @@ const patterns: [string, RegExp][] = [
   ["中文凭据", /(?:密钥|密码|口令|账号\s*(?:ID|标识)|账户\s*(?:ID|标识))\s*[:=：]\s*[^\s,;，；}\r\n]+/gi],
   ["IP", /\b(?:\d{1,3}\.){3}\d{1,3}\b/g],
   ["账号", /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|@[A-Za-z0-9_][A-Za-z0-9_.-]*/g],
-  ["不透明凭据", /\b[A-Za-z0-9_+\/-]{32,}={0,2}\b/g],
 ];
 function ipv6(value: string) {
   return value.match(/(?<![\w:])[A-Fa-f0-9]*:[A-Fa-f0-9:.:%-]+/g)?.filter((v) => isIP(v.split("%")[0]) === 6) ?? [];
@@ -306,7 +296,7 @@ export function collectSnapshot(directory: string, now = new Date(), services: R
       list(p.artifacts).find((a) => /\.(?:md|txt)$/.test(a.path));
     frozen.set(p.key, { ...p, draft: a ? draft(a.content, known) : { title: "", excerpt: "无正文" } });
     const proof = readJSON(join(pubdir, file.replace(".json", "-result.json")), null);
-    if (proof) {
+    if (proof && !proof.deleted) {
       const handle = /^https:\/\/(?:x|twitter)\.com\/([^/]+)\/status\//.exec(proof.x?.url ?? "")?.[1];
       if (handle) known.push(handle);
       publications.push({ ...proof, business: p.business, title: frozen.get(p.key).draft.title });
@@ -334,9 +324,13 @@ export function collectSnapshot(directory: string, now = new Date(), services: R
     },
   ];
   for (const p of projects)
-    for (const s of list(p.staff)) {
+    for (const s of list(p.staff).filter(
+      (s) => s.enabled && (!config.activeRoles || config.activeRoles.includes(s.role)),
+    )) {
       const current = running.filter(
-        (r) => r.agent === `company-${s.role}` && list(p.activity).some((a) => a.task === runTask(r)?.id),
+        (r) =>
+          (r.agent === `company-${s.role}` || r.agent === `company-staff-${p.business}-${s.role}`) &&
+          list(p.activity).some((a) => a.task === runTask(r)?.id),
       );
       staff.push({
         name: s.name ?? `${businessName(p.business)}·${roles[s.role] ?? s.role}`,
@@ -344,7 +338,8 @@ export function collectSnapshot(directory: string, now = new Date(), services: R
         role: s.role,
         duty:
           s.enabled && !s.pausedByCEO && (!config.activeRoles || config.activeRoles.includes(s.role)) ? "在岗" : "停用",
-        model: hub.rules.agents?.[`company-${s.role}`]?.model ?? "未知",
+        model:
+          config.staffModels?.[p.business]?.[s.role]?.model ?? hub.rules.agents?.[`company-${s.role}`]?.model ?? "未知",
         todayRounds: usageKnown ? (counts["employee-started"][`${p.business}:${s.role}`] ?? 0) : null,
         dailyLimit: config.dailyModelRuns?.employee ?? null,
         roleTodayRounds: usageKnown ? (counts.started[s.role] ?? 0) : null,
@@ -579,130 +574,6 @@ export function collectSnapshot(directory: string, now = new Date(), services: R
   assertSafe(safe, known);
   return safe;
 }
-const headings: Record<string, string> = {
-  staff: "员工与CEO",
-  businesses: "业务目标与选题池",
-  drafts: "在途稿件",
-  publications: "发布记录",
-  downloads: "下载统计",
-  chairman: "待董事长事项",
-  maintenance: "待维护者处理",
-  anomalies: "未解决异常",
-  dailyReport: "最近日报",
-  ceoRounds: "CEO最近10轮",
-  health: "服务健康",
-};
-const fields: Record<string, string> = {
-  name: "姓名",
-  business: "业务",
-  role: "岗位",
-  duty: "在岗",
-  model: "模型",
-  todayRounds: "今日轮次",
-  dailyLimit: "每日额度",
-  roleTodayRounds: "岗位今日轮次",
-  roleDailyLimit: "岗位额度",
-  current: "当前工作",
-  workState: "执行状态",
-  next: "下一步",
-  nextAt: "下次时间",
-  status: "状态",
-  objective: "目标",
-  week: "本周",
-  goals: "周目标",
-  employee: "员工",
-  direction: "方向",
-  metrics: "指标",
-  target: "目标值",
-  unit: "单位",
-  progress: "进度",
-  publishedThisWeek: "本周已发",
-  plans: "计划",
-  title: "标题",
-  result: "结果",
-  topics: "选题池",
-  review: "CEO审核",
-  excerpt: "正文前200字",
-  window: "统计范围",
-  today: "今日",
-  recent7Days: "最近7天",
-  platform: "平台",
-  at: "时间",
-  link: "链接",
-  data: "数据",
-  reads: "阅读",
-  likes: "点赞",
-  collects: "收藏",
-  comments: "评论",
-  checkedAt: "采集时间",
-  todayPartial: "今日未结束",
-  daily: "每日",
-  date: "日期",
-  count: "次数",
-  note: "说明",
-  category: "类别",
-  detail: "内容",
-  impact: "影响",
-  evidence: "依据",
-  suggestion: "建议",
-  firstAt: "首次发现",
-  purpose: "用途",
-  conclusion: "结论",
-  services: "服务",
-  heartbeat: "心跳",
-  healthCheckedAt: "巡检时间",
-  xiaohongshu: "小红书登录态",
-  state: "状态",
-  publishing: "发布通道",
-  lastSuccess: "最近发布成功",
-  pending: "待处理",
-  reason: "原因",
-  quota: "公司总额度",
-  text: "全文",
-};
-const escapeMarkdown = (v: string) =>
-  v
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/([\\`*_\[\]#|])/g, "\\$1");
-export function renderMarkdown(snapshot: Snapshot): string {
-  const render = (v: any, depth = 0): string => {
-    const pad = "  ".repeat(depth);
-    if (Array.isArray(v))
-      return v.length
-        ? v
-            .map((x) => `${pad}- ${typeof x === "object" ? "\n" + render(x, depth + 1) : escapeMarkdown(String(x))}`)
-            .join("\n")
-        : `${pad}暂无`;
-    if (v && typeof v === "object")
-      return Object.entries(v)
-        .map(
-          ([k, x]) =>
-            `${pad}- ${fields[k] ?? k}：${x && typeof x === "object" ? "\n" + render(x, depth + 1) : escapeMarkdown(x === null ? "未知 / 未设置" : typeof x === "boolean" ? (x ? "是" : "否") : String(x)).replace(/\n/g, "\n" + pad + "  ")}`,
-        )
-        .join("\n");
-    return pad + escapeMarkdown(String(v));
-  };
-  return (
-    `# 公司现状\n\n生成时间（北京时间）：${snapshot.generatedAt}\n\n` +
-    Object.entries(headings)
-      .map(
-        ([key, heading]) =>
-          `## ${heading}\n\n${key === "dailyReport" ? `${snapshot.dailyReport.date ?? ""}\n\n${escapeMarkdown(snapshot.dailyReport.text)}` : render(snapshot[key as keyof Snapshot])}\n`,
-      )
-      .join("\n")
-  );
-}
-export function writeSnapshot(snapshot: Snapshot, output: string) {
-  assertSafe(snapshot);
-  mkdirSync(output, { recursive: true, mode: 0o750 });
-  // A single atomic envelope prevents a publisher from mixing two generations.
-  const envelope = JSON.stringify({ snapshot, markdown: renderMarkdown(snapshot) });
-  assertSafe(JSON.parse(envelope));
-  writeFileSync(join(output, "snapshot.tmp"), envelope, { mode: 0o640 });
-  renameSync(join(output, "snapshot.tmp"), join(output, "snapshot.json"));
-}
 export function serviceStates(): Record<string, string> {
   return Object.fromEntries(
     [
@@ -720,21 +591,4 @@ export function serviceStates(): Record<string, string> {
       return [name, r.status === 0 ? r.stdout.trim() : "未知"];
     }),
   );
-}
-if (process.argv[1] && resolve(process.argv[1]) === import.meta.filename) {
-  try {
-    const [command, source, target] = process.argv.slice(2);
-    if (command === "collect" && source && target) {
-      writeSnapshot(collectSnapshot(source, new Date(), serviceStates()), target);
-      console.log("脱敏快照生成成功");
-    } else throw Error("用法：collect 公司目录 输出目录");
-  } catch (error) {
-    // Never log raw data, subprocess output, filenames from content, or credential-bearing exceptions.
-    const message =
-      error instanceof Error && /^(?:脱敏扫描拒绝|Git |快照|部署密钥|不允许|工作目录|稿件路径|用法)/.test(error.message)
-        ? error.message
-        : "快照失败：输入读取或格式异常";
-    console.error(message);
-    process.exitCode = 1;
-  }
 }

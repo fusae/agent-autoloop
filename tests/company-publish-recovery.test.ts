@@ -1,6 +1,6 @@
 // Failure modes: a delayed platform response blocks until tomorrow, timer retries publish twice,
 // exhausted lookups loop forever, stale timers affect a new assignment, login loss is retried,
-// or the coordinator calls a scheduled readback a missing department report.
+// business-specific staff failures are lost, or the coordinator calls a scheduled readback a missing department report.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
@@ -170,3 +170,21 @@ test("scheduled publisher and verifier readbacks survive missing-report reconcil
       hub.close();
     }
   }));
+
+test("business staff terminal failures reconcile without consuming live or unrelated runs", () => {
+  const at = new Date(Date.now() - 180000).toISOString();
+  const task = { id: "draft", kind: "staff-growth", status: "active", stage: 0, assignment: 1 };
+  const office = { tasks: () => [task], history: () => [{ at }] } as unknown as Company;
+  const run = {
+    id: 10,
+    agent: "company-staff-jinzhao-growth",
+    events: [{ subject: "draft" }],
+    state: "failed",
+    createdAt: at,
+    finishedAt: at,
+  };
+  assert.equal(failedWork(office, [run]).length, 1);
+  assert.deepEqual(failedWork(office, [{ ...run, state: "claimed" }]), []);
+  assert.deepEqual(failedWork(office, [{ ...run, agent: "company-staff-jinzhao-qa" }]), []);
+  assert.deepEqual(failedWork(office, [{ ...run, events: [{ subject: "other" }] }]), []);
+});

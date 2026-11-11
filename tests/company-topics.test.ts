@@ -1,4 +1,4 @@
-// Failure modes: incomplete topic cards, repeat replacement loops, premature writing, forged or repeated chairman decisions, stuck Monday meetings, missing top-ups and repeated reminders.
+// Failure modes: repeat replacement loops, premature writing, forged or repeated historical chairman decisions, stuck meetings and repeated reminders.
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -130,7 +130,6 @@ function fixture(fn: (f: any) => void, extra = {}) {
 import {
   topicProposals,
   parseTopicReply,
-  topicCard,
   cardTopics,
   submitTopics,
   screenTopic,
@@ -188,6 +187,45 @@ const reviews = (f: any, approve = true) =>
       })),
   );
 
+function legacyTopicCard(p: any, batch: any) {
+  const text = batch.topics
+    .map((id: string, i: number) => {
+      const t = p.topics!.find((t: any) => t.id === id)!;
+      return `${i + 1}. ${t.title}${t.state === "approved" ? "（已通过）" : t.state === "rejected" ? "（已退回）" : ""}\n角度：${t.angle}\n依据：${t.reason}\n结构：${t.outline}\n关联：${t.app}｜平台：${t.platform}`;
+    })
+    .join("\n\n");
+  return {
+    key: `topics-${batch.id}`,
+    title: "选题拍板",
+    about: `topics:${batch.id}`,
+    text: `业务：${p.business}\n请逐条通过或退回，可附意见；未回复不动笔。\n\n${text}\n\n选题批次：${batch.id}\n选题编号：${batch.topics.join(",")}`,
+    options: ["全部通过", "全部退回"],
+  };
+}
+
+// Seed historical pending cards for callback/security tests; current code never sends them.
+function legacyCards(f: any) {
+  f.decide({ topicReviews: reviews(f) });
+  const cards: any[] = [];
+  for (const b of f.b.list()) {
+    const p = f.o.get(b.id, now);
+    const ready = (p.topics ?? []).filter((t: any) => t.state === "ready");
+    if (!ready.length) continue;
+    const batch = {
+      id: (b.id === "app" ? "a" : "b").repeat(24),
+      topics: ready.map((t: any) => t.id),
+      at: now.toISOString(),
+    };
+    for (const t of ready) {
+      t.state = "pending";
+      t.batch = batch.id;
+    }
+    (p.topicBatches ??= []).push(batch);
+    f.o.save(p, "historical-card-fixture", now);
+    cards.push(legacyTopicCard(p, batch));
+  }
+  return cards;
+}
 test("topic proposal needs all six fields, accepts an unpromoted app and refuses duplicate keys", () => {
   assert.equal(topicProposals([proposal()])[0].app, "不推 App");
   for (const key of ["title", "angle", "reason", "outline", "app", "platform"])
@@ -216,31 +254,11 @@ test("CEO may return a topic for one replacement only, and cannot confer chairma
     false,
   );
 });
-test("Monday meeting runs naturally once, cards wait for all business screens, only chairman adds to pool", () =>
-  fixture((f: any) => {
-    assert.equal(f.work(f.tick(new Date("2026-11-09T00:59:00Z")), "check-growth").length, 0);
-    meeting(f);
-    const r = reviews(f);
-    assert.equal(r.length, 2);
-    assert.equal(f.decide({ topicReviews: [r[0]] }).ask?.filter((a: any) => a.title === "选题拍板").length ?? 0, 0);
-    const result = f.decide({ topicReviews: [r[1]] });
-    const cards = result.ask.filter((a: any) => a.title === "选题拍板");
-    assert.equal(cards.length, 2);
-    assert.ok(
-      cards.every((c: any) => c.text.includes("依据：") && c.text.includes("结构：") && c.text.includes("平台：")),
-    );
-    assert.equal(getProject(f).topics[0].state, "pending");
-    assert.equal(f.work(f.tick(), "staff-growth").length, 0);
-    f.restart();
-    f.tick(now, [{ card: 100, about: cards.find((c: any) => c.text.startsWith("业务：app\n")).about, choice: 0 }]);
-    assert.equal(getProject(f).topics[0].state, "approved");
-    assert.equal(getProject(f, "other").topics[0].state, "pending");
-    assert.equal(getProject(f).topicMeeting.completed, true);
-  }));
+
 test("unauthorized production is suppressed, approved topics keep opinions and cannot be used twice", () =>
   fixture((f: any) => {
     meeting(f);
-    const cards = f.decide({ topicReviews: reviews(f) }).ask;
+    const cards = legacyCards(f);
     const card = cards.find((c: any) => c.text.startsWith("业务：app\n"));
     const r = f.tick(now, [{ card: 101, about: card.about, text: "1看起来不错" }]);
     // Vague feedback cannot become an approval.
@@ -319,35 +337,6 @@ test("pending topics raise a four-hour reminder and reuse the 24-hour dedup", ()
   p.topics[0].state = "approved";
   assert.equal(check(later).length, 0);
 });
-test("a weekday extra topic uses the same screen and approval pool", () =>
-  fixture((f: any) => {
-    meeting(f);
-    const cards = f.decide({ topicReviews: reviews(f) }).ask;
-    f.tick(
-      now,
-      cards.map((c: any, i: number) => ({ card: 120 + i, about: c.about, choice: 1 })),
-    );
-    const pending = f.o
-      .snapshot(f.b.list(), f.c.tasks(), now)
-      .flatMap((p: any) => p.activity)
-      .filter((a: any) => !f.c.task(a.task));
-    const p = getProject(f);
-    assert.ok(p.topicFollowup, JSON.stringify(p));
-    const task = p.topicFollowup.task;
-    const e = {
-      type: "company.task.create",
-      subject: task,
-      detail: JSON.stringify({ title: "临时热点", kind: "check-growth", goal: "补题", acceptance: ["依据真实"] }),
-    };
-    deliverTopics(f, e, [proposal("hot", { reason: "当天热点资料", angle: "真实的新切口" })]);
-    f.tick();
-    const extra = getProject(f).topics.find((t: any) => t.key === "hot");
-    assert.equal(extra.state, "screening");
-    const r = f.decide({
-      topicReviews: [{ business: "app", topic: extra.id, approve: true, reason: "符合定位", rank: 1 }],
-    });
-    assert.ok(r.ask.some((a: any) => a.title === "选题拍板"));
-  }));
 
 test("topic callback authenticates owner, message and version; supports individual approval/rejection and all", async () => {
   const dir = mkdtempSync(join(tmpdir(), "topic-callback-"));
@@ -355,7 +344,7 @@ test("topic callback authenticates owner, message and version; supports individu
   submitTopics(p, "growth", [proposal("one"), proposal("two"), proposal("three")], now);
   const batch = { id: "a".repeat(24), topics: p.topics.map((t: any) => t.id), at: now.toISOString() };
   const card: any = {
-    ...topicCard(p, batch),
+    ...legacyTopicCard(p, batch),
     id: 42,
     version: 1,
     kind: "ask",
@@ -444,7 +433,7 @@ test("topic callback authenticates owner, message and version; supports individu
 test("CEO text replies require authentic post-card evidence and an unambiguous batch", () =>
   fixture((f: any) => {
     meeting(f);
-    const cards = f.decide({ topicReviews: reviews(f) }).ask;
+    const cards = legacyCards(f);
     const card = cards.find((c: any) => c.text.startsWith("业务：app\n"));
     const batch = cardTopics(card.text)!.id;
     mkdirSync(join(f.dir, "hub"));
@@ -503,7 +492,7 @@ test("callback opinions cannot approve another topic, and earlier item decisions
     const first = f.tick();
     for (const e of f.work(first, "check-growth")) deliverTopics(f, e, [proposal("one"), proposal("two")]);
     f.tick();
-    const card = f.decide({ topicReviews: reviews(f) }).ask.find((a: any) => a.text.startsWith("业务：app\n"));
+    const card = legacyCards(f).find((a: any) => a.text.startsWith("业务：app\n"));
     const batch = cardTopics(card.text)!.id;
     mkdirSync(join(f.dir, "hub"));
     const db = new DatabaseSync(join(f.dir, "hub/hub.db"));
@@ -582,48 +571,11 @@ test("topic policy refresh is idempotent, includes authenticated callback routin
   }
 });
 
-test("complete topic cards fit existing receipt limits, and all input names are unique in one Feishu card", () => {
-  const p: any = { business: "app", plans: [] };
-  submitTopics(
-    p,
-    "growth",
-    Array.from({ length: 8 }, (_, i) =>
-      proposal(`t${i}`, {
-        title: "题".repeat(40),
-        angle: "角".repeat(60),
-        reason: "据".repeat(80),
-        outline: "纲".repeat(100),
-        app: "业".repeat(30),
-        platform: "台".repeat(20),
-      }),
-    ),
-    now,
-  );
-  const batch = { id: "b".repeat(24), topics: p.topics.map((t: any) => t.id), at: now.toISOString() };
-  const card: any = {
-    ...topicCard(p, batch),
-    id: 1,
-    kind: "ask",
-    state: "open",
-    version: 1,
-    choice: null,
-    answer: null,
-  };
-  assert.ok(card.text.length <= 4000);
-  const elements = interactiveCard(card).body.elements;
-  const names = elements
-    .flatMap((e: any) => [e, ...(e.elements ?? [])])
-    .map((e: any) => e.name)
-    .filter(Boolean);
-  assert.equal(names.length, new Set(names).size);
-  assert.ok(elements.some((e: any) => e.tag === "div" && e.text.content.includes("依据：")));
-});
-
 test("overdue-topic notices use durable daily keys and never repeat inside 24 hours", () =>
   fixture(
     (f: any) => {
       meeting(f);
-      f.decide({ topicReviews: reviews(f) });
+      legacyCards(f);
       const reminders = (r: any) => (r.notice ?? []).filter((n: any) => n.text.includes("选题待拍板超过4小时"));
       const first = reminders(f.tick(new Date("2026-11-09T05:10:00Z")));
       assert.equal(first.length, 2);
@@ -664,7 +616,7 @@ test("topic pool retains the two-draft cap without requiring unapproved producti
         f.deliver(e, []);
         assert.equal(f.c.task(e.subject).status, "completed", "waiting for chairman must not demand a draft");
       }
-      const cards = f.decide({ topicReviews: reviews(f) }).ask;
+      const cards = legacyCards(f);
       const card = cards.find((a: any) => a.text.startsWith("业务：app\n"));
       const approved = f.tick(now, [{ card: 810, about: card.about, choice: 0 }]);
       const task = f.work(approved, "check-growth").find((e: any) => JSON.parse(e.detail).title.startsWith("app"));
@@ -683,7 +635,7 @@ test("topic pool retains the two-draft cap without requiring unapproved producti
 test("CEO cannot reserve one approved topic twice in the same decision", () =>
   fixture((f: any) => {
     meeting(f);
-    const card = f.decide({ topicReviews: reviews(f) }).ask.find((a: any) => a.text.startsWith("业务：app\n"));
+    const card = legacyCards(f).find((a: any) => a.text.startsWith("业务：app\n"));
     f.tick(now, [{ card: 811, about: card.about, choice: 0 }]);
     const topic = getProject(f).topics[0].id;
     f.decide({
@@ -693,34 +645,6 @@ test("CEO cannot reserve one approved topic twice in the same decision", () =>
       ],
     });
     assert.equal(getProject(f).plans.filter((a: any) => a.topic === topic).length, 0);
-  }));
-
-test("a business without an on-duty growth employee cannot block other topic cards", () =>
-  fixture((f: any) => {
-    f.o.configure("other", "growth", { enabled: false }, now);
-    const first = f.tick();
-    for (const e of f.work(first, "check-growth")) deliverTopics(f, e, [proposal()]);
-    f.tick();
-    const result = f.decide({ topicReviews: reviews(f) });
-    assert.equal(result.ask?.filter((a: any) => a.title === "选题拍板").length, 1);
-  }));
-
-test("last week's screened topic is not held hostage by this week's unfinished meeting", () =>
-  fixture((f: any) => {
-    meeting(f);
-    const db = new DatabaseSync(join(f.dir, "operations.db"));
-    try {
-      const p = getProject(f);
-      p.topics[0].meeting = "2026-11-02";
-      p.topics[0].week = "2026-11-02";
-      db.prepare("UPDATE projects SET body=? WHERE id='app'").run(JSON.stringify(p));
-      const r = f.decide({
-        topicReviews: [{ business: "app", topic: p.topics[0].id, approve: true, reason: "旧选题仍可用", rank: 1 }],
-      });
-      assert.ok(r.ask?.some((a: any) => a.title === "选题拍板" && a.text.startsWith("业务：app\n")));
-    } finally {
-      db.close();
-    }
   }));
 
 test("pending topic reviews do not bypass exhausted CEO repairs with a brand-new task", () =>
@@ -749,7 +673,7 @@ test("legacy content actions without operation retain the same stock cap", () =>
   fixture(
     (f: any) => {
       meeting(f);
-      const cards = f.decide({ topicReviews: reviews(f) }).ask;
+      const cards = legacyCards(f);
       f.tick(now, [{ card: 900, about: cards.find((a: any) => a.text.startsWith("业务：app\n")).about, choice: 0 }]);
       const p = getProject(f),
         db = new DatabaseSync(join(f.dir, "operations.db"));
@@ -842,7 +766,7 @@ test("delegated CEO requires a handbook score and sends passed topics straight t
   ));
 
 // Screening is the CEO's own output, not another employee result that needs a new management turn.
-test("screened topics waiting for the chairman do not wake an empty CEO round", () =>
+test("retired topic sender creates no chairman cards and no empty CEO round", () =>
   fixture((f: any) => {
     const first = f.tick();
     const initial = f.work(first, "ceo")[0];
@@ -872,7 +796,8 @@ test("screened topics waiting for the chairman do not wake an empty CEO round", 
     const r = f.o.plan("consume-review", f.b.list(), f.c.tasks(), now, [], 1, [
       { id: "cron", source: "clock", type: "cron", subject: "tick", detail: "" },
     ]);
-    assert.equal(getProject(f).topics[0].state, "pending");
+    assert.equal(getProject(f).topics[0].state, "ready");
+    assert.equal(r.ask?.length ?? 0, 0);
     assert.equal(f.work(r, "ceo").length, 0);
     assert.equal(f.work(f.tick(new Date(+now + 5 * 60000)), "ceo").length, 0);
   }));

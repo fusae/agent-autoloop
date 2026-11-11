@@ -25,7 +25,9 @@
     "test:nightly": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 sim/*.test.ts && node --disable-warning=ExperimentalWarning scripts/benchmark.ts --check",
     "benchmark": "node --disable-warning=ExperimentalWarning scripts/benchmark.ts --check",
     "company": "node --disable-warning=ExperimentalWarning bin/agent-company.ts",
-    "company:demo": "node --disable-warning=ExperimentalWarning --test tests/company-e2e.test.ts"
+    "company:demo": "node --disable-warning=ExperimentalWarning --test tests/company-e2e.test.ts",
+    "test:fast": "node scripts/test-tier.ts fast",
+    "test:slow": "node scripts/test-tier.ts slow"
   },
   "devDependencies": {
     "@types/node": "26.6.4",

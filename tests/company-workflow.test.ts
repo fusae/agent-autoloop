@@ -28,6 +28,7 @@ test("offline week connects topics, rewrites, shared XHS cap, rabbitrun, notes a
     database: join(dir, "company.db"),
     maxAssignments: 6,
     ceoMode: true,
+    delegation: { source: "测试CEO授权", confirmPublish: ids },
     contentReview: "ceo",
     publishVerification: "program",
     activeRoles: ["growth"],
@@ -141,7 +142,7 @@ test("offline week connects topics, rewrites, shared XHS cap, rabbitrun, notes a
       d.topicReviews = v.projects.flatMap((p) =>
         (p.topics ?? [])
           .filter((t) => t.state === "screening")
-          .map((t) => ({ business: p.business, topic: t.id, approve: true, reason: "依据充分", rank: 1 })),
+          .map((t) => ({ business: p.business, topic: t.id, approve: true, score: 8, reason: "依据充分", rank: 1 })),
       );
       d.deliveries = v.projects.flatMap((p) =>
         p.plans
@@ -294,8 +295,6 @@ test("offline week connects topics, rewrites, shared XHS cap, rabbitrun, notes a
           now,
         );
         assert.ok(stock.ready + stock.making <= 2, `${p.business} draft cap`);
-        if (now < new Date("2026-11-09T02:00:00Z"))
-          assert.ok(!p.plans.length, "no draft before synthetic chairman approval");
       }
     }
     const proofs = publicationResults(dir);

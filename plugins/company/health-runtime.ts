@@ -3,7 +3,9 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { failureKind, healthId, type HealthRuntime } from "./health.ts";
 import { localDay } from "./workday.ts";
-import { departments, type Role } from "./company.ts";
+import { type Role } from "./company.ts";
+
+import { staffAgentRole } from "./staff-model.ts";
 
 export function healthRuntime(directory: string, now: Date): HealthRuntime {
   const result: HealthRuntime = { rounds: [], employees: {}, roles: {}, cards: [] };
@@ -49,15 +51,15 @@ export function healthRuntime(directory: string, now: Date): HealthRuntime {
     const links = rows("run_events");
     const cards = rows("cards");
     for (const r of rows("runs")
-      .filter((r) => Object.hasOwn(departments, r.agent.replace(/^company-/, "")))
+      .filter((r) => staffAgentRole(r.agent))
       .sort((a, b) => b.id - a.id)
       .slice(0, 300)) {
       if (result.usageKnown && !started.has(r.id) && !r.error && r.state !== "failed") continue;
-      const role = r.agent.replace(/^company-/, "") as Role;
+      const role = staffAgentRole(r.agent)!;
       const event = links
         .filter((l) => l.run_id === r.id)
         .map((l) => events.get(l.event_id))
-        .find((e) => e?.type === `company.work.${role}`);
+        .find((e) => e?.type === `company.work.${role}` || e?.type?.startsWith(`company.work.${role}.`));
       const task = event?.subject;
       const assignment = event ? JSON.parse(event.detail).assignment : undefined;
       const notices = cards.filter((c) => c.run_id === r.id).map((c) => [c.kind, c.title, c.text]);

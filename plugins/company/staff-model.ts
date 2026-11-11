@@ -25,3 +25,9 @@ export function staffWorkType(config: CompanyConfig, directory: string, task: st
   const business = config.staffModels && taskProject(directory, task)?.business;
   return `company.work.${role}${business && config.staffModels?.[business]?.[role] ? `.${business}` : ""}`;
 }
+
+export function staffAgentRole(agent: string): Role | undefined {
+  return /^company-(?:staff-[a-z0-9][a-z0-9_-]*-)?(ceo|product|engineering|qa|growth|support|finance)$/.exec(
+    agent,
+  )?.[1] as Role | undefined;
+}

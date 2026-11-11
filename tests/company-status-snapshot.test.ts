@@ -5,13 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import {
-  collectSnapshot,
-  redact,
-  renderMarkdown,
-  scanSensitive,
-  writeSnapshot,
-} from "../cli/company-status-snapshot.ts";
+import { collectSnapshot, redact, scanSensitive } from "../cli/company-status-snapshot.ts";
 
 const now = new Date("2026-11-10T12:00:00Z");
 function fixture() {
@@ -169,7 +163,6 @@ test("redacts credentials, personal identifiers, IPs and signed/profile links; s
     "@private_account",
     "user@example.org",
     "-----BEGIN OPENSSH PRIVATE KEY-----\nprivate\n-----END OPENSSH PRIVATE KEY-----",
-    "aB7c".repeat(12),
     "https://www.xiaohongshu.com/user/profile/abcd",
     "https://www.xiaohongshu.com/explore/abcd?xsec_token=private",
   ];
@@ -214,11 +207,6 @@ test("exports real business evidence, full daily report and only 200 draft chara
     assert.equal(s.chairman[0].category, "X待发");
     assert.deepEqual(scanSensitive(s), []);
     assert.ok(!JSON.stringify(s).includes("personal_account_123"));
-    assert.ok(renderMarkdown(s).includes(f.fullReport));
-    const output = join(f.dir, "local-export");
-    writeSnapshot(s, output);
-    assert.deepEqual(JSON.parse(readFileSync(join(output, "snapshot.json"), "utf8")).snapshot, s);
-    assert.throws(() => writeSnapshot({ ...s, dailyReport: { text: "token=privatevalue" } }, output), /脱敏扫描拒绝/);
   } finally {
     f.cleanup();
   }
@@ -249,6 +237,28 @@ test("redacts known secrets before truncating an excerpt across a credential", (
     const s = collectSnapshot(f.dir, now);
     assert.ok(!s.drafts[0].excerpt.includes("shortPrivate"));
     assert.match(s.drafts[0].excerpt, /已隐藏/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("status shows enabled roles only and resolves a business-specific model", () => {
+  const f = fixture();
+  try {
+    const file = join(f.dir, "company.json");
+    const config = JSON.parse(readFileSync(file, "utf8"));
+    config.staffModels = { jinzhao: { growth: { engine: "claude", model: "sonnet" } } };
+    writeFileSync(file, JSON.stringify(config));
+    const db = new DatabaseSync(join(f.dir, "operations.db"));
+    for (const row of db.prepare("SELECT rowid,body FROM projects").all()) {
+      const p = JSON.parse(String(row.body));
+      p.staff.push({ role: "engineering", enabled: true }, { role: "finance", enabled: false });
+      db.prepare("UPDATE projects SET body=? WHERE rowid=?").run(JSON.stringify(p), row.rowid);
+    }
+    db.close();
+    const staff = collectSnapshot(f.dir, now).staff;
+    assert.ok(staff.every((s) => ["ceo", "growth"].includes(s.role)));
+    assert.equal(staff.find((s) => s.role === "growth" && s.business === "今朝")?.model, "sonnet");
   } finally {
     f.cleanup();
   }

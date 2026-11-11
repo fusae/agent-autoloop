@@ -173,3 +173,21 @@ test("forced SSH command rejects shell, sudo escape, forwarding probes and malfo
     assert.match(r.stderr, /拒绝/);
   }
 });
+
+test("publication hex filenames and ordinary paths survive while actual credential forms remain hidden", () => {
+  const root = mkdtempSync(join(tmpdir(), "company-ro-names-"));
+  const key = "0123456789abcdef".repeat(2);
+  try {
+    mkdirSync(join(root, "publications"));
+    const name = `${key}-result.json`;
+    writeFileSync(join(root, "publications", name), '{"title":"稿件"}');
+    assert.ok(readonlyQuery(root, "ls", ["publications"]).includes(name));
+    assert.equal(sanitize(`publications/${name}`), `publications/${name}`);
+    assert.equal(sanitize(key), key);
+    assert.equal(sanitize("long_normal_filename_with_many_parts.json"), "long_normal_filename_with_many_parts.json");
+    for (const secret of [`Bearer ${key}`, `token=${key}`, `sk-ant-oat01-${key}`, `ghp_${key}`])
+      assert.ok(!sanitize(secret).includes(key));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
