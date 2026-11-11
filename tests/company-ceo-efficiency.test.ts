@@ -307,3 +307,23 @@ test("Claude native schema consumes structured_output even when plan-mode prose 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("native structured-output exhaustion records a blocked report without a worker retry", () => {
+  const output =
+    JSON.stringify({ companyModel: "claude", ceoEfficiency: true, companyWork: { task: "CEO-test", assignment: 1 } }) +
+    "\n" +
+    JSON.stringify({
+      type: "result",
+      subtype: "error_max_structured_output_retries",
+      is_error: true,
+      result: "No matching structured result",
+      usage: { input_tokens: 10, output_tokens: 20 },
+    });
+  const reading = agent.read(output, 1, "");
+  assert.equal(reading.error, undefined);
+  assert.equal(reading.receiptProblem, undefined);
+  assert.equal(reading.usage?.input, 10);
+  const parsed = resultFrom(readMessage(reading.text!), {});
+  assert.equal(parsed.problem, undefined);
+  assert.equal(JSON.parse(parsed.result.events![0].detail!).verdict, "blocked");
+});

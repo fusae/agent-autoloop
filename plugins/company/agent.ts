@@ -32,12 +32,15 @@ function modelReading(
   },
   ceoEfficiency = false,
 ): Reading {
+  let structuredFailure = false;
   if (ceoEfficiency && engine === "claude")
     stdout = stdout
       .split("\n")
       .map((line) => {
         try {
           const value = JSON.parse(line);
+          if (value.type === "result" && value.subtype === "error_max_structured_output_retries")
+            structuredFailure = true;
           if (value.type === "result" && value.subtype === "success" && value.structured_output !== undefined)
             return JSON.stringify({ ...value, result: JSON.stringify(value.structured_output) });
         } catch {
@@ -48,6 +51,7 @@ function modelReading(
       .join("\n");
   const reading: Reading = (engine === "codex" ? codex : claude).read(stdout, code, stderr);
   if (reading.session) reading.session = `company:${engine}:${reading.session}`;
+  if (structuredFailure) return ceoReceiptFailure(reading, "结构化回执未通过校验", work, validation);
   if (!reading.text || reading.error) return reading;
   if (ceoEfficiency) {
     try {
@@ -215,6 +219,7 @@ function ceoReceiptFailure(
       };
   reading.text = `${summary}\n\n\`\`\`agent-autoloop\n${JSON.stringify({ events: [event] })}\n\`\`\``;
   delete reading.receiptProblem;
+  delete reading.error;
   return reading;
 }
 
