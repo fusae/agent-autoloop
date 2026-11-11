@@ -11,8 +11,7 @@ import {
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, join } from "node:path";
-import { executePublication, PublicationPending, type Publication } from "./publication.ts";
-import { verificationDelay } from "./verification.ts";
+import { executePublication, type Publication } from "./publication.ts";
 import { taskId, type Receipt } from "./company.ts";
 import type { Result } from "../../protocol/validate.ts";
 
@@ -75,9 +74,8 @@ for (const data of inputs) {
       ) {
         const results = publicationResults(directory);
         const reservations = projects.flatMap((p) => p.publishReservations ?? []);
-        const usage = publicationUsage(results, reservations, channel, new Date());
+        const usage = publicationUsage(results, reservations, channel, new Date(), directory);
         if (
-          !config.delegation &&
           (approved.publishApproval ||
             policy.alwaysConfirm ||
             usage.successes < (policy.publishApproval?.confirmFirst ?? 0)) &&
@@ -112,22 +110,8 @@ for (const data of inputs) {
       office.close();
       operations.close();
     }
-    let proof: Publication;
-    try {
-      // A timer can only read back the original frozen publication, never submit it again.
-      proof = executePublication(directory, data.publication, data.attempt > 0);
-    } catch (error) {
-      const delay = verificationDelay(data.attempt);
-      if (error instanceof PublicationPending && delay !== undefined) {
-        later.push({
-          key: timer,
-          at: new Date(Date.now() + delay).toISOString(),
-          about: JSON.stringify({ ...data, attempt: data.attempt + 1 }),
-        });
-        continue;
-      }
-      throw error;
-    }
+    // Legacy timers are lookup-only; all new readbacks finish in this invocation.
+    const proof: Publication = executePublication(directory, data.publication, data.attempt > 0);
     const artifact = `tasks/${task}/publication.json`;
     mkdirSync(join(directory, "workspace/tasks", task), { recursive: true, mode: 0o700 });
     writeFileSync(join(directory, "workspace", artifact), JSON.stringify(proof, null, 2), { mode: 0o600 });

@@ -1,7 +1,7 @@
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Company, taskId } from "./company.ts";
-import { verifyPublication, verificationDelay } from "./verification.ts";
+import { verifyPublication } from "./verification.ts";
 const [configFile, contextFile] = process.argv.slice(2),
   directory = dirname(configFile);
 const config = JSON.parse(readFileSync(configFile, "utf8")),
@@ -35,15 +35,8 @@ try {
     } catch {
       result = { state: "unknown", reason: "只读核验暂时失败" };
     }
-    const delay = verificationDelay(input.attempt);
-    if (result.state === "unknown" && delay !== undefined) {
-      later.push({
-        key: timer,
-        at: new Date(Date.now() + delay).toISOString(),
-        about: JSON.stringify({ ...input, attempt: input.attempt + 1 }),
-      });
-      continue;
-    }
+    // Compatibility for jobs queued before inline readback; no new verification timers.
+    later.push({ key: timer, cancel: true });
     const artifact = `tasks/${task.id}/verification.json`;
     if (result.state === "verified") {
       mkdirSync(join(directory, "workspace/tasks", task.id), { recursive: true });

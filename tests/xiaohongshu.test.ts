@@ -2,7 +2,7 @@
 // draft-only success is accepted, platform blank-line tabs hide a real post, or invalid images are uploaded.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -34,6 +34,7 @@ function fixture() {
     show = false,
     failPost = false;
   const call = async (path: string, body?: any): Promise<any> => {
+    if (path === "/api/v1/login/creator-status") return { is_logged_in: true, can_publish: true };
     if (path === "/api/v1/login/status") return { is_logged_in: loggedIn };
     if (path === "/api/v1/user/me")
       return {
@@ -257,6 +258,7 @@ test("frozen company delivery runs the real adapter over HTTP and replays withou
   const server=createServer(async(req,res)=>{let text='';for await(const c of req)text+=c;let data;
   if(req.headers.authorization!=='Bearer test'){res.writeHead(401);res.end('{}');return;}
   if(req.url==='/api/v1/login/status')data={is_logged_in:true,user_id:'owner'};
+  else if(req.url==='/api/v1/login/creator-status')data={is_logged_in:true,can_publish:true};
   else if(req.url==='/api/v1/user/me')data={data:{userBasicInfo:{userId:'owner'},feeds:note?[{id:'bbbbbbbbbbbbbbbbbbbbbbbb',xsecToken:'test',noteCard:{displayTitle:note.title}}]:[]}};
   else if(req.url==='/api/v1/publish'){const body=JSON.parse(text);note={noteId:'bbbbbbbbbbbbbbbbbbbbbbbb',title:body.title,desc:body.content,time:Date.now(),user:{userId:'owner'},imageList:body.images.map(()=>({}))};writeFileSync(${JSON.stringify(counter)},String(++count));data={status:'发布完成'};}
   else if(req.url==='/api/v1/feeds/detail')data={data:{note}};
@@ -329,14 +331,23 @@ test("creator login rejection survives lookup without exposing private upstream 
       return f.call(path, body);
     };
     await assert.rejects(xhsPublication(config, f.directory, request("publish"), call), /需董事长本人验证/);
-    for (const action of ["lookup", "publish"]) {
-      const result = await xhsPublication(config, f.directory, request(action), call);
-      assert.equal(result.state, "blocked");
-      assert.match(result.reason, /扫码/);
-    }
+    assert.equal((await xhsPublication(config, f.directory, request("lookup"), call)).state, "absent");
+    assert.equal((await xhsPublication(config, f.directory, request("publish"), f.call)).state, "unknown");
     assert.equal(writes, 1);
   } finally {
     f.close();
     await new Promise<void>((done) => server.close(() => done()));
   }
+});
+
+// A killed write can leave its per-draft lock, but readback must still recover the original post.
+test("a stale write lock does not block readback or a different draft", async () => {
+  const f = fixture();
+  try {
+    await xhsPublication(config, f.directory, request("publish"), f.call);
+    mkdirSync(join(f.directory, request().key + ".lock"));
+    f.show();
+    assert.equal((await xhsPublication(config, f.directory, request(), f.call)).state, "published");
+    assert.equal(f.posts(), 1);
+  } finally { f.close(); }
 });

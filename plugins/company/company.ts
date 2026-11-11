@@ -239,14 +239,13 @@ export class Company {
   }
   reconcilePublication(key: string) {
     const proof = verifiedPublication(dirname(this.config.database), key);
-    if (!proof.x) throw Error("仅核对币安回执");
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const task = this.tasks().find((t) => t.kind === "publish-content" && t.publication === key);
-      if (task?.status === "blocked") {
+      if (task && ["blocked", "active", "queued"].includes(task.status)) {
         task.status = "completed";
         task.approval = null;
-        task.reason = squareStatus(proof);
+        task.reason = proof.x ? squareStatus(proof) : `平台回读已确认发布：${proof.url}`;
         task.reports.push({
           at: proof.publishedAt,
           assignment: task.assignment,
@@ -259,6 +258,20 @@ export class Company {
         });
         this.save(task, "publication-reconciled");
       }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  publicationUnknown(key: string) {
+    const task = this.tasks().find((t) => t.kind === "publish-content" && t.publication === key);
+    if (!task || !["active", "blocked", "queued"].includes(task.status)) return;
+    task.status = "blocked";
+    task.reason = "发布结果未知：已完成3次只读复查，需人工核实；只锁本篇，不阻塞同渠道其他稿件";
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.save(task, "publication-unknown");
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -574,6 +587,7 @@ export class Company {
         );
     } else if (
       task.stage < workflows[task.kind].length - 1 &&
+      task.kind !== "publish-content" &&
       !(this.config.ceoMode && this.config.contentReview === "ceo" && task.kind === "internal-content")
     ) {
       task.stage++;

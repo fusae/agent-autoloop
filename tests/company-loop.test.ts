@@ -214,11 +214,9 @@ test("publishing worker terminal failure is reconciled, and QA retry does not in
     };
     writeFileSync(join(dir, "publications", proof.key + "-result.json"), JSON.stringify(proof));
     report(pub.subject, "pass", { publication: proof });
-    report(pub.subject, "blocked", { summary: "暂时无法读取发布链接" });
+    assert.equal(c.task(pub.subject).status, "completed");
     const retry = send("company-inbox", "company.task.retry", pub.subject, {});
-    assert.equal(retry.events?.[0].type, "company.work.qa");
-    assert.deepEqual(JSON.parse(retry.events[0].detail).previous.publication, proof);
-    report(pub.subject, "pass", { publication: proof });
+    assert.ok(!retry.events?.some((e: any) => e.type.startsWith("company.work.")), "completed readback cannot publish twice");
     tick();
     assert.equal(plan().status, "observing");
     assert.ok(

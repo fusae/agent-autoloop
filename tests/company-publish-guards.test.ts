@@ -222,12 +222,12 @@ test("two apps share one reservation and Beijing daily cap; success releases nex
       const first = plans()[0];
       restart();
       now("2026-11-07T16:01:00Z");
-      assert.equal(publishes(tick()).length, 0, "uncertain old-day attempt must reconcile before another post");
+      assert.equal(publishes(tick()).length, 1, "old unknown only locks its own draft and counts on its submission day");
       proof(first.publicationKey, "2026-11-07T16:00:30Z");
       assert.equal(publishes(tick()).length, 0, "late result uses platform's Beijing day");
       assert.notEqual(plans()[1].status, "blocked");
       now("2026-11-08T16:00:00Z");
-      assert.equal(publishes(tick()).length, 1);
+      assert.equal(publishes(tick()).length, 0, "the next draft was already dispatched, never dispatch twice");
     },
     { publishDailyLimit: 1 },
   ));
@@ -272,6 +272,8 @@ test("fixed publisher rechecks owner approval on pre-existing queued work", () =
     const receipt = c.process({ events: [{ ...event, id: "dispatch", source: "company-inbox" }], answers: [] });
     const config = JSON.parse(readFileSync(join(dir, "company.json"), "utf8"));
     config.publishApproval = { confirmFirst: 5 };
+    config.ceoMode = true;
+    config.delegation = { source: "测试授权", confirmPublish: ["jizhu"] };
     writeFileSync(join(dir, "company.json"), JSON.stringify(config));
     const path = join(dir, "context.json");
     writeFileSync(

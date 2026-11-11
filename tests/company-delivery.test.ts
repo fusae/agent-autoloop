@@ -230,7 +230,7 @@ test("internal-only acceptance closes a deliverable without claiming external ef
     assert.equal(o.executive().nextReviewAt, now.toISOString());
   }));
 
-test("only a platform receipt and independent QA allow effect observation", () =>
+test("only an inline platform readback receipt allows effect observation", () =>
   fixture(({ dir, c, decide, plan, tick, send, work }) => {
     const approved = decide({
       deliveries: [{ business: "app", plan: plan().id, task: work.subject, verdict: "publish", reason: "正文通过" }],
@@ -258,10 +258,7 @@ test("only a platform receipt and independent QA allow effect observation", () =
     writeFileSync(join(dir, "publications", request.publication + "-result.json"), JSON.stringify(proof));
     send("company-growth", "company.result", publish.subject, { ...report, assignment: 2, publication: proof });
     tick();
-    assert.equal(plan().status, "publishing");
-    assert.equal(plan().followUpAt, null);
-    send("company-qa", "company.result", publish.subject, { ...report, assignment: 3, publication: proof });
-    tick();
+    assert.equal(c.task(publish.subject).status, "completed");
     assert.equal(plan().status, "observing");
     assert.ok(plan().followUpAt);
   }));

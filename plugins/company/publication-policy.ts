@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
-import { publication, type Publication } from "./publication.ts";
+import { publication, publicationAttempt, type Publication } from "./publication.ts";
 import type { CompanyConfig } from "./company.ts";
 
 export type PublishApproval = {
@@ -99,10 +99,21 @@ export function publicationUsage(
   reservations: PublishReservation[],
   channel: string,
   now: Date,
+  directory?: string,
 ) {
   const completed = results.filter((p) => p.channel === channel);
   const pending = new Set(
-    reservations.filter((r) => r.channel === channel && !completed.some((p) => p.key === r.key)).map((r) => r.key),
+    reservations
+      .filter((r) => {
+        const attempt = directory ? publicationAttempt(directory, r.key) : undefined;
+        return (
+          r.channel === channel &&
+          !completed.some((p) => p.key === r.key) &&
+          !(attempt?.state === "absent" && r.at <= attempt.at) &&
+          publishDay(new Date(attempt?.state === "unknown" ? attempt.at : r.at)) === publishDay(now)
+        );
+      })
+      .map((r) => r.key),
   );
   return {
     successes: completed.filter((p) => !p.deleted).length,

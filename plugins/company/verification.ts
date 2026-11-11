@@ -83,6 +83,3 @@ export function verifyPublication(directory: string, key: string, read = readFee
     return { state: "unknown" as const, reason: "平台作者、正文、标题、图片数或时间与冻结稿不符" };
   return { state: "verified" as const, proof, observation };
 }
-export function verificationDelay(attempt: number) {
-  return [15 * 60000, 60 * 60000][attempt];
-}

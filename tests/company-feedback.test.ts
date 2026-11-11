@@ -130,44 +130,49 @@ test("narrow reader rejects writes and arbitrary targets, stops on access failur
     f.clean();
   }
 });
-test("verification compares actual content and program retry retains the publication, bypassing model budget", () => {
+test("publication completes after inline readback without another QA or verifier turn", () => {
   const f = fixture();
-  const config = { name: "test", database: join(f.dir, "company.db"), maxAssignments: 10, ceoMode: true };
-  let c = new Company(config),
-    sequence = 0;
-  const send = (source: string, type: string, data: any) =>
+  const c = new Company({ name: "test", database: join(f.dir, "company.db"), maxAssignments: 10, ceoMode: true });
+  try {
     c.process({
-      events: [{ id: ++sequence, source, type, subject: "P-test", detail: JSON.stringify(data) }],
+      events: [
+        {
+          id: 1,
+          source: "company-inbox",
+          type: "company.task.create",
+          subject: "P-test",
+          detail: JSON.stringify({
+            kind: "publish-content",
+            title: "标题",
+            goal: "发布",
+            acceptance: ["核验"],
+            publication: key,
+          }),
+        },
+      ],
       answers: [],
     });
-  try {
-    send("company-inbox", "company.task.create", {
-      kind: "publish-content",
-      title: "标题",
-      goal: "发布",
-      acceptance: ["核验"],
-      publication: key,
+    const receipt = c.process({
+      events: [
+        {
+          id: 2,
+          source: "company-growth",
+          type: "company.result",
+          subject: "P-test",
+          detail: JSON.stringify({
+            assignment: 1,
+            verdict: "pass",
+            summary: "已回读",
+            artifacts: ["publication.json"],
+            evidence: ["平台"],
+            publication: proof,
+          }),
+        },
+      ],
+      answers: [],
     });
-    const report = {
-      assignment: 1,
-      verdict: "pass",
-      summary: "published",
-      artifacts: ["publication.json"],
-      evidence: ["platform"],
-      publication: proof,
-    };
-    const old = send("company-growth", "company.result", report);
-    assert.ok(old.events?.some((e) => e.type === "company.work.qa"));
-    send("company-qa", "company.result", { ...report, assignment: 2, verdict: "blocked" });
-    c.close();
-    const program = { ...config, publishVerification: "program" as const, dailyModelRuns: { total: 0, qa: 0 } };
-    writeFileSync(join(f.dir, "company.json"), JSON.stringify(program));
-    c = new Company(program);
-    const resumed = send("company-inbox", "company.task.retry", {});
-    const event = resumed.events!.find((e) => e.type === "company.work.verify")!;
-    assert.ok(event);
-    assert.equal(c.task("P-test")!.stage, 1);
-    assert.equal(c.task("P-test")!.status, "active");
+    assert.equal(c.task("P-test")!.status, "completed", c.task("P-test")!.reason);
+    assert.equal(receipt.events?.filter((e) => /company.work.(qa|verify)/.test(e.type)).length ?? 0, 0);
     assert.equal(verifyPublication(f.dir, key).state, "verified");
     for (const altered of [{ title: "changed" }, { author: "wrong" }, { content: "changed" }, { images: 2 }])
       assert.equal(
@@ -175,93 +180,6 @@ test("verification compares actual content and program retry retains the publica
           .state,
         "unknown",
       );
-    writeFileSync(
-      join(f.dir, "context.json"),
-      JSON.stringify({ events: [{ ...event, source: "company-office" }], timers: [] }),
-    );
-    const run = () => {
-      const p = spawnSync(
-        process.execPath,
-        ["plugins/company/verify-run.ts", join(f.dir, "company.json"), join(f.dir, "context.json")],
-        { encoding: "utf8" },
-      );
-      assert.equal(p.status, 0, p.stderr);
-      const parsed = resultFrom(readMessage(p.stdout), {});
-      assert.equal(parsed.problem, undefined);
-      return parsed.result;
-    };
-    const passed = run();
-    assert.equal(passed.events?.length, 1);
-    assert.equal(passed.later?.length, 0);
-    send("company-verifier", "company.result", JSON.parse(passed.events![0].detail!));
-    assert.equal(c.task("P-test")!.status, "completed");
-    assert.equal(run().events?.length, 0);
-  } finally {
-    c.close();
-    f.clean();
-  }
-});
-test("unknown verification schedules two finite rechecks; access block returns to CEO immediately", () => {
-  const f = fixture(),
-    config = {
-      name: "test",
-      database: join(f.dir, "company.db"),
-      maxAssignments: 8,
-      publishVerification: "program" as const,
-      ceoMode: true,
-    };
-  const c = new Company(config);
-  let seq = 0;
-  const send = (source: string, type: string, data: any) =>
-    c.process({ events: [{ id: ++seq, source, type, subject: "P-test", detail: JSON.stringify(data) }], answers: [] });
-  try {
-    writeFileSync(join(f.dir, "company.json"), JSON.stringify(config));
-    send("company-inbox", "company.task.create", {
-      kind: "publish-content",
-      title: "标题",
-      goal: "发布",
-      acceptance: ["核验"],
-      publication: key,
-    });
-    const receipt = send("company-growth", "company.result", {
-      assignment: 1,
-      verdict: "pass",
-      summary: "published",
-      artifacts: ["publication.json"],
-      evidence: ["platform"],
-      publication: proof,
-    });
-    const event = receipt.events!.find((e) => e.type === "company.work.verify")!;
-    let context: any = { events: [{ ...event, source: "company-office" }], timers: [] };
-    writeFileSync(f.reader, 'console.log(JSON.stringify({state:"unknown",reason:"审核中"}))');
-    for (let i = 0; i < 3; i++) {
-      writeFileSync(join(f.dir, "context.json"), JSON.stringify(context));
-      const p = spawnSync(
-        process.execPath,
-        ["plugins/company/verify-run.ts", join(f.dir, "company.json"), join(f.dir, "context.json")],
-        { encoding: "utf8" },
-      );
-      assert.equal(p.status, 0, p.stderr);
-      const r = resultFrom(readMessage(p.stdout), {}).result;
-      if (i < 2) {
-        assert.equal(r.events?.length, 0);
-        assert.equal(r.later?.length, 1);
-        context = { events: [], timers: r.later };
-      } else {
-        assert.equal(r.later?.length, 0);
-        assert.equal(JSON.parse(r.events![0].detail!).verdict, "blocked");
-      }
-    }
-    writeFileSync(f.reader, 'console.log(JSON.stringify({state:"blocked",reason:"请扫码"}))');
-    writeFileSync(join(f.dir, "context.json"), JSON.stringify({ events: [{ ...event, source: "company-office" }] }));
-    const p = spawnSync(
-      process.execPath,
-      ["plugins/company/verify-run.ts", join(f.dir, "company.json"), join(f.dir, "context.json")],
-      { encoding: "utf8" },
-    );
-    const r = resultFrom(readMessage(p.stdout), {}).result;
-    assert.equal(r.later?.length, 0);
-    assert.equal(JSON.parse(r.events![0].detail!).verdict, "blocked");
   } finally {
     c.close();
     f.clean();

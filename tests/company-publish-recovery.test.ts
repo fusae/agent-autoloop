@@ -81,94 +81,29 @@ else console.log(JSON.stringify({state:fs.existsSync('attempt')?'unknown':'absen
     rmSync(dir, { recursive: true, force: true });
   }
 }
-test("unknown publication schedules two bounded readbacks and retains its original key", () =>
+test("unknown publication ends immediately without timers and replay only reads the original attempt", () =>
   fixture(({ run, mode, calls }: any) => {
     const first = run();
-    assert.deepEqual(first.events, []);
-    assert.equal(first.later.length, 1);
-    assert.ok(Math.abs(Date.parse(first.later[0].at) - Date.now() - 15 * 60000) < 10000);
+    assert.equal(JSON.parse(first.events[0].detail).verdict, "blocked");
+    assert.ok(first.later.every((t: any) => t.cancel));
     assert.deepEqual(calls(), ["lookup", "publish", "lookup"]);
-    const second = run(first.later);
-    assert.deepEqual(second.events, []);
-    assert.ok(Math.abs(Date.parse(second.later[0].at) - Date.now() - 60 * 60000) < 10000);
     mode("published");
-    const third = run(second.later);
-    assert.equal(JSON.parse(third.events[0].detail).publication.key, key);
-    assert.deepEqual(calls(), ["lookup", "publish", "lookup", "lookup", "lookup"]);
-    assert.equal(third.later[0].cancel, true);
+    const second = run([
+      {
+        key: "publish-lookup-post-1",
+        about: JSON.stringify({ task: "post", assignment: 1, publication: key, attempt: 1 }),
+      },
+    ]);
+    assert.equal(JSON.parse(second.events[0].detail).publication.key, key);
+    assert.deepEqual(calls(), ["lookup", "publish", "lookup", "lookup"]);
   }));
-test("exhaustion blocks, and absent timer reads never submit a post", () =>
-  fixture(({ run, calls }: any) => {
-    const one = run(),
-      two = run(one.later),
-      three = run(two.later);
-    assert.equal(JSON.parse(three.events[0].detail).verdict, "blocked");
-    assert.equal(three.later[0].cancel, true);
-    assert.equal(calls().filter((v: string) => v === "publish").length, 1);
-  }));
-test("preflight transport failure schedules lookup-only; stale assignment is ignored", () =>
-  fixture(({ run, mode, calls, task, saveTask }: any) => {
-    mode("error");
-    const first = run();
-    mode("unknown");
-    const second = run(first.later);
-    assert.deepEqual(calls(), ["lookup", "lookup"]);
-    task.assignment++;
-    saveTask();
-    const stale = run(second.later);
-    assert.deepEqual(stale.events, []);
-    assert.deepEqual(stale.later, []);
-    assert.equal(calls().length, 2);
-  }));
-test("login loss returns a blocker immediately without a readback timer", () =>
+test("login loss ends without a timer or a write", () =>
   fixture(({ run, mode, calls }: any) => {
     mode("login");
     const result = run();
     assert.match(JSON.parse(result.events[0].detail).summary, /扫码/);
     assert.ok(result.later.every((t: any) => t.cancel));
     assert.deepEqual(calls(), ["lookup"]);
-  }));
-
-test("scheduled publisher and verifier readbacks survive missing-report reconciliation", () =>
-  fixture(({ dir, run, task }: any) => {
-    const result = run();
-    mkdirSync(join(dir, "hub"));
-    const hub = new DatabaseSync(join(dir, "hub/hub.db"));
-    hub.exec("CREATE TABLE timers(rule TEXT,key TEXT,about TEXT,event_id INTEGER)");
-    const put = (timer: any, event: number | null = null) => {
-      hub.exec("DELETE FROM timers");
-      hub.prepare("INSERT INTO timers VALUES (?,?,?,?)").run("publish-rule", timer.key, timer.about, event);
-    };
-    const at = new Date(Date.now() - 180000).toISOString();
-    const office = { tasks: () => [task], history: () => [{ at }] } as unknown as Company;
-    const worker = {
-      id: 1,
-      rule: "publish-rule",
-      agent: "company-publisher",
-      events: [{ subject: task.id }],
-      state: "done",
-      createdAt: at,
-      finishedAt: at,
-    };
-    const reconcile = (r = worker) => failedWork(office, [r], new Date(), pendingVerifications(dir));
-    try {
-      put(result.later[0]);
-      assert.deepEqual(reconcile(), []);
-      assert.equal(reconcile({ ...worker, state: "failed" }).length, 1);
-      for (const change of [{ assignment: 2 }, { publication: "b".repeat(32) }, { task: "other" }, { attempt: 3 }]) {
-        put({ ...result.later[0], about: JSON.stringify({ ...JSON.parse(result.later[0].about), ...change }) });
-        assert.equal(reconcile().length, 1);
-      }
-      put(result.later[0], 99);
-      assert.equal(reconcile().length, 1, "consumed timers cannot hide missing final reports");
-      task.stage = 1;
-      put({ ...result.later[0], key: `verify-${task.id}-${task.assignment}` });
-      assert.deepEqual(reconcile({ ...worker, agent: "company-verifier" }), []);
-      hub.exec("DELETE FROM timers");
-      assert.equal(reconcile({ ...worker, agent: "company-verifier" }).length, 1);
-    } finally {
-      hub.close();
-    }
   }));
 
 test("business staff terminal failures reconcile without consuming live or unrelated runs", () => {

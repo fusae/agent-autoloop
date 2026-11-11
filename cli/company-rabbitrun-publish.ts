@@ -1,3 +1,4 @@
+import { readSquareAuthor } from "../plugins/binance-square/readback.ts";
 import { rabbitConfirmation } from "../plugins/company/rabbitrun-receipt.ts";
 import { readFileSync, statSync } from "node:fs";
 import { approvedRabbitRequest, rabbitQueue } from "../plugins/company/rabbitrun-bridge.ts";
@@ -31,7 +32,8 @@ try {
         return squarePublish(key, draft);
       },
       new Date(),
-      async (startedAt) => rabbitConfirmation(directory, request, startedAt),
+      async (startedAt) =>
+        rabbitConfirmation(directory, request, startedAt) ?? (await readSquareAuthor(request, startedAt)),
     );
   }
   process.stdout.write(JSON.stringify(result));

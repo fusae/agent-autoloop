@@ -13,6 +13,7 @@
 <desc>公司可选主动经营：工作日10:30复盘、15:30条件兜底，周一策略合并首轮；复用CEO动作和每日额度，结论写私有笔记及日报，每类每日去重，内核不变。</desc>
 <desc>公司只读MCP通过专用受限SSH入口读取账本、文件和服务，小红书沿用窄读取通道；输出脱敏，不调用模型或写接口，GitHub快照推送已撤除，内核不变。</desc>
 <desc>公司发布恢复只读识别既有定时核验，避免误报缺报告；恢复原稿复用原任务和渠道日额度。小红书登录以真实发布页为准，币安兼容官方分享链接，均在插件中。</desc>
+<desc>公司发布改为预检、提交、同轮回读，共用三态恢复框架；未知仅锁本篇，经营周期最多三次只读复查，旧在途数据通过外部导入接管，内核不变。</desc>
 <defs>
 <style>
 svg{--bg:#faf9f5;--ink:#1d1c19;--muted:#6e6b64;--line:#d6d3cb;--card:#fff;--item:#f4f2ec;--accent:#c2491d;--core:#1d1c19;--core-ink:#faf9f5;--core-duty:#33302a;--core-chip:#282621;--core-line:#423f38;--core-sub:#b9b5ab;--core-accent:#ef8a62;--tag-bg:#3d261c;--tag-ink:#ffb08e;--you-bg:#fff4ee}

@@ -110,7 +110,7 @@ test("lost publisher response reads back success, and lookup-only never creates 
       join(dir, "publishing.json"),
       JSON.stringify({ projects: { app: { channel: "测试平台", command: [process.execPath, script] } } }),
     );
-    assert.throws(() => executePublication(dir, key, true), /尚未确认/);
+    assert.throws(() => executePublication(dir, key, true), /确认未发布/);
     assert.equal(executePublication(dir, key).remoteId, "123");
     assert.equal(executePublication(dir, key, true).remoteId, "123");
   } finally {

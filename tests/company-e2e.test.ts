@@ -451,7 +451,7 @@ console.log('\`\`\`agent-autoloop\\n'+JSON.stringify({events:[{id:brief.task+':'
           ),
         );
         assert.equal(office.tasks().filter((t) => t.kind === "publish-content").length, 1);
-        assert.equal(office.tasks().find((t) => t.kind === "publish-content")!.assignment, 2);
+        assert.equal(office.tasks().find((t) => t.kind === "publish-content")!.assignment, 1);
       } catch (error) {
         console.error(error);
         throw new Error(`${(error as Error).message}\n${logs}`, { cause: error });

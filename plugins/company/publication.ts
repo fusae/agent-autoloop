@@ -1,3 +1,4 @@
+import { submitAndReadback, type Readback } from "./publication-readback.ts";
 import { squareLink, type OwnerConfirmation } from "./rabbitrun-receipt.ts";
 import { checkJinzhaoDelivery } from "./jinzhao-writing.ts";
 import { rabbitChannel, rabbitDraft, xReceipt, type XReceipt } from "./rabbitrun.ts";
@@ -18,6 +19,24 @@ export type Publication = {
   deleted?: { at: string; reason: string };
 };
 export class PublicationPending extends Error {}
+export class PublicationAbsent extends Error {}
+export type PublicationAttempt = {
+  key: string;
+  channel: string;
+  state: "unknown" | "absent";
+  at: string;
+  checks: number;
+  lastCycle?: number;
+  manual?: boolean;
+  reason?: string;
+};
+export function publicationAttempt(directory: string, key: string): PublicationAttempt | undefined {
+  const path = file(directory, key, "-readback");
+  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : undefined;
+}
+export function savePublicationAttempt(directory: string, attempt: PublicationAttempt) {
+  save(file(directory, attempt.key, "-readback"), attempt);
+}
 type Request = {
   key: string;
   business: string;
@@ -32,7 +51,7 @@ function file(directory: string, key: string, suffix = "") {
 }
 function save(path: string, value: unknown) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  writeFileSync(path + ".tmp", JSON.stringify(value), { mode: 0o600 });
+  writeFileSync(path + ".tmp", JSON.stringify(value), { mode: 0o600, flush: true });
   renameSync(path + ".tmp", path);
 }
 export function freezePublication(
@@ -146,7 +165,7 @@ export function executePublication(directory: string, key: string, lookupOnly = 
   const timeout = target.timeoutMs ?? 30_000;
   if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 600_000)
     throw Error("发布入口超时必须为1000–600000毫秒");
-  const call = (action: "lookup" | "publish"): any => {
+  const call = (action: "lookup" | "publish", remainingMs?: number): any => {
     // Commands come only from private operator configuration, never from CEO text or draft files.
     const result = spawnSync(
       target.command[0] === "sudo" ? "/usr/bin/sudo" : target.command[0],
@@ -154,7 +173,7 @@ export function executePublication(directory: string, key: string, lookupOnly = 
       {
         input: JSON.stringify({ ...request, channel: target.channel, action }),
         encoding: "utf8",
-        timeout,
+        timeout: action === "lookup" ? Math.min(timeout, remainingMs ?? 30_000) : timeout,
         maxBuffer: 100_000,
         cwd: directory,
         shell: false,
@@ -168,21 +187,43 @@ export function executePublication(directory: string, key: string, lookupOnly = 
       throw new PublicationPending("发布入口未返回可核验结果，不能视为发布成功");
     }
   };
-  let result = call("lookup");
-  if (result.state === "absent" && !lookupOnly) {
-    try {
-      call("publish");
-    } catch {
-      /* A lost process response does not mean the platform rejected the post. */
-    }
-    result = call("lookup");
-  }
+  const previous = publicationAttempt(directory, key);
+  const maxMs =
+    target.readbackMs ?? (request.artifacts.some((a) => /(^|\/)xiaohongshu\.json$/.test(a.path)) ? 120_000 : 0);
+  if (!Number.isInteger(maxMs) || maxMs < 0 || maxMs > 120_000) throw Error("回读时间必须为0–120000毫秒");
+  let submitted = false;
+  const result = submitAndReadback({
+    lookup: (remainingMs) => call("lookup", maxMs === 0 ? undefined : remainingMs) as Readback,
+    publish: () => call("publish") as Readback,
+    lookupOnly,
+    maxMs,
+    beforeSubmit: () => {
+      submitted = true;
+      savePublicationAttempt(directory, {
+        key,
+        channel: target.channel,
+        state: "unknown",
+        at: new Date().toISOString(),
+        checks: 0,
+      });
+    },
+  });
   if (result.state !== "published") {
     const reason =
       typeof result.reason === "string" && result.reason.trim()
         ? result.reason.slice(0, 400)
-        : "平台尚未确认发布成功，需要检查账号、审核状态或发布入口";
+        : "平台尚未确认发布成功，保留本篇编号继续只读核对";
+    savePublicationAttempt(directory, {
+      ...(previous ?? {}),
+      key,
+      channel: target.channel,
+      state: result.state === "absent" ? "absent" : "unknown",
+      at: submitted ? publicationAttempt(directory, key)!.at : (previous?.at ?? new Date().toISOString()),
+      checks: previous?.checks ?? 0,
+      reason,
+    });
     if (result.state === "blocked" || /扫码|登录已失效|账号.*不一致/.test(reason)) throw Error(reason);
+    if (result.state === "absent") throw new PublicationAbsent("平台确认未发布，可安全重试原稿");
     throw new PublicationPending(reason);
   }
   const proof = publication(result);

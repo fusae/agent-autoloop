@@ -108,9 +108,9 @@ export async function xhsPublication(
   if (config.enabled !== true) throw Error("小红书发布尚未启用，需先完成账号核验");
   if (!config.accountId) throw Error("小红书尚未绑定账号，请扫码后确认账号");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const lock = join(directory, "publisher.lock");
+  const lock = join(directory, request.key + ".lock");
   try {
-    mkdirSync(lock, { mode: 0o700 });
+    if (request.action === "publish") mkdirSync(lock, { mode: 0o700 });
   } catch {
     throw Error("小红书正在处理另一项发布；若进程异常退出，需核对平台后清理锁");
   }
@@ -165,8 +165,11 @@ export async function xhsPublication(
       };
     }
     // A missing note after a write may still be under moderation. It never authorizes another write.
-    if (saved) return saved.blockedReason ? { state: "blocked", reason: saved.blockedReason } : unknown;
+    if (saved && !saved.blockedReason) return unknown;
     if (request.action === "lookup") return { state: "absent" };
+    const creator = await call("/api/v1/login/creator-status");
+    if (creator.is_logged_in !== true || creator.can_publish !== true)
+      return { state: "absent", reason: "创作者发布页未就绪，确认尚未提交" };
     const images = draft.images.map((image, i) => {
       const path = join(
         directory,
@@ -192,6 +195,6 @@ export async function xhsPublication(
     }
     return unknown;
   } finally {
-    rmSync(lock, { recursive: true, force: true });
+    if (request.action === "publish") rmSync(lock, { recursive: true, force: true });
   }
 }

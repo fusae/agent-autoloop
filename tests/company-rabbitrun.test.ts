@@ -117,7 +117,7 @@ test("write intent survives uncertain errors and success replay; daily cap uses 
     assert.equal(first.x.state, "pending");
     assert.deepEqual(await squarePublication(dir, req, publish, now), first);
     assert.equal(calls, 1);
-    await assert.rejects(() => squarePublication(dir, request(draft, "b".repeat(32)), publish, now), /每天最多/);
+    await assert.rejects(() => squarePublication(dir, request(draft, "b".repeat(32)), publish, now), /达到一篇/);
     await assert.rejects(
       () => squarePublication(dir, request({ ...draft, content: "改过的稿" }), publish, now),
       /发生变化/,
@@ -140,9 +140,9 @@ test("write intent survives uncertain errors and success replay; daily cap uses 
     assert.equal(replay.state, "unknown");
     assert.ok(!JSON.stringify(replay).includes("secret-fixture"));
     assert.equal(calls, 1);
-    await assert.rejects(
-      () => squarePublication(dir, request(draft, "c".repeat(32)), publish, new Date("2026-11-11")),
-      /待核对/,
+    assert.equal(
+      (await squarePublication(dir, request(draft, "c".repeat(32)), publish, new Date("2026-11-11"))).state,
+      "published",
     );
   }));
 
@@ -565,11 +565,12 @@ test("Square preserves large JSON IDs, accepts a validated link receipt and reco
           return entry.response();
         }) as typeof fetch);
       const result = await squarePublication(folder, request(), send);
-      assert.equal(result.state, "unknown");
-      assert.equal((await squarePublication(folder, request(), send)).state, "unknown");
-      assert.equal(posts, 1);
+      const absent = entry.outcome === "api";
+      assert.equal(result.state, absent ? "absent" : "unknown");
+      assert.equal((await squarePublication(folder, request(), send)).state, absent ? "absent" : "unknown");
+      assert.equal(posts, absent ? 2 : 1);
       const saved = readFileSync(join(folder, key + ".json"), "utf8");
-      assert.equal(JSON.parse(saved).diagnostic.outcome, entry.outcome);
+      if (!absent) assert.equal(JSON.parse(saved).diagnostic.outcome, entry.outcome);
       assert.doesNotMatch(saved + JSON.stringify(result), /secret-fixture/);
     }
   }));
@@ -690,7 +691,7 @@ test("owner exception confirmation journals publication, unblocks its plan and u
       recoverRabbitPublications(dir, office, o, () => {
         throw Error("replay must not look up or dispatch");
       });
-      assert.equal(lookups, 1);
+      assert.equal(lookups, 0);
       assert.equal(office.task("P-test")?.status, "completed");
       assert.equal(office.history("P-test").length, 1);
       const plan = JSON.parse(String(db.prepare("SELECT body FROM projects").get()!.body)).plans[0];
@@ -926,4 +927,39 @@ test("official app share links identify the same post without following redirect
   ]) {
     assert.throws(() => squareResult({ code: "000000", data: { id: "123", shareLink } }));
   }
+});
+
+test("author profile readback requires exact author, body, time and a unique official link", async () => {
+  const { squareProfileReceipt } = await import("../plugins/binance-square/readback.ts");
+  const at = "2026-11-11T01:00:00Z";
+  const post = {
+    id: "123",
+    userInfo: { username: "author" },
+    bodyTextOnly: "标题\n正文",
+    publishTime: Date.parse(at),
+    shareLink: "https://www.binance.com/square/post/123",
+  };
+  const page = (posts: unknown[]) => `<script type="application/json">${JSON.stringify({ posts })}</script>`;
+  assert.equal(squareProfileReceipt(page([post]), "author", "标题\n正文", at)?.remoteId, "123");
+  for (const change of [
+    { userInfo: { username: "other" } },
+    { bodyTextOnly: "不同正文" },
+    { publishTime: 0 },
+    { shareLink: "https://evil.test/123" },
+  ])
+    assert.equal(squareProfileReceipt(page([{ ...post, ...change }]), "author", "标题\n正文", at), undefined);
+  assert.equal(
+    squareProfileReceipt(
+      page([post, { ...post, id: "456", shareLink: "https://www.binance.com/square/post/456" }]),
+      "author",
+      "标题\n正文",
+      at,
+    ),
+    undefined,
+  );
+  assert.equal(squareProfileReceipt("", "author", "标题\n正文", at), undefined);
+  assert.equal(
+    squareResult({ code: "000000", data: { id: "", shareLink: "https://app.binance.com/uni-qr/cpos/123" } }).remoteId,
+    "123",
+  );
 });
