@@ -21,6 +21,7 @@ export type HealthFinding = {
   reminderOnly?: boolean;
 };
 export type HealthIncident = HealthFinding & {
+  handledEvidence?: string;
   reviewVersion?: string;
   firstAt: string;
   lastAt: string;
@@ -395,25 +396,46 @@ export function detectHealth(input: {
   }
   return found;
 }
-export function reconcileHealth(state: HealthState | undefined, findings: HealthFinding[], now: Date): HealthState {
+export function ceoActionable(finding: HealthFinding | HealthIncident) {
+  return (
+    !finding.reminderOnly &&
+    !["quota", "topics", "x-overdue", "publish-failed", "auth"].includes(finding.kind) &&
+    !(
+      "actions" in finding &&
+      finding.actions.some((a) => ["observe", "escalate", "pause"].includes(a.action)) &&
+      (finding.handledEvidence === undefined || finding.handledEvidence === finding.evidence)
+    )
+  );
+}
+export function reconcileHealth(
+  state: HealthState | undefined,
+  findings: HealthFinding[],
+  now: Date,
+  decisionsOnly = false,
+): HealthState {
   const next: HealthState = structuredClone(state ?? { revision: 0, pending: false, incidents: [] });
   next.checkedAt = now.toISOString();
   for (const finding of findings) {
     let old = next.incidents.find((i) => i.id === finding.id);
     if (!old || old.resolvedAt || finding.severity > old.severity) {
-      next.revision++;
-      next.pending = true;
+      if (!decisionsOnly || ceoActionable(finding)) {
+        next.revision++;
+        next.pending = true;
+      }
     }
     if (!old) {
       old = { ...finding, firstAt: now.toISOString(), lastAt: now.toISOString(), actions: [] };
       next.incidents.push(old);
     } else {
+      if (old.resolvedAt) old.handledEvidence = "";
+      else if (old.handledEvidence === undefined && old.actions.length) old.handledEvidence = old.evidence;
       Object.assign(old, finding, { lastAt: now.toISOString() });
       delete old.resolvedAt;
     }
   }
   for (const old of next.incidents)
     if (!old.resolvedAt && !findings.some((f) => f.id === old.id)) old.resolvedAt = now.toISOString();
+  if (decisionsOnly && !next.incidents.some((i) => !i.resolvedAt && ceoActionable(i))) next.pending = false;
   return next;
 }
 export function canNotify(incident: HealthIncident, now: Date) {

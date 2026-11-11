@@ -1,3 +1,5 @@
+import { ceoWake } from "./ceo-wake.ts";
+import { ceoActionable } from "./health.ts";
 import { proactiveDue, proactiveTitles, ceoRanSince, weeklyProgress, operatingJudgment } from "./proactive.ts";
 import { reconcileMaintenance, finishMaintenance, recordMaintenance } from "./delegation.ts";
 import { chairmanTitle, delegatedReport, maintenanceList, routeDelegatedReceipt } from "./delegation.ts";
@@ -286,7 +288,11 @@ export class Operations {
     try {
       const project = this.get(frozen.business, now);
       const plan = project.plans.find((p) => p.publicationKey === key && p.deliveryDecision === "publish");
-      if (plan && ["blocked", "publishing"].includes(plan.status)) {
+      if (
+        plan &&
+        ["blocked", "publishing"].includes(plan.status) &&
+        (plan.task !== null || plan.status !== "publishing")
+      ) {
         plan.status = "publishing";
         plan.task = null;
         project.publishReservations = project.publishReservations?.filter((r) => r.key !== key);
@@ -420,6 +426,7 @@ export class Operations {
         publications: publicationResults(this.directory),
       }),
       now,
+      this.config.ceoEfficiency,
     );
     for (const incident of c.health.incidents.filter(
       (i) =>
@@ -558,6 +565,7 @@ export class Operations {
         escalate: this.config.delegation ? chairmanTitle(r.category) : "已上报董事长",
         observe: "核对证据后继续跟进",
       };
+      i.handledEvidence = i.evidence;
       i.actions.push({ at: now.toISOString(), action: r.action, result: `${labels[r.action]}：${r.reason}` });
     }
   }
@@ -1703,6 +1711,7 @@ export class Operations {
         )
           active.add(s.task);
     for (const t of tasks) {
+      if (this.config.ceoEfficiency && t.kind === "ceo" && /格式|回执/.test(t.reason)) continue;
       if (c.proactiveRounds?.some((r) => r.task === t.id && r.date < day(now))) continue;
       const report = c.eveningReports?.some((r) => r.task === t.id && r.date === day(now) && !r.processed);
       if (
@@ -1843,12 +1852,14 @@ export class Operations {
       knowledge: c.knowledge,
       sources: sourceSnapshots(this.directory),
       questions: c.questions,
-      anomalies: c.health?.incidents.filter((i) => !i.resolvedAt) ?? [],
+      anomalies:
+        c.health?.incidents.filter((i) => !i.resolvedAt && (!this.config.ceoEfficiency || ceoActionable(i))) ?? [],
       briefs: c.briefs,
       controls: {
         activeRoles: this.config.activeRoles ?? roles,
         inspections: this.config.inspections ?? true,
         ceoWake: this.config.ceoWake ?? "legacy",
+        ceoEfficiency: this.config.ceoEfficiency ?? false,
         dailyModelRuns: this.config.dailyModelRuns ?? null,
         workday: this.config.workday ?? { enabled: false, after: "09:00" },
         permissions: this.config.permissions ?? null,
@@ -1892,6 +1903,11 @@ export class Operations {
     for (const t of tasks) {
       if (!relevant.has(t.id) || t.kind === "ceo" || !["blocked", "completed"].includes(t.status)) continue;
       if (t.reports.at(-1)?.writingErrors?.length) continue;
+      if (
+        this.config.ceoEfficiency &&
+        (t.kind === "publish-content" || (t.status === "blocked" && failureKind(t.reason) === "auth"))
+      )
+        continue;
       const inspection = t.reports.at(-1)?.inspection;
       if (
         t.kind.startsWith("check-") &&
@@ -1911,7 +1927,12 @@ export class Operations {
         answers: c.answeredCards,
         ownerKnowledge: c.knowledge.filter((k) => k.source === "owner").map((k) => k.id),
         topics: businesses.map((b) => this.get(b.id, now).topics ?? []),
-        healthRevision: c.health?.revision ?? 0,
+        healthRevision: this.config.ceoEfficiency
+          ? (c.health?.incidents.filter((i) => !i.resolvedAt && ceoActionable(i)).map((i) => [i.id, i.evidence]) ?? [])
+          : (c.health?.revision ?? 0),
+        ...(this.config.ceoEfficiency
+          ? { sources: Object.entries(sourceSnapshots(this.directory)).map(([id, value]) => [id, value.revision]) }
+          : {}),
       }),
     );
   }
@@ -2282,7 +2303,14 @@ export class Operations {
     c.runs.push({ task: id, at: now.toISOString() });
     return true;
   }
-  private scheduleCEO(c: Leadership, businesses: Portfolio, tasks: Task[], receipt: Receipt, now: Date) {
+  private scheduleCEO(
+    c: Leadership,
+    businesses: Portfolio,
+    tasks: Task[],
+    receipt: Receipt,
+    now: Date,
+    types: string[] = [],
+  ) {
     const active = businesses.filter((b) => b.autonomy && b.status === "active");
     if (!active.length) return;
     const latest = tasks.find((t) => t.id === c.lastTask);
@@ -2319,7 +2347,13 @@ export class Operations {
     const healthPending = c.health?.pending;
     if (reviewing) return;
     let proactive = this.config.proactiveCEO
-      ? proactiveDue(now, c.proactiveRounds ?? [], this.config.workday?.startDate, this.config.workday?.after)
+      ? proactiveDue(
+          now,
+          c.proactiveRounds ?? [],
+          this.config.workday?.startDate,
+          this.config.workday?.after,
+          this.config.ceoEfficiency,
+        )
       : undefined;
     if (
       proactive === "followup" &&
@@ -2337,127 +2371,152 @@ export class Operations {
       });
       proactive = undefined;
     }
-    if (!proactive && c.lastTask && latest?.status !== "completed" && !pendingReview && !healthPending) return;
-    const eventInputs = this.eventInputs(c, businesses, tasks, now);
-    if (!proactive && this.config.ceoWake === "events") {
-      delete c.nextReviewAt;
-      // A pending handoff is not new evidence after this CEO's bounded recovery was exhausted.
-      if (
-        !c.lastTask &&
-        c.eventInputs === eventInputs &&
-        c.runs.some((r) => c.repairs?.[r.task]?.exhausted && tasks.some((t) => t.id === r.task && t.kind === "ceo"))
-      )
-        return;
-      if (c.eventInputs === eventInputs && !pendingReview && !healthPending) return;
-    }
-    const fingerprint = this.ceoInputs(c, businesses, tasks, now);
-    const agenda =
-      (this.dailyPlanning &&
-        active.some((b) => this.get(b.id, now).staff.some((s) => this.onDuty(s) && this.needsDailyPlan(s, now)))) ||
-      c.issues.some((i) => i.state === "open") ||
-      active.some((b) =>
-        this.get(b.id, now).plans.some(
-          (p) => p.status === "proposed" || p.status === "review" || p.status === "delivered",
-        ),
-      );
-    const unchanged = fingerprint === c.fingerprint;
     if (
+      !this.config.ceoEfficiency &&
       !proactive &&
-      unchanged &&
-      !healthPending &&
-      c.eventInputs === eventInputs &&
-      c.proactiveRounds?.some((r) => r.task === c.lastTask && r.conclusion?.startsWith("无需动作"))
+      c.lastTask &&
+      latest?.status !== "completed" &&
+      !pendingReview &&
+      !healthPending
     )
       return;
-    if (!proactive && unchanged && (this.config.ceoWake !== "events" || pendingReview)) {
-      if (!pendingReview && !(agenda && c.nextReviewAt && Date.parse(c.nextReviewAt) <= now.getTime())) return;
-      if ((c.unchangedReviews ?? 0) >= 2) {
-        if (c.stalled?.fingerprint !== fingerprint) {
-          const pending = [
-            ...c.issues.filter((i) => i.state === "open").map((i) => i.question),
-            ...active.flatMap((b) =>
-              this.get(b.id, now)
-                .plans.filter((p) => p.status === "proposed" || p.status === "review" || p.status === "delivered")
-                .map((p) => p.title),
-            ),
-            ...active.flatMap(
-              (b) =>
+    const eventInputs = this.eventInputs(c, businesses, tasks, now);
+    if (this.config.ceoEfficiency) {
+      const wake = (c.wake ??= { handled: c.eventInputs });
+      if (proactive && wake.handled === eventInputs) {
+        (c.proactiveRounds ??= []).push({
+          date: day(now),
+          kind: proactive,
+          conclusion: "已跳过：没有新信息，不调用模型",
+        });
+        proactive = undefined;
+      }
+      if (!ceoWake(wake, eventInputs, now, types)) return;
+    } else {
+      if (!proactive && this.config.ceoWake === "events") {
+        delete c.nextReviewAt;
+        // A pending handoff is not new evidence after this CEO's bounded recovery was exhausted.
+        if (
+          !c.lastTask &&
+          c.eventInputs === eventInputs &&
+          c.runs.some((r) => c.repairs?.[r.task]?.exhausted && tasks.some((t) => t.id === r.task && t.kind === "ceo"))
+        )
+          return;
+        if (c.eventInputs === eventInputs && !pendingReview && !healthPending) return;
+      }
+    }
+    const fingerprint = this.ceoInputs(c, businesses, tasks, now);
+    if (!this.config.ceoEfficiency) {
+      const agenda =
+        (this.dailyPlanning &&
+          active.some((b) => this.get(b.id, now).staff.some((s) => this.onDuty(s) && this.needsDailyPlan(s, now)))) ||
+        c.issues.some((i) => i.state === "open") ||
+        active.some((b) =>
+          this.get(b.id, now).plans.some(
+            (p) => p.status === "proposed" || p.status === "review" || p.status === "delivered",
+          ),
+        );
+      const unchanged = fingerprint === c.fingerprint;
+      if (
+        !proactive &&
+        unchanged &&
+        !healthPending &&
+        c.eventInputs === eventInputs &&
+        c.proactiveRounds?.some((r) => r.task === c.lastTask && r.conclusion?.startsWith("无需动作"))
+      )
+        return;
+      if (!proactive && unchanged && (this.config.ceoWake !== "events" || pendingReview)) {
+        if (!pendingReview && !(agenda && c.nextReviewAt && Date.parse(c.nextReviewAt) <= now.getTime())) return;
+        if ((c.unchangedReviews ?? 0) >= 2) {
+          if (c.stalled?.fingerprint !== fingerprint) {
+            const pending = [
+              ...c.issues.filter((i) => i.state === "open").map((i) => i.question),
+              ...active.flatMap((b) =>
                 this.get(b.id, now)
-                  .topics?.filter((t) => t.state === "screening")
-                  .map((t) => t.title) ?? [],
-            ),
-          ];
-          c.stalled = {
-            fingerprint,
-            at: now.toISOString(),
-            reason: `相同资料已复查两次，仍无处理结果：${pending.slice(0, 3).join("；")}`,
-          };
-          // An unanswered management blocker needs a reply path, not a terminal status notice.
-          for (const b of active) {
-            for (const p of this.get(b.id, now).plans.filter(
-              (p) => p.status === "proposed" || p.status === "review" || p.status === "delivered",
-            )) {
-              const id = hash(`stalled-plan:${p.id}:${p.status}`);
-              if (!c.issues.some((i) => i.context.startsWith(`计划 ${p.id}：`) && i.state !== "answered"))
-                c.issues.push({
-                  id: hash(`${id}:${fingerprint}`),
-                  business: b.id,
-                  role: "ceo",
-                  task: null,
-                  question: `${b.name} · ${p.title}：${p.status === "proposed" ? "CEO 未决定是否执行" : p.status === "delivered" ? "CEO 未审核已交付成果" : "CEO 未处理效果复盘"}`,
-                  context: `计划 ${p.id}：${p.result}`,
-                  state: "open",
-                  answer: null,
-                  at: now.toISOString(),
-                });
+                  .plans.filter((p) => p.status === "proposed" || p.status === "review" || p.status === "delivered")
+                  .map((p) => p.title),
+              ),
+              ...active.flatMap(
+                (b) =>
+                  this.get(b.id, now)
+                    .topics?.filter((t) => t.state === "screening")
+                    .map((t) => t.title) ?? [],
+              ),
+            ];
+            c.stalled = {
+              fingerprint,
+              at: now.toISOString(),
+              reason: `相同资料已复查两次，仍无处理结果：${pending.slice(0, 3).join("；")}`,
+            };
+            // An unanswered management blocker needs a reply path, not a terminal status notice.
+            for (const b of active) {
+              for (const p of this.get(b.id, now).plans.filter(
+                (p) => p.status === "proposed" || p.status === "review" || p.status === "delivered",
+              )) {
+                const id = hash(`stalled-plan:${p.id}:${p.status}`);
+                if (!c.issues.some((i) => i.context.startsWith(`计划 ${p.id}：`) && i.state !== "answered"))
+                  c.issues.push({
+                    id: hash(`${id}:${fingerprint}`),
+                    business: b.id,
+                    role: "ceo",
+                    task: null,
+                    question: `${b.name} · ${p.title}：${p.status === "proposed" ? "CEO 未决定是否执行" : p.status === "delivered" ? "CEO 未审核已交付成果" : "CEO 未处理效果复盘"}`,
+                    context: `计划 ${p.id}：${p.result}`,
+                    state: "open",
+                    answer: null,
+                    at: now.toISOString(),
+                  });
+              }
+            }
+            // Automatic fallback cannot distinguish a new blocker from another department's follow-up.
+            // Keep those internal when that project already has an owner decision; explicit CEO escalations still work.
+            const waitingBusinesses = new Set(
+              c.questions
+                .filter((q) => q.state === "open" || q.state === "deferred")
+                .flatMap((q) => c.issues.filter((i) => q.issues.includes(i.id)).map((i) => i.business)),
+            );
+            const issues = c.issues.filter((i) => i.state === "open" && !waitingBusinesses.has(i.business)).slice(0, 8);
+            if (issues.length) {
+              const names = [
+                ...new Set(issues.map((i) => active.find((b) => b.id === i.business)?.name ?? i.business)),
+              ];
+              const question = `项目：${names.join("、")}\n情况：CEO 两次复查仍未给出可执行方案。\n需要你决定：重新制定方案，还是暂缓？`;
+              this.applyDecision(
+                c,
+                businesses,
+                tasks,
+                {
+                  briefs: [],
+                  directives: [],
+                  approvals: [],
+                  answers: [],
+                  escalations: [
+                    {
+                      key: `stalled-${fingerprint}`,
+                      issues: issues.map((i) => i.id),
+                      question,
+                      context: [...new Set(issues.map((i) => i.question))].join("；").slice(0, 400),
+                      options: ["重新制定方案", "暂缓"],
+                    },
+                  ],
+                },
+                `stalled-${fingerprint}`,
+                c.stalled.reason,
+                receipt,
+                now,
+              );
+              c.fingerprint = this.ceoInputs(c, businesses, tasks, now);
+              c.stalled.fingerprint = c.fingerprint;
             }
           }
-          // Automatic fallback cannot distinguish a new blocker from another department's follow-up.
-          // Keep those internal when that project already has an owner decision; explicit CEO escalations still work.
-          const waitingBusinesses = new Set(
-            c.questions
-              .filter((q) => q.state === "open" || q.state === "deferred")
-              .flatMap((q) => c.issues.filter((i) => q.issues.includes(i.id)).map((i) => i.business)),
-          );
-          const issues = c.issues.filter((i) => i.state === "open" && !waitingBusinesses.has(i.business)).slice(0, 8);
-          if (issues.length) {
-            const names = [...new Set(issues.map((i) => active.find((b) => b.id === i.business)?.name ?? i.business))];
-            const question = `项目：${names.join("、")}\n情况：CEO 两次复查仍未给出可执行方案。\n需要你决定：重新制定方案，还是暂缓？`;
-            this.applyDecision(
-              c,
-              businesses,
-              tasks,
-              {
-                briefs: [],
-                directives: [],
-                approvals: [],
-                answers: [],
-                escalations: [
-                  {
-                    key: `stalled-${fingerprint}`,
-                    issues: issues.map((i) => i.id),
-                    question,
-                    context: [...new Set(issues.map((i) => i.question))].join("；").slice(0, 400),
-                    options: ["重新制定方案", "暂缓"],
-                  },
-                ],
-              },
-              `stalled-${fingerprint}`,
-              c.stalled.reason,
-              receipt,
-              now,
-            );
-            c.fingerprint = this.ceoInputs(c, businesses, tasks, now);
-            c.stalled.fingerprint = c.fingerprint;
-          }
+          return;
         }
-        return;
+      } else {
+        c.unchangedReviews = 0;
+        delete c.stalled;
       }
-    } else {
-      c.unchangedReviews = 0;
-      delete c.stalled;
+      if (unchanged && !proactive) c.unchangedReviews = (c.unchangedReviews ?? 0) + 1;
     }
-    if (unchanged && !proactive) c.unchangedReviews = (c.unchangedReviews ?? 0) + 1;
     const id = proactive ? `CEO-${day(now)}-${proactive}` : "CEO-" + hash(`${fingerprint}:${c.lastTask ?? "initial"}`);
     if (proactive) (c.proactiveRounds ??= []).push({ date: day(now), kind: proactive, task: id });
     this.writeCEOContext(c, businesses, tasks, now, join(this.directory, "workspace/knowledge/ceo.json"));
@@ -3215,8 +3274,11 @@ export class Operations {
           beforeEvents === chief.eventInputs &&
           !answers.length &&
           !events.some((e) => e.type === "company.owner.question" || e.type === "company.ceo.decision")
-        )
+        ) {
           chief.eventInputs = this.eventInputs(chief, businesses, tasks, now);
+          if (this.config.ceoEfficiency && chief.wake && chief.wake.handled === beforeEvents)
+            chief.wake.handled = chief.eventInputs;
+        }
         if (this.config.delegation) reconcileMaintenance(this.db, chief, now);
         routeDelegatedReceipt(this.db, this.config, receipt, now);
         this.weeklyRhythm(chief, businesses, tasks, receipt, now, depth <= 1);
@@ -3225,7 +3287,15 @@ export class Operations {
         const ownerConversation = events.some(
           (e) => e.source === "company-inbox" && e.type === "company.owner.question",
         );
-        if (depth <= 1 && !reporting && !ownerConversation) this.scheduleCEO(chief, businesses, tasks, receipt, now);
+        if (depth <= 1 && !reporting && !ownerConversation)
+          this.scheduleCEO(
+            chief,
+            businesses,
+            tasks,
+            receipt,
+            now,
+            events.map((e) => e.type),
+          );
         this.saveExecutive(chief);
       }
       routeDelegatedReceipt(this.db, this.config, receipt, now);

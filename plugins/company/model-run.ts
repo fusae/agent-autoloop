@@ -1,3 +1,6 @@
+import { deferCEOOwner, restoreCEOOwner } from "./ceo-owner-queue.ts";
+import { ceoDecisionSchema } from "./ceo-receipt.ts";
+import { registeredProactive } from "./proactive.ts";
 import { attachJinzhaoInputs } from "./jinzhao-writing.ts";
 import { taskProject } from "./staff-model.ts";
 import { attachWorkNotes } from "./notes.ts";
@@ -22,6 +25,10 @@ const owner = role === "ceo" && entry.job.rule.name === "CEO · 业务答复";
 const budget = new ModelBudget(dirname(configFile), config);
 const adapter = engine === "codex" ? codex : engine === "claude" ? claude : null;
 if (!adapter) throw new Error("模型入口只支持 codex 或 claude");
+if (owner && config.ceoEfficiency) {
+  const context = restoreCEOOwner(dirname(configFile), JSON.parse(readFileSync(turn.contextFile, "utf8")));
+  writeFileSync(turn.contextFile, JSON.stringify(context), { mode: 0o600 });
+}
 if (role === "ceo") {
   refreshReviewContext(dirname(configFile), config, turn, entry.repairs > 0);
   writeFileSync(file, JSON.stringify(turn), { mode: 0o600 });
@@ -41,6 +48,9 @@ if (
   writeFileSync(turn.contextFile, JSON.stringify(attachJinzhaoInputs(turn)), { mode: 0o600 });
 if (config.reporting?.weekly && !entry.repairs)
   attachWorkNotes(dirname(configFile), role, event?.subject, turn.contextFile);
+if (role === "ceo" && config.ceoEfficiency)
+  turn.prompt += `
+CEO回执schema：executive必须满足以下JSON Schema。只返回既有agent-autoloop回执，理由简短，不增加schema以外的字段；程序修正格式，不额外调用模型。${JSON.stringify(ceoDecisionSchema)}`;
 const command = adapter.command(turn);
 let allowed: boolean;
 try {
@@ -49,27 +59,32 @@ try {
   budget.close();
 }
 if (!allowed) {
-  if (!event) throw new Error("限额排队缺少原始派工记录");
-  const work = JSON.parse(event.detail);
-  process.stdout.write(
-    JSON.stringify({
-      companyDeferred: {
-        events: [
-          {
-            id: `${key}:deferred`,
-            type: "company.model.deferred",
-            subject: event.subject,
-            summary: "今日模型次数已用完，排队到明天",
-            detail: JSON.stringify({ assignment: work.assignment }),
-          },
-        ],
-      },
-    }) + "\n",
-  );
+  if (!event && owner && config.ceoEfficiency) {
+    process.stdout.write(JSON.stringify({ companyDeferred: deferCEOOwner(dirname(configFile), context) }) + "\n");
+  } else {
+    if (!event) throw new Error("限额排队缺少原始派工记录");
+    const work = JSON.parse(event.detail);
+    process.stdout.write(
+      JSON.stringify({
+        companyDeferred: {
+          events: [
+            {
+              id: `${key}:deferred`,
+              type: "company.model.deferred",
+              subject: event.subject,
+              summary: "今日模型次数已用完，排队到明天",
+              detail: JSON.stringify({ assignment: work.assignment }),
+            },
+          ],
+        },
+      }) + "\n",
+    );
+  }
 } else {
   process.stdout.write(
     JSON.stringify({
       companyModel: engine,
+      ...(role === "ceo" && config.ceoEfficiency ? { ceoEfficiency: true } : {}),
       ...(owner && config.ceoMode
         ? {
             companyValidation: {
@@ -85,6 +100,7 @@ if (!allowed) {
         ? {
             companyWork: {
               task: event.subject,
+              proactive: role === "ceo" && !!registeredProactive(dirname(configFile), event.subject),
               assignment: JSON.parse(event.detail).assignment,
               topicsPending:
                 role === "ceo" &&

@@ -176,11 +176,24 @@ export class ModelBudget {
       limits = this.config.dailyModelRuns;
     const reportDate =
       role === "ceo" && this.config.reporting?.enabled ? scheduledReport(this.directory, task) : undefined;
-    if (reportDate) return reportDate === modelDay(now);
+    if (reportDate)
+      return (
+        reportDate === modelDay(now) &&
+        (!this.config.ceoEfficiency ||
+          !this.db
+            .prepare(
+              "SELECT 1 FROM journal j WHERE kind='report-started' AND at>=? AND at<? AND NOT EXISTS (SELECT 1 FROM journal r WHERE r.id=substr(j.id,1,length(j.id)-7)||':refunded')",
+            )
+            .get(
+              new Date(reportDate + "T00:00:00+08:00").toISOString(),
+              new Date(Date.parse(reportDate + "T00:00:00+08:00") + 86400_000).toISOString(),
+            ))
+      );
     if (role === "ceo" && task) {
       const proactive = registeredProactive(this.directory, task);
       if (proactive && proactive.date !== modelDay(now)) return false;
     }
+    if (role === "ceo" && this.config.ceoEfficiency && (s.roles.ceo ?? 0) >= 14) return false;
     if (!limits) return true;
     if (s.total >= (limits.total ?? Infinity) || (s.roles[role] ?? 0) >= (limits[role] ?? Infinity)) return false;
     if (role !== "ceo" && limits.employee !== undefined) {
@@ -196,9 +209,11 @@ export class ModelBudget {
   start(role: Role, key: string, owner = false, now = new Date(), task?: string) {
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const allowed = owner || this.available(role, now, task);
+      const allowed = (owner && !this.config.ceoEfficiency) || this.available(role, now, task);
       if (allowed) {
         this.record(key, "started", now, role);
+        if (role === "ceo" && this.config.ceoEfficiency && scheduledReport(this.directory, task))
+          this.record(key + ":report", "report-started", now, role);
         const employee = this.employee(role, task);
         if (employee) this.record(key + ":employee", "employee-started", now, employee);
       }

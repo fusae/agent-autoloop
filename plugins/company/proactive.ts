@@ -12,10 +12,24 @@ export type ProactiveRound = { date: string; kind: ProactiveKind; task?: string;
 export const proactiveTitles = { strategy: "本周打法", review: "每日经营复盘", followup: "下午进度兜底" };
 export const proactivePrompt = `CEO主动经营规范 v1：仅主动经营任务适用本节，覆盖旧的仅事件唤醒限制，仍使用现有CEO动作和每日额度。先读knowledge/ceo.json、knowledge/feedback.json及feedback.md，核对昨天小红书、币安、X发布状态和效果、今朝官网下载统计、本周目标进度、员工工作笔记与在途事项；缺失或过期数据写未知，不当作零。比较此前经营判断，只根据新信息调整staffPlans、directives、选题或要求补报，不重复派工。周一首轮合并策略：先确定本周目标，再据上周数据、董事长和CEO决定记录分析什么有效、什么无效，定本周打法，随后员工开选题会。用executive.report写1–500字经营结论及依据，系统写入管理笔记和当日日报的“今日经营判断”（日报正文不重复此节）；无新信息必须简短写“无需动作”并保持动作数组为空，不安排重复唤醒。仅新增支出走现有escalations.category=spend花钱决策通道，其他在现有授权及动作范围内直接执行。主动经营规范结束。`;
 
-export function proactiveDue(now: Date, rounds: ProactiveRound[], startDate?: string, after = "09:00") {
+export function proactiveDue(
+  now: Date,
+  rounds: ProactiveRound[],
+  startDate?: string,
+  after = "09:00",
+  onceDaily = false,
+) {
   const date = localDay(now),
     weekday = new Date(date).getUTCDay();
   if (!weekday || weekday === 6 || (startDate && date < startDate)) return;
+  if (onceDaily) {
+    if (rounds.some((r) => r.date === date) || now.toISOString() >= reportTime(date, "20:30")) return;
+    return now.toISOString() >= reportTime(date, weekday === 1 ? after : "10:30")
+      ? weekday === 1
+        ? "strategy"
+        : "review"
+      : undefined;
+  }
   const at = now.toISOString();
   let kind: ProactiveKind | undefined;
   if (weekday === 1 && at >= reportTime(date, after) && at < reportTime(date, "10:30")) kind = "strategy";

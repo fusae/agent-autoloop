@@ -1,3 +1,4 @@
+import { repairCEOText } from "./ceo-receipt.ts";
 import { Operations } from "./operations.ts";
 import { Businesses } from "./business.ts";
 import { Company } from "./company.ts";
@@ -25,15 +26,24 @@ function modelReading(
   work?: {
     task: string;
     assignment: number;
+    proactive?: boolean;
     topicsPending?: boolean;
     topicRefs?: { business: string; topic: string }[];
   },
+  ceoEfficiency = false,
 ): Reading {
   const reading: Reading = (engine === "codex" ? codex : claude).read(stdout, code, stderr);
   if (reading.session) reading.session = `company:${engine}:${reading.session}`;
   if (!reading.text || reading.error) return reading;
+  if (ceoEfficiency) {
+    try {
+      reading.text = repairCEOText(reading.text, work);
+    } catch (error) {
+      return ceoReceiptFailure(reading, (error as Error).message, work, validation);
+    }
+  }
   const { result, problem } = resultFrom(readMessage(reading.text), {});
-  if (problem && !validation) return reading;
+  if (problem && !validation && !ceoEfficiency) return reading;
   try {
     if (problem) throw Error(problem);
     if (validation && (result.events ?? []).filter((e) => e.type === "company.ceo.decision").length > 1)
@@ -139,6 +149,7 @@ function modelReading(
       reading.text = `处理中，CEO 正在执行董事长决定。\n\n\`\`\`agent-autoloop\n${JSON.stringify({ events: result.events, ask: result.ask })}\n\`\`\``;
     }
   } catch (error) {
+    if (ceoEfficiency) return ceoReceiptFailure(reading, (error as Error).message, work, validation);
     if (validation && validation.repairs >= 2) {
       reading.text = `未成功，CEO 正在核对处理。\n\n\`\`\`agent-autoloop\n${JSON.stringify({
         events: [
@@ -158,6 +169,38 @@ function modelReading(
     }
     reading.receiptProblem = (error as Error).message;
   }
+  return reading;
+}
+
+function ceoReceiptFailure(
+  reading: Reading,
+  error: string,
+  work?: { task: string; assignment: number },
+  validation?: { run: number; cards: number[] },
+) {
+  const summary = `CEO回执需维护：${error}`.slice(0, 400);
+  const event = work
+    ? {
+        id: `${work.task}:${work.assignment}:result`,
+        type: "company.result",
+        subject: work.task,
+        detail: JSON.stringify({
+          assignment: work.assignment,
+          verdict: "blocked",
+          summary,
+          artifacts: [],
+          evidence: ["原始模型输出已保存在本轮日志，未执行无效动作"],
+          executive: { briefs: [], directives: [], approvals: [], answers: [], escalations: [] },
+        }),
+      }
+    : {
+        id: `decision-rejected-${validation?.run}`,
+        type: "company.ceo.decision",
+        subject: "owner",
+        detail: JSON.stringify({ summary, rejected: error.slice(0, 400), completionCards: validation?.cards ?? [] }),
+      };
+  reading.text = `${summary}\n\n\`\`\`agent-autoloop\n${JSON.stringify({ events: [event] })}\n\`\`\``;
+  delete reading.receiptProblem;
   return reading;
 }
 
@@ -203,9 +246,25 @@ export default {
     try {
       const marker = JSON.parse(first);
       if (marker.companyModel === "codex")
-        return modelReading("codex", stdout, code, stderr, marker.companyValidation, marker.companyWork);
+        return modelReading(
+          "codex",
+          stdout,
+          code,
+          stderr,
+          marker.companyValidation,
+          marker.companyWork,
+          marker.ceoEfficiency === true,
+        );
       if (marker.companyModel === "claude")
-        return modelReading("claude", stdout, code, stderr, marker.companyValidation, marker.companyWork);
+        return modelReading(
+          "claude",
+          stdout,
+          code,
+          stderr,
+          marker.companyValidation,
+          marker.companyWork,
+          marker.ceoEfficiency === true,
+        );
       if (marker.companyDeferred)
         return {
           text: `今日模型次数已用完，工作保留到明天。\n\n\`\`\`agent-autoloop\n${JSON.stringify(marker.companyDeferred)}\n\`\`\``,

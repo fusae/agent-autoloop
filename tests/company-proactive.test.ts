@@ -443,3 +443,21 @@ test("long Monday judgments survive the report's 4000-character transport limit"
     assert.match(notice.text, /今日经营判断/);
     for (const i of [0, 1, 2]) assert.ok(notice.text.includes(String(i).repeat(500)));
   }));
+
+test("efficient scheduling batches across restart, consumes its own decisions and skips proactive work without new facts", () =>
+  fixture(
+    (f) => {
+      assert.equal(f.ceo(f.tick(at("10:00"))), undefined);
+      assert.equal(f.ceo(f.tick(at("10:04"))), undefined);
+      f.restart();
+      const first = f.ceo(f.tick(at("10:05")));
+      assert.ok(first);
+      f.complete(first, at("10:06"));
+      assert.equal(f.ceo(f.tick(at("10:10"))), undefined);
+      assert.equal(f.ceo(f.tick(at("10:30"))), undefined);
+      assert.match(f.o.executive().proactiveRounds[0].conclusion, /没有新信息/);
+      assert.equal(f.ceo(f.tick(at("15:30"))), undefined);
+      assert.equal(f.o.executive().runs.length, 1);
+    },
+    { ceoEfficiency: true },
+  ));

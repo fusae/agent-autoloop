@@ -50,6 +50,7 @@ export type CompanyConfig = {
   contentReview?: "qa" | "ceo";
   dailyPlanning?: boolean;
   proactiveCEO?: boolean;
+  ceoEfficiency?: boolean;
   activeRoles?: Role[];
   inspections?: boolean;
   ceoWake?: "legacy" | "events";
@@ -183,6 +184,7 @@ export class Company {
     validatePublishPolicy(config);
     validateWorkday(config);
     validateReporting(config);
+    if (config.ceoEfficiency !== undefined && typeof config.ceoEfficiency !== "boolean") throw Error("CEO合并开关无效");
     if (config.proactiveCEO !== undefined && typeof config.proactiveCEO !== "boolean")
       throw Error("主动经营开关不正确");
     if (config.proactiveCEO && (!config.delegation || !config.workday?.enabled || !config.reporting?.enabled))

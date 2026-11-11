@@ -96,6 +96,7 @@ export type Knowledge = {
   at: string;
 };
 export type Leadership = {
+  wake?: import("./ceo-wake.ts").CEOWakeState;
   proactiveRounds?: import("./proactive.ts").ProactiveRound[];
   weeklyCycles?: import("./weekly.ts").WeeklyCycle[];
   health?: import("./health.ts").HealthState;
