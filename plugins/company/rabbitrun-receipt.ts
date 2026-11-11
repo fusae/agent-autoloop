@@ -7,9 +7,13 @@ export type SquareReceipt = { remoteId: string; url: string; confirmation?: Owne
 
 export function squareLink(value: string) {
   const u = new URL(value);
-  const id = /^\/(?:[a-z]{2}(?:-[A-Z]{2})?\/)?square\/post\/(\d{1,30})\/?$/.exec(u.pathname)?.[1];
-  if (u.protocol !== "https:" || u.hostname !== "www.binance.com" || u.port || u.username || u.password || !id)
-    throw Error("需要币安广场帖子链接");
+  const id =
+    u.hostname === "www.binance.com"
+      ? /^\/(?:[a-z]{2}(?:-[A-Z]{2})?\/)?square\/post\/(\d{1,30})\/?$/.exec(u.pathname)?.[1]
+      : u.hostname === "app.binance.com"
+        ? /^\/uni-qr\/cpos\/(\d{1,30})\/?$/.exec(u.pathname)?.[1]
+        : undefined;
+  if (u.protocol !== "https:" || u.port || u.username || u.password || !id) throw Error("需要币安广场帖子链接");
   return { remoteId: id, url: `https://www.binance.com/square/post/${id}` };
 }
 

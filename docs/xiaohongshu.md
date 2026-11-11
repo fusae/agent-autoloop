@@ -15,10 +15,32 @@
 ```sh
 node plugins/xiaohongshu/manage.ts login /private/connector.json /private/login.png
 node plugins/xiaohongshu/manage.ts status /private/connector.json
+node plugins/xiaohongshu/manage.ts preflight /private/connector.json
 node plugins/xiaohongshu/manage.ts bind /private/connector.json
 ```
 
 用户用目标小红书账号扫码后，`bind` 固定平台返回的账号编号；不凭昵称猜账号。绑定仍保持 `enabled:false`，由操作者核实账号范围、登录状态及负责人的发布授权后再设置为 `true`。不用提供密码。二维码和 cookies 不进入员工资料。
+
+`status` 只看普通账号；`preflight` 只读核对启用状态、绑定账号和创作者发布页，返回 `{"loggedIn":true,"canPublish":true}` 表示当前登录检查通过，不代表稿件已审核、平台已接收或允许绕过日额度。它只调用 GET，不上传图片、不点发布、不创建二维码、不改 cookies。
+
+### 创作者登录检查补丁
+
+v2.7.2 的 `xiaohongshu/creator_session.go:ensureCreatorSession` 原先只检查 `galaxy_creator_session_id`；缺失时打开首页等待15秒，仍没有就报登录失效。图文和视频发布都调用此处。固定发布入口另外用 `/api/v1/login/status`、`/api/v1/user/me` 核验普通账号，不能发现这个误判。
+
+2026-11-11只读排查：现有 cookies.json 与 Rod user-data 的 cookie 名称、域和有效期一致；含 `web_session`、`id_token`，均无旧 cookie。仅加载 cookies.json 的新浏览器能打开创作者首页和发布页，看到图文标签与上传控件，无登录跳转或二维码。说明旧名不是当前登录的必要条件；没有证据证明平台将它重命名成了哪个字段，不用替换、伪造或补造 cookie。
+
+补丁放在 `plugins/xiaohongshu/upstream/`，仅用于独立 Go 服务，不增加 Node 运行时依赖。发布检查和新增的鉴权 GET `/api/v1/login/creator-status` 共用真实页面判定：发布页地址、可见上传区、图文标签及文件控件都存在，且没有登录/二维码/验证提示才通过。登录明确出现才返回未登录；空白、超时、陌生页面和平台验证返回未知/需检查，不把网络故障变成董事长扫码任务。不点击、隐藏或移除平台验证元素。
+
+从上游 `539d296f5623ab1a359065d8dc74dccfb237b05a`（v2.7.2）准备独立源码目录，保留其 Apache-2.0 许可；使用 Go 1.27.3：
+
+```sh
+node plugins/xiaohongshu/prepare-upstream.ts /private/xhs-source
+cd /private/xhs-source
+XHS_TEST_BROWSER=/absolute/test-chrome go test ./...
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w -X main.version=v2.7.2-creator-page' -o server .
+```
+
+准备程序校验被替换上游文件的 SHA-256，版本不符则停止；浏览器回归拦截全部页面请求，仅返回本地固定 HTML，不访问小红书。`npm test` 还执行同一页面判定及只读预检的回归。部署先确认无运行轮次或发布请求，备份服务二进制和私有会话，仅替换该服务及改动的维护命令，重启小红书服务；上线以 `preflight` 验证。旧发布接口、错误字符串和历史发布记录保持兼容，新 `preflight` 必须配合补丁服务使用。没有待发稿时只结清登录阻塞，不能恢复或重发历史尝试。
 
 ## 图文交付
 

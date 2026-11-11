@@ -1,5 +1,5 @@
 // Failure modes: credentials escape through errors, unapproved/revised drafts publish, response loss
-// causes duplicates, the sixth post bypasses approval, or manual X confirmations bypass callback authentication, duplicate reminders or lose copyable text.
+// rejects official app share links, causes duplicates, the sixth post bypasses approval, or manual X confirmations bypass callback authentication, duplicate reminders or lose copyable text.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
@@ -906,3 +906,24 @@ test("delegated Binance bridge requires the CEO decision for the exact frozen ve
       db.close();
     }
   }));
+
+test("official app share links identify the same post without following redirects or keeping referral data", () => {
+  assert.deepEqual(
+    squareResult({
+      code: "000000",
+      data: {
+        id: "123456789012345",
+        shareLink: "https://app.binance.com/uni-qr/cpos/123456789012345?l=zh-CN&us=copylink",
+      },
+    }),
+    { remoteId: "123456789012345", url: "https://www.binance.com/square/post/123456789012345" },
+  );
+  for (const shareLink of [
+    "https://app.binance.com/uni-qr/cpos/456",
+    "https://app.binance.com.evil.test/uni-qr/cpos/123",
+    "https://evil.test@www.binance.com/zh-CN/square/post/123",
+    "https://app.binance.com/uni-qr/other/123",
+  ]) {
+    assert.throws(() => squareResult({ code: "000000", data: { id: "123", shareLink } }));
+  }
+});

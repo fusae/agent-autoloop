@@ -1,5 +1,6 @@
 // Failure modes: a delayed platform response blocks until tomorrow, timer retries publish twice,
-// exhausted lookups loop forever, stale timers affect a new assignment, or login loss is retried.
+// exhausted lookups loop forever, stale timers affect a new assignment, login loss is retried,
+// or the coordinator calls a scheduled readback a missing department report.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
@@ -7,6 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
+import { failedWork, pendingVerifications } from "../plugins/company/recovery.ts";
+import { Company } from "../plugins/company/company.ts";
 const key = "a".repeat(32);
 function fixture(fn: (f: any) => void) {
   const dir = mkdtempSync(join(tmpdir(), "publish-recovery-"));
@@ -124,4 +127,46 @@ test("login loss returns a blocker immediately without a readback timer", () =>
     assert.match(JSON.parse(result.events[0].detail).summary, /扫码/);
     assert.ok(result.later.every((t: any) => t.cancel));
     assert.deepEqual(calls(), ["lookup"]);
+  }));
+
+test("scheduled publisher and verifier readbacks survive missing-report reconciliation", () =>
+  fixture(({ dir, run, task }: any) => {
+    const result = run();
+    mkdirSync(join(dir, "hub"));
+    const hub = new DatabaseSync(join(dir, "hub/hub.db"));
+    hub.exec("CREATE TABLE timers(rule TEXT,key TEXT,about TEXT,event_id INTEGER)");
+    const put = (timer: any, event: number | null = null) => {
+      hub.exec("DELETE FROM timers");
+      hub.prepare("INSERT INTO timers VALUES (?,?,?,?)").run("publish-rule", timer.key, timer.about, event);
+    };
+    const at = new Date(Date.now() - 180000).toISOString();
+    const office = { tasks: () => [task], history: () => [{ at }] } as unknown as Company;
+    const worker = {
+      id: 1,
+      rule: "publish-rule",
+      agent: "company-publisher",
+      events: [{ subject: task.id }],
+      state: "done",
+      createdAt: at,
+      finishedAt: at,
+    };
+    const reconcile = (r = worker) => failedWork(office, [r], new Date(), pendingVerifications(dir));
+    try {
+      put(result.later[0]);
+      assert.deepEqual(reconcile(), []);
+      assert.equal(reconcile({ ...worker, state: "failed" }).length, 1);
+      for (const change of [{ assignment: 2 }, { publication: "b".repeat(32) }, { task: "other" }, { attempt: 3 }]) {
+        put({ ...result.later[0], about: JSON.stringify({ ...JSON.parse(result.later[0].about), ...change }) });
+        assert.equal(reconcile().length, 1);
+      }
+      put(result.later[0], 99);
+      assert.equal(reconcile().length, 1, "consumed timers cannot hide missing final reports");
+      task.stage = 1;
+      put({ ...result.later[0], key: `verify-${task.id}-${task.assignment}` });
+      assert.deepEqual(reconcile({ ...worker, agent: "company-verifier" }), []);
+      hub.exec("DELETE FROM timers");
+      assert.equal(reconcile({ ...worker, agent: "company-verifier" }).length, 1);
+    } finally {
+      hub.close();
+    }
   }));

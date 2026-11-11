@@ -9,7 +9,7 @@ import { scheduledReport } from "./reporting.ts";
 import { localDay } from "./workday.ts";
 import { workflows } from "./company.ts";
 import { syncOwnerReplyCards, syncTopicCards } from "./owner-replies.ts";
-import { failedWork } from "./recovery.ts";
+import { failedWork, pendingVerifications } from "./recovery.ts";
 import { hubClient } from "../../protocol/client.ts";
 import { existsSync, writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
@@ -65,7 +65,7 @@ try {
         before = Math.min(...chunk.map((r: any) => r.id));
         if (chunk.length < 20) break;
       }
-      failures = depth <= 1 ? failedWork(office, runs, now) : [];
+      failures = depth <= 1 ? failedWork(office, runs, now, pendingVerifications(dirname(configFile))) : [];
     } catch {
       /* Hub outages are already retried by the worker. */
     }

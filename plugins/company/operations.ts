@@ -2908,13 +2908,21 @@ export class Operations {
           (receipt.events?.length ?? 0) < 50 &&
           (busy().length < p.maxActive || (fixedPublication && !busy().some((a) => a.kind === "work")));
         const emit = (id: string, role: Role, kind: "check" | "work", request: ReturnType<typeof taskRequest>) => {
+          const previous = request.kind === "publish-content" ? tasks.find((t) => t.id === id) : undefined;
+          if (
+            previous &&
+            (previous.kind !== "publish-content" ||
+              previous.publication !== request.publication ||
+              !["blocked", "rejected"].includes(previous.status))
+          )
+            return;
           receipt.events ??= [];
           receipt.events.push({
-            id: `company:operations:${id}`,
-            type: "company.task.create",
+            id: `company:operations:${id}${previous ? `:retry:${previous.assignment}` : ""}`,
+            type: previous ? "company.task.retry" : "company.task.create",
             subject: id,
             summary: request.title,
-            detail: JSON.stringify(request),
+            detail: JSON.stringify(previous ? {} : request),
           });
           p.activity.push({ task: id, role, kind, at: now.toISOString() });
         };

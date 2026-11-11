@@ -1,5 +1,6 @@
 // Failure modes: shared accounts exceed the Beijing daily cap, CEO bypasses owner approval,
-// stale/replayed answers publish a revision, or pending/failed posts are mistaken for successes.
+// stale/replayed answers publish a revision, pending/failed posts are mistaken for successes,
+// or restoring an approved blocked draft emits a duplicate create instead of retrying the original task.
 import { DatabaseSync } from "node:sqlite";
 import { interactiveCard } from "../plugins/company/channel.ts";
 import { reviewVersion } from "../plugins/company/review-version.ts";
@@ -533,3 +534,48 @@ test("maintenance can return an unstarted legacy approval through the CEO decisi
       delegated.close();
     }
   }));
+
+test("an explicitly restored frozen draft retries the original task after shared daily capacity returns", () =>
+  fixture(
+    ({ dir, c, approve, publishes, tick, plans, proof, now }: any) => {
+      const event = publishes(approve(0))[0];
+      c.process({ events: [{ ...event, source: "company-inbox" }], answers: [] });
+      const task = c.task(event.subject)!;
+      c.process({
+        events: [
+          {
+            id: "blocked",
+            source: "company-inbox",
+            type: "company.task.failed",
+            subject: task.id,
+            detail: JSON.stringify({ assignment: task.assignment, reason: "创作者检查误判，已确认未提交" }),
+          },
+        ],
+        answers: [],
+      });
+      const key = plans()[0].publicationKey;
+      const db = new DatabaseSync(join(dir, "operations.db"));
+      try {
+        const row = db.prepare("SELECT body FROM projects WHERE id='jizhu'").get()!;
+        const project = JSON.parse(String(row.body));
+        const plan = project.plans.find((p: any) => p.publicationKey === key);
+        plan.status = "publishing";
+        plan.task = null;
+        project.publishReservations = [];
+        db.prepare("UPDATE projects SET body=? WHERE id='jizhu'").run(JSON.stringify(project));
+      } finally {
+        db.close();
+      }
+      proof("f".repeat(32));
+      assert.ok(!tick().events?.some((e: any) => e.subject === task.id));
+      now("2026-11-07T16:01:00Z");
+      const resumed = tick().events!.find((e: any) => e.subject === task.id)!;
+      assert.equal(resumed.type, "company.task.retry");
+      assert.equal(resumed.subject, task.id);
+      c.process({ events: [{ ...resumed, source: "company-inbox" }], answers: [] });
+      assert.equal(c.task(task.id)!.assignment, task.assignment + 1);
+      assert.equal(c.task(task.id)!.publication, key);
+      assert.ok(!tick().events?.some((e: any) => e.subject === task.id));
+    },
+    { publishDailyLimit: 1 },
+  ));

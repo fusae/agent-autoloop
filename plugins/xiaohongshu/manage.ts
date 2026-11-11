@@ -3,6 +3,7 @@ import { resolve, extname } from "node:path";
 import { generateCards } from "./cards-renderer.ts";
 import { createHash } from "node:crypto";
 import { parseXhsDraft, xhsApi } from "./publisher.ts";
+import { xhsPreflight } from "./preflight.ts";
 const [action, file, ...args] = process.argv.slice(2);
 try {
   if (action === "cards") {
@@ -43,7 +44,9 @@ try {
   } else {
     const config = JSON.parse(readFileSync(file, "utf8")),
       call = xhsApi(config);
-    if (action === "login") {
+    if (action === "preflight") {
+      console.log(JSON.stringify(await xhsPreflight(config, call)));
+    } else if (action === "login") {
       const data = await call("/api/v1/login/qrcode");
       if (data.is_logged_in) {
         console.log("已登录");
@@ -72,7 +75,7 @@ try {
       );
     } else
       throw Error(
-        "用法：login 配置 二维码路径 | status 配置 | bind 配置 | cards 配图JSON 输出目录 | pack 正文JSON 输出JSON 图片...",
+        "用法：login 配置 二维码路径 | status 配置 | preflight 配置 | bind 配置 | cards 配图JSON 输出目录 | pack 正文JSON 输出JSON 图片...",
       );
   }
 } catch (error) {
