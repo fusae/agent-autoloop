@@ -1,6 +1,7 @@
+import { jinzhaoWritingPrompt } from "./jinzhao-writing.ts";
 import { proactivePrompt } from "./proactive.ts";
 const delegationPrompt = `CEO授权规范 v1：私有company.json启用delegation时，本节替代旧规范所有董事长选题拍板、发布确认、发前预告、日常异常上报、周五索取数据和周目标方向确认要求。员工岗位和暂停状态不变，记住继续暂停。选题初筛必读对应knowledge/jinzhao-handbook.md或rabbitrun-handbook.md，五项各0–2分；executive.topicReviews每项必须带score总分0–10及reason逐项分数和理由，approve严格等于score>=7；>=7直接入选题池，<7退回员工换题，不发选题卡。存量pending批次可用topicDecisions:[{business,batch,source:"ceo",choices:[{index,approve,opinion}]}]由CEO记录决定，opinion写明理由；禁止伪造董事长消息。
-CEO审稿通过即以deliveries.publish作发布决定并记录reason，程序发布币安或小红书；不再请董事长确认、不发预告。保留合规红线、北京时间每平台每天1篇、跨业务共用账号限额、冻结稿件、回执核验和不重复发帖；X仍由董事长手动发，不调用付费API，币安发出后只发一张X待发卡，不催促，超时只在日报提一句。
+CEO审稿通过即以deliveries.publish作发布决定并记录reason，程序发布币安或小红书；仅delegation.confirmPublish列出的业务仍逐篇请董事长确认，其他业务不发预告。保留合规红线、北京时间每平台每天1篇、跨业务共用账号限额、冻结稿件、回执核验和不重复发帖；X仍由董事长手动发，不调用付费API，币安发出后只发一张X待发卡，不催促，超时只在日报提一句。
 普通故障、代码、平台、额度、部署和业务问题交外部维护者：escalations省略category或用maintenance；responses.escalate沿用code/auth/quota/platform/decision，写清证据与待处理事项。只有新增支出用category:spend，必须本人身份验证的登录用category:identity，才通知董事长。不能把普通失效凭据一律当本人验证；先交维护者排查。禁止自行购买或增加支出，独立宕机看门狗保持。周五不索要数据，缺失标未知，不能猜成0。固定程序在CEO日报附加“今天替董事长做的决定”（选题通过/退回、发布决定及理由）和“待维护者处理”摘要，CEO正文不重复这两节，正常发董事长；其他日常通知静默。授权规范结束。`;
 const topicPrompt = `选题会规范 v1：topics启用后，所有新稿先报选题、CEO初筛、董事长拍板，覆盖自主上班和提前备稿里的直接写稿要求。既有在途稿照旧，发布前确认不变。周一上班后读上周周报、自己的复盘/工作笔记和最近10篇已发，按剩余目标（扣已发和在途）+1–2备选报一批。员工在inspection.topics提交[{key,title,angle,reason,outline,app,platform,replaces?}]，分别为标题、角度、为什么写（数据/范文/热点/笔记经验）、结构、关联业务或不推App、平台；最多10条，每条约150字，整个detail≤3500字。本轮只报题，不写正文；state用idle、actions/reviews空。CEO核对去重、币圈红线、人设/定位、质量，在executive.topicReviews提交[{business,topic,approve,reason,rank}]，rank是排序1–30；退回需明确原因，员工replaces引用原id换一次，第二次不合格撤下。初筛齐后程序按业务分卡同批推送，CEO不另发重复卡。员工只有topics.state=approved且无plan的题可写，在inspection.actions添加topic:id；写作读取该题opinion（董事长意见），交付company.result也带topic:id。未拍板只可查资料，不写稿，不因等待占模型轮次。不足周目标时工作日主动补报，热点和灵感也可单报。董事长拍板统一使用 executive.topicDecisions:[{business,batch,event或card,choices:[{index:0,approve:true,opinion:"董事长原话或意见"}]}，index从0起，event为真实本人消息数字id，card为真实已答卡片编号，两者只填一个。选题卡按钮、CEO追问按钮（意见空也使用实际选项）、普通文字都是依据；保存来源消息id。topicReviews仅对state=screening做CEO初筛，绝不能退回已初筛待拍板选题。topicReplies旧文字入口兼容。“只有第4个我是满意的”通过第4题，其他保持待定；“1、3通过”逐项通过；随后“其余撤下”只退回该批剩余待定题。CEO追问须在about保留选题批次，依据原卡上下文判断范围，不得把“其余全部”误作全批。非明确决定、缺少来源或批次有歧义须询问，不能自行批准。动作被拒时在同一轮按错误纠正回执，最多两次，不发失败notice、不用resolve或首行宣称成功；落账成功才更新卡片。仍失败由巡检上报，用“你的决定X没执行成功，原因Y，需要你Z”，只在确需董事长处理时打扰。周五复盘增加选题通过率、通过选题关联的成稿和发布数据，未知不当0。选题会规范结束。`;
 import { execFileSync } from "node:child_process";
@@ -575,6 +576,7 @@ export function ensureBusinessRules(directory: string) {
     renameSync(path + ".tmp", path);
   }
   const refreshRhythm = (text: string) => {
+    text = text.replace(/\n今朝一次交付规范 v1：[\s\S]*?今朝一次交付规范结束。/g, "");
     text = text.replace(/\n海外运营规范 v1：[\s\S]*?海外运营规范结束。/g, "");
     text = text
       .replace(/\n汇报节奏 v1：[\s\S]*?汇报节奏规范结束。/g, "")
@@ -594,7 +596,8 @@ export function ensureBusinessRules(directory: string) {
       "\n" +
       rabbitrunPrompt +
       (company.delegation ? "\n" + delegationPrompt : "") +
-      (company.proactiveCEO ? "\n" + proactivePrompt : "")
+      (company.proactiveCEO ? "\n" + proactivePrompt : "") +
+      (company.jinzhaoWriting ? "\n" + jinzhaoWritingPrompt : "")
     );
   };
   let rhythmChanged = false;
@@ -615,6 +618,41 @@ export function ensureBusinessRules(directory: string) {
     const before = readFileSync(book, "utf8"),
       text = refreshRhythm(before);
     if (text !== before) writeFileSync(book, text);
+  }
+  const beforeStaff = JSON.stringify(rules);
+  // Remove only generated routing entries; the default role remains unchanged.
+  rules.rules = rules.rules.filter((r: any) => !r.name.startsWith("公司员工模型-"));
+  for (const id of Object.keys(rules.agents)) if (id.startsWith("company-staff-")) delete rules.agents[id];
+  for (const [business, models] of Object.entries(company.staffModels ?? {})) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/.test(business)) throw Error("员工模型业务编号无效");
+    for (const [role, selection] of Object.entries(models as Record<string, any>)) {
+      if (
+        !Object.hasOwn(departments, role) ||
+        !["codex", "claude"].includes(selection.engine) ||
+        typeof selection.model !== "string" ||
+        !selection.model.trim()
+      )
+        throw Error("员工模型配置无效");
+      const base = rules.rules.find((r: any) => r.name === `公司部门-${role}`);
+      if (!base) throw Error("缺少岗位规则");
+      const id = `company-staff-${business}-${role}`;
+      rules.agents[id] = {
+        ...rules.agents[base.to],
+        use: "company",
+        model: selection.model,
+        command: [companyFile, "model", role, selection.engine],
+      };
+      rules.rules.push({
+        ...base,
+        name: `公司员工模型-${business}-${role}`,
+        to: id,
+        when: { source: "company-office", types: [`company.work.${role}.${business}`] },
+      });
+    }
+  }
+  if (JSON.stringify(rules) !== beforeStaff) {
+    writeFileSync(path + ".tmp", JSON.stringify(rules, null, 2) + "\n", { mode: 0o600 });
+    renameSync(path + ".tmp", path);
   }
 }
 export const inspectionPrompt = `员工检查协议 v1：派工资料 inspection=true 时属于职责检查，以下专用格式替代普通交付要求。

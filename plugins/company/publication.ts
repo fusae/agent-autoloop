@@ -1,4 +1,5 @@
 import { squareLink, type OwnerConfirmation } from "./rabbitrun-receipt.ts";
+import { checkJinzhaoDelivery } from "./jinzhao-writing.ts";
 import { rabbitChannel, rabbitDraft, xReceipt, type XReceipt } from "./rabbitrun.ts";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
@@ -14,6 +15,7 @@ export type Publication = {
   publishedAt: string;
   x?: XReceipt;
   confirmation?: OwnerConfirmation;
+  deleted?: { at: string; reason: string };
 };
 export class PublicationPending extends Error {}
 type Request = {
@@ -45,6 +47,11 @@ export function freezePublication(
   const paths = selected ?? registered;
   if (paths.some((path) => !registered.includes(path))) throw Error("只能发布本次已验收交付中的正文文件");
   if (!paths.length) throw Error("成果缺少可审核的交付文件");
+  const configPath = join(directory, "company.json");
+  if (business === "jinzhao" && existsSync(configPath) && JSON.parse(readFileSync(configPath, "utf8")).jinzhaoWriting) {
+    const errors = checkJinzhaoDelivery(directory, paths);
+    if (errors.length) throw Error(`今朝程序检查未通过：${errors.join("；")}`);
+  }
   let size = 0;
   const artifacts = paths.map((path) => {
     const resolved = realpathSync(isAbsolute(path) ? path : join(workspace, path));
@@ -69,6 +76,11 @@ export function freezePublication(
 export function publication(value: unknown): Publication {
   const p = value as Publication;
   if (!p || !/^[a-f0-9]{32}$/.test(p.key)) throw Error("发布结果缺少审核记录");
+  if (
+    p.deleted &&
+    (!Number.isFinite(Date.parse(p.deleted.at)) || typeof p.deleted.reason !== "string" || !p.deleted.reason.trim())
+  )
+    throw Error("删除记录需要时间与原因");
   const c = p.confirmation;
   if (
     c &&
@@ -105,6 +117,7 @@ export function publication(value: unknown): Publication {
     remoteId: p.remoteId,
     url: p.url,
     publishedAt: p.publishedAt,
+    ...(p.deleted ? { deleted: { at: p.deleted.at, reason: p.deleted.reason } } : {}),
     ...(p.x ? { x: xReceipt(p.x) } : {}),
     ...(c ? { confirmation: { source: c.source, card: c.card, event: c.event, at: c.at } } : {}),
   };

@@ -1,3 +1,4 @@
+// Failure mode: delegated business confirmation is bypassed or its approved answer is erased.
 // Failure modes: shared accounts exceed the Beijing daily cap, CEO bypasses owner approval,
 // stale/replayed answers publish a revision, pending/failed posts are mistaken for successes,
 // or restoring an approved blocked draft emits a duplicate create instead of retrying the original task.
@@ -578,4 +579,19 @@ test("an explicitly restored frozen draft retries the original task after shared
       assert.ok(!tick().events?.some((e: any) => e.subject === task.id));
     },
     { publishDailyLimit: 1 },
+  ));
+
+test("delegation can retain per-business chairman confirmation across restart and answer", () =>
+  fixture(
+    ({ approve, tick, publishes, restart }: any) => {
+      const first = approve(0);
+      const card = first.ask?.find((a: any) => a.title === "发布确认");
+      assert.ok(card);
+      assert.equal(publishes(first).length, 0);
+      restart();
+      assert.equal(publishes(tick()).length, 0);
+      assert.equal(publishes(tick([{ card: 71, choice: 0, about: card.about }])).length, 1);
+      assert.equal(publishes(tick([{ card: 71, choice: 0, about: card.about }])).length, 0);
+    },
+    { delegation: { source: "授权", confirmPublish: ["jizhu"] }, publishDailyLimit: 1 },
   ));

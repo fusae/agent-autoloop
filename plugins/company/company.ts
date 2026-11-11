@@ -1,3 +1,5 @@
+import { staffWorkType, taskProject, type StaffModels } from "./staff-model.ts";
+import { checkJinzhaoDelivery } from "./jinzhao-writing.ts";
 import { registeredProactive } from "./proactive.ts";
 import { squareStatus } from "./rabbitrun-receipt.ts";
 import { taskTopic, validateTopicSubmission } from "./topics.ts";
@@ -39,6 +41,8 @@ for (const role of Object.keys(departments)) {
 }
 for (const kind of ["software", "content", "support", "finance"]) workflows[`internal-${kind}`] = [...workflows[kind]];
 export type CompanyConfig = {
+  staffModels?: StaffModels;
+  jinzhaoWriting?: boolean;
   name: string;
   database: string;
   maxAssignments: number;
@@ -50,7 +54,7 @@ export type CompanyConfig = {
   inspections?: boolean;
   ceoWake?: "legacy" | "events";
   dailyModelRuns?: Partial<Record<Role | "total" | "employee", number>>;
-  delegation?: { source: string };
+  delegation?: { source: string; confirmPublish?: string[] };
   topics?: { startAt: string };
   workday?: { enabled: boolean; after: string; startDate?: string; prepareDrafts?: boolean };
   reporting?: { enabled: boolean; weekly?: boolean };
@@ -66,6 +70,7 @@ export type Context = {
   answers: { at?: string; card: number; choice: number | null; about: string; text?: string | null }[];
 };
 export type Report = {
+  writingErrors?: string[];
   topic?: string;
   at?: string;
   dailyReport?: DailyReport;
@@ -329,7 +334,7 @@ export class Company {
         ? "company.work.verify"
         : task.kind === "publish-content" && role === "growth"
           ? "company.work.publish"
-          : `company.work.${role}`,
+          : staffWorkType(this.config, dirname(this.config.database), task.id, role),
       subject: task.id,
       summary: `${departments[role]}处理任务 ${task.id}`,
       detail,
@@ -525,6 +530,37 @@ export class Company {
       if (!task.supervised && !(this.config.ceoMode && task.kind === "ceo"))
         this.notice(receipt, id, `${task.reason}。请修正工作规范后显式 retry。`);
       return;
+    }
+    if (
+      this.config.jinzhaoWriting &&
+      role === "growth" &&
+      report.verdict === "pass" &&
+      task.kind !== "publish-content"
+    ) {
+      const project = taskProject(dirname(this.config.database), task.id);
+      const plan = project?.plans.find((p) => p.task === task.id);
+      if (
+        project?.business === "jinzhao" &&
+        plan?.kind === "content" &&
+        (!plan.operation || ["write", "image", "revise", "package"].includes(plan.operation))
+      ) {
+        const errors = checkJinzhaoDelivery(dirname(this.config.database), report.artifacts);
+        if (errors.length) {
+          const returned = task.reports.some((r) => r.writingErrors?.length);
+          task.reason = `程序退稿：${errors.join("；")}`;
+          task.reports.push({
+            ...report,
+            role,
+            verdict: "reject",
+            summary: task.reason.slice(0, 400),
+            writingErrors: errors,
+          });
+          if (returned) task.status = "blocked";
+          else this.dispatch(task, receipt, now);
+          this.save(task, "writing-returned");
+          return;
+        }
+      }
     }
     task.reports.push({ ...report, role });
     task.reason = report.summary;

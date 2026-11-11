@@ -1,3 +1,5 @@
+import { attachJinzhaoInputs } from "./jinzhao-writing.ts";
+import { taskProject } from "./staff-model.ts";
 import { attachWorkNotes } from "./notes.ts";
 import { refreshReviewContext } from "./review-context.ts";
 import { spawn } from "node:child_process";
@@ -26,7 +28,17 @@ if (role === "ceo") {
 }
 
 const context: Context = JSON.parse(readFileSync(turn.contextFile, "utf8"));
-const event = context.events.findLast((e) => e.source === "company-office" && e.type === `company.work.${role}`);
+const event = context.events.findLast(
+  (e) =>
+    e.source === "company-office" && (e.type === `company.work.${role}` || e.type.startsWith(`company.work.${role}.`)),
+);
+if (
+  config.jinzhaoWriting &&
+  role === "growth" &&
+  event &&
+  taskProject(dirname(configFile), event.subject)?.business === "jinzhao"
+)
+  writeFileSync(turn.contextFile, JSON.stringify(attachJinzhaoInputs(turn)), { mode: 0o600 });
 if (config.reporting?.weekly && !entry.repairs)
   attachWorkNotes(dirname(configFile), role, event?.subject, turn.contextFile);
 const command = adapter.command(turn);

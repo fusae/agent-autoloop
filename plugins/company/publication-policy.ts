@@ -26,6 +26,14 @@ export function validatePublishPolicy(config: Partial<CompanyConfig>) {
       config.delegation.source.length > 200)
   )
     throw Error("CEO授权需要启用CEO并记录授权来源");
+  if (
+    config.delegation?.confirmPublish !== undefined &&
+    (!Array.isArray(config.delegation.confirmPublish) ||
+      config.delegation.confirmPublish.some(
+        (id) => typeof id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/.test(id),
+      ))
+  )
+    throw Error("逐篇确认业务编号无效");
   if (config.publishPolicies !== undefined) {
     if (!config.publishPolicies || Array.isArray(config.publishPolicies) || typeof config.publishPolicies !== "object")
       throw Error("业务发布规则无效");
@@ -63,7 +71,9 @@ export function businessPublishPolicy(config: Partial<CompanyConfig>, business: 
       ? Math.min(1, policy?.dailyLimit ?? config.publishDailyLimit ?? 1)
       : (policy?.dailyLimit ?? config.publishDailyLimit),
     publishApproval: config.delegation ? { confirmFirst: 0, preview: false } : config.publishApproval,
-    alwaysConfirm: !config.delegation && policy?.alwaysConfirm === true,
+    alwaysConfirm: config.delegation
+      ? config.delegation.confirmPublish?.includes(business) === true
+      : policy?.alwaysConfirm === true,
   };
 }
 export function publicationChannel(directory: string, business: string): string | undefined {
@@ -72,7 +82,7 @@ export function publicationChannel(directory: string, business: string): string 
   const channel = JSON.parse(readFileSync(path, "utf8")).projects?.[business]?.channel;
   return typeof channel === "string" && channel.trim() ? channel : undefined;
 }
-export function publicationResults(directory: string): Publication[] {
+export function publicationResults(directory: string, includeDeleted = false): Publication[] {
   const path = join(directory, "publications");
   if (!existsSync(path)) return [];
   return readdirSync(path)
@@ -81,7 +91,8 @@ export function publicationResults(directory: string): Publication[] {
       const proof = publication(JSON.parse(readFileSync(join(path, name), "utf8")));
       if (name !== `${proof.key}-result.json`) throw Error("发布回执编号不一致");
       return proof;
-    });
+    })
+    .filter((proof) => includeDeleted || !proof.deleted);
 }
 export function publicationUsage(
   results: Publication[],
@@ -94,8 +105,8 @@ export function publicationUsage(
     reservations.filter((r) => r.channel === channel && !completed.some((p) => p.key === r.key)).map((r) => r.key),
   );
   return {
-    successes: completed.length,
-    today: completed.filter((p) => publishDay(new Date(p.publishedAt)) === publishDay(now)).length,
+    successes: completed.filter((p) => !p.deleted).length,
+    today: completed.filter((p) => !p.deleted && publishDay(new Date(p.publishedAt)) === publishDay(now)).length,
     pending: pending.size,
   };
 }

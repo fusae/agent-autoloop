@@ -20,9 +20,15 @@ export function chairmanTitle(category?: string) {
   return category === "spend" ? "CEO · 支出决策" : category === "identity" ? "CEO · 本人验证" : "待维护者处理";
 }
 export function chairmanNotice(title: string) {
-  return ["CEO · 支出决策", "CEO · 本人验证", "CEO · 日报", "CEO · 日报+周报", "CEO · 周报", "CEO · 工作汇报"].includes(
-    title,
-  );
+  return [
+    "发布确认",
+    "CEO · 支出决策",
+    "CEO · 本人验证",
+    "CEO · 日报",
+    "CEO · 日报+周报",
+    "CEO · 周报",
+    "CEO · 工作汇报",
+  ].includes(title);
 }
 export function maintenanceList(db: DatabaseSync): Maintenance[] {
   if (!db.prepare("SELECT name FROM sqlite_master WHERE name='maintenance'").get()) return [];

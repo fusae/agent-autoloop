@@ -1,3 +1,4 @@
+// Failure mode: manually deleted posts cause collection errors, inflate counts, or reappear as manual posts.
 // Failure modes: program verification invokes QA or republishes; unknown results loop forever;
 // daily collectors duplicate reads, ignore access blocks, invent zeros, fetch manual details, or mix ownership.
 import assert from "node:assert/strict";
@@ -569,6 +570,38 @@ for day,method,path,status,agent in [(9,'GET','/jinzhao/downloads/a.apk',200,'Mo
     assert.deepEqual(downloads.daily.rows, []);
     assert.equal(downloads.current.count, 1);
     assert.equal(downloads.current.partial, true);
+  } finally {
+    f.clean();
+  }
+});
+
+test("deleted posts retain idempotency receipts but are neither counted nor collected or reclassified as manual", async () => {
+  const { publicationResults, publicationUsage } = await import("../plugins/company/publication-policy.ts");
+  const { verifiedPublication } = await import("../plugins/company/publication.ts");
+  const f = fixture();
+  try {
+    writeFileSync(
+      join(f.dir, "publications", key + "-result.json"),
+      JSON.stringify({ ...proof, deleted: { at: "2026-11-08T00:00:00Z", reason: "董事长已删除" } }),
+    );
+    assert.equal(verifiedPublication(f.dir, key).remoteId, id);
+    assert.deepEqual(publicationResults(f.dir), []);
+    assert.deepEqual(
+      publicationUsage(
+        publicationResults(f.dir, true),
+        [{ key, channel: proof.channel, at: proof.publishedAt }],
+        proof.channel,
+        new Date(proof.publishedAt),
+      ),
+      { successes: 0, today: 0, pending: 0 },
+    );
+    await collectFeedback(f.dir, { manualMetrics: [] } as any, new Date("2026-11-08T02:00:00Z"), (_dir, ids) => {
+      assert.deepEqual(ids, []);
+      return { ...observation, others: [{ id, title: "已删除", likes: 2 }] } as Observation;
+    });
+    const feedback = JSON.parse(readFileSync(join(f.dir, "workspace/knowledge/feedback.json"), "utf8"));
+    assert.deepEqual(feedback.posts, []);
+    assert.deepEqual(feedback.manual, []);
   } finally {
     f.clean();
   }

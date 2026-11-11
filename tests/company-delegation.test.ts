@@ -1,3 +1,4 @@
+// Failure mode: publication confirmation cards are silently suppressed under CEO delegation.
 // Failure modes: routine escalations still ping the chairman, spending or identity requests disappear,
 // duplicate backlog records, fabricated topic authority, or reports omit the decisions and maintenance queue.
 import assert from "node:assert/strict";
@@ -122,6 +123,8 @@ test("channel suppresses unsolicited cards and replays but retains real daily re
     assert.equal(o.maintenance().length, 1);
     await bridge.deliver({ ...card, id: 13, kind: "notice", title: "CEO · 日报", state: "open" });
     assert.equal(calls.length, 1);
+    await bridge.deliver({ ...card, id: 14, title: "发布确认", options: ["发布", "退回修改", "暂缓"] });
+    assert.equal(calls.length, 2);
   } finally {
     o.close();
     rmSync(dir, { recursive: true, force: true });

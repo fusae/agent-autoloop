@@ -1,5 +1,5 @@
 import { proactiveDue, proactiveTitles, ceoRanSince, weeklyProgress, operatingJudgment } from "./proactive.ts";
-import { reconcileMaintenance, finishMaintenance } from "./delegation.ts";
+import { reconcileMaintenance, finishMaintenance, recordMaintenance } from "./delegation.ts";
 import { chairmanTitle, delegatedReport, maintenanceList, routeDelegatedReceipt } from "./delegation.ts";
 import { squareStatus } from "./rabbitrun-receipt.ts";
 import { TopicWorkflow } from "./topic-workflow.ts";
@@ -986,6 +986,15 @@ export class Operations {
         const t = tasks.find((t) => t.id === activity.task),
           report = t?.reports.at(-1);
         if (!t || !this.currentTask(p, t.id)) continue;
+        if (t.status === "blocked" && report?.writingErrors?.length) {
+          recordMaintenance(this.db, {
+            key: `writing:${t.id}:${t.assignment}`,
+            title: "今朝稿件程序检查未通过",
+            text: t.reason,
+            at: now.toISOString(),
+          });
+          continue;
+        }
         if (t.status !== "blocked" && !(t.status === "completed" && report?.inspection?.state === "blocked")) continue;
         const qs = report?.inspection?.questions?.length
           ? report.inspection.questions
@@ -1874,6 +1883,7 @@ export class Operations {
     c.eventOutcomes ??= {};
     for (const t of tasks) {
       if (!relevant.has(t.id) || t.kind === "ceo" || !["blocked", "completed"].includes(t.status)) continue;
+      if (t.reports.at(-1)?.writingErrors?.length) continue;
       const inspection = t.reports.at(-1)?.inspection;
       if (
         t.kind.startsWith("check-") &&
@@ -2492,7 +2502,7 @@ export class Operations {
       return true;
     const channel = publicationChannel(this.directory, project.business);
     if (!channel) return true;
-    const results = publicationResults(this.directory);
+    const results = publicationResults(this.directory, true);
     const reservations = this.db
       .prepare("SELECT body FROM projects")
       .all()
@@ -2502,7 +2512,7 @@ export class Operations {
       })
       .concat(project.publishReservations ?? []);
     const usage = publicationUsage(results, reservations, channel, now);
-    if (this.config.delegation) {
+    if (this.config.delegation && !policy.alwaysConfirm) {
       delete plan.publishApproval;
       delete plan.publishPreview;
     }

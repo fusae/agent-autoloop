@@ -1,0 +1,228 @@
+// Failure modes: invalid copy reaches CEO, copied image labels hide changed pixels/text,
+// nonexistent stories pass, return loops consume models, or a business override changes other employees.
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { test } from "node:test";
+import {
+  checkJinzhaoDraft,
+  checkJinzhaoDelivery,
+  attachJinzhaoInputs,
+  writingInputs,
+} from "../plugins/company/jinzhao-writing.ts";
+import { Company, type CompanyConfig } from "../plugins/company/company.ts";
+import { initialize, ensureBusinessRules } from "../plugins/company/setup.ts";
+import { freezePublication } from "../plugins/company/publication.ts";
+
+const png = Buffer.from("89504e470d0a1a0a0001", "hex");
+const digest = (b: Buffer | string) => createHash("sha256").update(b).digest("hex");
+const refs = {
+  stories: "### S1 起因\n真实故事\n### S2 做App",
+  compare: "## 原文\n\nOriginal.\n\n## App 改写版 A2\n\nI read a book.\n\n## 接口与溯源\n资料",
+  images: [{ sha256: digest(png), level: "A2" as const }],
+};
+const valid = () => ({
+  title: "我用AI做了个阅读App",
+  content: "写".repeat(310) + "目前只有安卓，感兴趣的可以私我安装。",
+  images: [
+    { mime: "image/png", base64: png.toString("base64") },
+    { mime: "image/png", base64: png.toString("base64") },
+  ],
+  stories: ["S1"],
+  comparison: { image: 1, level: "A2", rewrite: "I read a book." },
+});
+test("complete draft passes; exact inclusive body/title limits", () => {
+  assert.deepEqual(checkJinzhaoDraft(valid(), refs), []);
+  for (const n of [300, 600]) {
+    const d = valid();
+    d.title = "字".repeat(20);
+    d.content = d.content.slice(310).padStart(n, "写");
+    assert.deepEqual(checkJinzhaoDraft(d, refs), []);
+  }
+});
+for (const [name, change, expected] of [
+  ["long title", (d: any) => (d.title = "字".repeat(21)), /20字/],
+  ["question", (d: any) => (d.title = "你也想读原版吗"), /纯问句/],
+  ["question mark", (d: any) => (d.title = "读原版？"), /纯问句/],
+  ["short body", (d: any) => (d.content = "短文"), /300–600/],
+  ["long body", (d: any) => (d.content += "字".repeat(600)), /300–600/],
+  ["repeated fact", (d: any) => (d.content += "三页，三页，三页。"), /三页.*3次/],
+  ["repeated numeric fact", (d: any) => (d.content += "30%，30%，30%。"), /30%.*3次/],
+  ["too few images", (d: any) => d.images.pop(), /至少2张/],
+  ["fake image", (d: any) => (d.images[1].base64 = Buffer.from("not an image").toString("base64")), /对比图必须/],
+  ["changed rewrite", (d: any) => (d.comparison.rewrite = "I read books."), /逐字一致/],
+  ["missing comparison", (d: any) => delete d.comparison, /对比图必须/],
+  ["missing acquisition", (d: any) => (d.content = "写".repeat(330)), /获取说明/],
+  ["url", (d: any) => (d.content += "https://example.org"), /外链/],
+  ["bare url", (d: any) => (d.content += "example.org"), /外链/],
+  ["profile", (d: any) => (d.content += "主页简介"), /主页简介/],
+  ["version", (d: any) => (d.content += "v1.2.3"), /版本号/],
+  ["internal", (d: any) => (d.content += "未实测，不承诺"), /内部用语/],
+  ["unknown story", (d: any) => (d.stories = ["S99"]), /故事卡不存在/],
+  ["missing story", (d: any) => (d.stories = []), /故事卡编号/],
+] as const)
+  test(name, () => {
+    const d = valid();
+    change(d);
+    assert.match(checkJinzhaoDraft(d, refs).join("；"), expected);
+  });
+for (const phrase of [
+  "让我想明白",
+  "想通了",
+  "不是工具，而是改变",
+  "换的是书，想的是人",
+  "在意的是",
+  "给阅读留个位置",
+  "比起努力更想睡觉",
+])
+  test(`blacklist ${phrase}`, () => {
+    const d = valid();
+    d.content += phrase;
+    assert.match(checkJinzhaoDraft(d, refs).join("；"), /AI腔/);
+  });
+
+function fixture(fn: (dir: string, config: CompanyConfig, company: Company) => void) {
+  const dir = mkdtempSync(join(tmpdir(), "jinzhao-writing-"));
+  const config: CompanyConfig = {
+    name: "test",
+    database: join(dir, "company.db"),
+    maxAssignments: 6,
+    ceoMode: true,
+    contentReview: "ceo",
+    jinzhaoWriting: true,
+    staffModels: { jinzhao: { growth: { engine: "claude", model: "sonnet" } } },
+  };
+  mkdirSync(join(dir, "workspace/tasks/write"), { recursive: true });
+  mkdirSync(join(dir, "workspace/knowledge/assets/jinzhao-compare"), { recursive: true });
+  writeFileSync(join(dir, "company.json"), JSON.stringify(config));
+  writeFileSync(
+    join(dir, "jinzhao-writing-assets.json"),
+    JSON.stringify({ compareSha256: digest(refs.compare), images: refs.images }),
+  );
+  for (const name of writingInputs)
+    writeFileSync(
+      join(dir, "workspace/knowledge", name),
+      name.includes("compare.md") ? refs.compare : name.includes("stories") ? refs.stories : "参考资料",
+    );
+  const db = new DatabaseSync(join(dir, "operations.db"));
+  db.exec("CREATE TABLE projects(id TEXT PRIMARY KEY,body TEXT NOT NULL)");
+  db.prepare("INSERT INTO projects VALUES (?,?)").run(
+    "jinzhao",
+    JSON.stringify({
+      business: "jinzhao",
+      activity: [],
+      plans: [{ id: "plan", task: "write", kind: "content", operation: "write" }],
+    }),
+  );
+  db.close();
+  const c = new Company(config);
+  try {
+    fn(dir, config, c);
+  } finally {
+    c.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("program return goes straight to writer once, replay is idempotent, passing draft reaches CEO then freezes", () =>
+  fixture((dir, config, c) => {
+    const send = (id: number, source: string, type: string, data: object) =>
+      c.process({ events: [{ id, source, type, subject: "write", detail: JSON.stringify(data) }], answers: [] });
+    const started = send(1, "company-inbox", "company.task.create", {
+      title: "稿件",
+      kind: "internal-content",
+      goal: "写稿",
+      acceptance: ["完整图文"],
+    });
+    assert.equal(started.events?.[0].type, "company.work.growth.jinzhao");
+    const path = "tasks/write/xiaohongshu.json";
+    writeFileSync(join(dir, "workspace", path), JSON.stringify({ ...valid(), title: "纯问句？" }));
+    const report = { assignment: 1, verdict: "pass", summary: "稿件完成", artifacts: [path], evidence: ["已自查"] };
+    const returned = send(2, "company-growth", "company.result", report);
+    assert.equal(c.task("write")?.status, "active");
+    assert.equal(returned.events?.[0].type, "company.work.growth.jinzhao");
+    assert.match(returned.events![0].detail, /纯问句/);
+    send(2, "company-growth", "company.result", report);
+    assert.equal(c.task("write")?.assignment, 2);
+    writeFileSync(join(dir, "workspace", path), JSON.stringify(valid()));
+    send(3, "company-growth", "company.result", { ...report, assignment: 2 });
+    assert.equal(c.task("write")?.status, "completed");
+    assert.equal(c.task("write")?.reports.length, 2);
+    assert.match(freezePublication(dir, "jinzhao", "plan", c.task("write")!), /^[a-f0-9]{32}$/);
+    writeFileSync(join(dir, "workspace", path), JSON.stringify({ ...valid(), stories: ["S99"] }));
+    assert.throws(() => freezePublication(dir, "jinzhao", "plan", c.task("write")!), /程序检查未通过/);
+  }));
+
+test("second failure stops automatic returns and keeps concrete reasons", () =>
+  fixture((dir, config, c) => {
+    const send = (id: number, source: string, type: string, data: object) =>
+      c.process({ events: [{ id, source, type, subject: "write", detail: JSON.stringify(data) }], answers: [] });
+    send(1, "company-inbox", "company.task.create", {
+      title: "稿件",
+      kind: "staff-growth",
+      goal: "写稿",
+      acceptance: ["完整图文"],
+    });
+    const path = "tasks/write/xiaohongshu.json";
+    writeFileSync(join(dir, "workspace", path), JSON.stringify({ ...valid(), title: "纯问句？" }));
+    for (const n of [1, 2])
+      send(n + 1, "company-growth", "company.result", {
+        assignment: n,
+        verdict: "pass",
+        summary: "完成",
+        artifacts: [path],
+        evidence: ["自查"],
+      });
+    assert.equal(c.task("write")?.status, "blocked");
+    assert.equal(c.task("write")?.assignment, 2);
+    assert.match(c.task("write")!.reason, /纯问句/);
+  }));
+
+test("fixed inputs are in context; forged reference and outside artifact fail closed", () =>
+  fixture((dir) => {
+    const contextFile = join(dir, "context.json");
+    writeFileSync(contextFile, '{"events":[]}');
+    const context = attachJinzhaoInputs({ cwd: join(dir, "workspace"), contextFile } as any);
+    assert.deepEqual(Object.keys(context.jinzhaoWriting), writingInputs);
+    const file = "tasks/write/xiaohongshu.json";
+    writeFileSync(join(dir, "workspace", file), JSON.stringify(valid()));
+    assert.deepEqual(checkJinzhaoDelivery(dir, [file]), []);
+    writeFileSync(join(dir, "workspace/knowledge/assets/jinzhao-compare/compare.md"), "forged");
+    assert.match(checkJinzhaoDelivery(dir, [file]).join(), /已核对版本/);
+    writeFileSync(join(dir, "xiaohongshu.json"), JSON.stringify(valid()));
+    assert.match(checkJinzhaoDelivery(dir, [join(dir, "xiaohongshu.json")]).join(), /工作区内/);
+  }));
+
+test("business model rule keeps default employees, shared lane and result source, and upgrades idempotently", () => {
+  const root = mkdtempSync(join(tmpdir(), "jinzhao-routing-"));
+  const dir = join(root, "company");
+  try {
+    const rules = initialize(dir);
+    mkdirSync(join(dir, "hub"));
+    writeFileSync(join(dir, "hub/rules.json"), JSON.stringify(rules));
+    const config = JSON.parse(readFileSync(join(dir, "company.json"), "utf8"));
+    Object.assign(config, {
+      dailyModelRuns: { total: 20 },
+      jinzhaoWriting: true,
+      staffModels: { jinzhao: { growth: { engine: "claude", model: "sonnet" } } },
+    });
+    writeFileSync(join(dir, "company.json"), JSON.stringify(config));
+    ensureBusinessRules(dir);
+    const next = JSON.parse(readFileSync(join(dir, "hub/rules.json"), "utf8"));
+    assert.equal(next.agents["company-growth"].command[3], "codex");
+    assert.equal(next.agents["company-staff-jinzhao-growth"].command[3], "claude");
+    assert.equal(next.agents["company-staff-jinzhao-growth"].model, "sonnet");
+    const rule = next.rules.find((r: any) => r.to === "company-staff-jinzhao-growth");
+    const base = next.rules.find((r: any) => r.name === "公司部门-growth");
+    assert.equal(rule.group, base.group);
+    assert.deepEqual(rule.emits, base.emits);
+    assert.match(rule.prompt, /今朝一次交付规范/);
+    ensureBusinessRules(dir);
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "hub/rules.json"), "utf8")), next);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

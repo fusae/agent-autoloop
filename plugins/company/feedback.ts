@@ -134,7 +134,11 @@ export async function collectFeedback(
     }
     save(stateFile, state);
     const days: Daily[] = state.days;
-    const systemIds = new Set(publications.filter((p) => !p.x).map((p) => p.remoteId));
+    const systemIds = new Set(
+      publicationResults(directory, true)
+        .filter((p) => !p.x)
+        .map((p) => p.remoteId),
+    );
     const manualById = new Map<string, ManualPost>();
     for (const d of days.slice().sort((a, b) => a.at.localeCompare(b.at))) {
       if (d.observation.state !== "ready") continue;
