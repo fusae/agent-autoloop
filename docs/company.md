@@ -541,7 +541,7 @@ CEO对话动作在交回执前校验，被拒时复用原轮次最多修正两�
 
 私有 `company.json` 启用 `delegation:{"source":"董事长授权，CEO决定"}`（需 `ceoMode:true`）后，以下规则覆盖本文旧的董事长审批和提醒流程；未启用仍兼容旧行为。授权来源只来自可信配置，事件文字不能授予权限。
 
-- 选题：CEO 读对应 `jinzhao-handbook.md` / `rabbitrun-handbook.md`，`topicReviews` 新增 `score`（0–10 整数），`reason` 记录五项评分及理由。`approve` 必须与总分 ≥7 一致；通过直接入池，低分退回换题，不发选题卡。存量待拍板批次允许 `topicDecisions.source:"ceo"`，记录理由与配置中的授权来源，不冒充本人消息。
+- 选题：CEO 读对应 `jinzhao-handbook.md` / `rabbitrun-handbook.md`；今朝还须同时读 `jinzhao-stories.md`，报题的 `reason` 写“引用故事卡：S编号”及事实依据，初筛和审稿核对相符，缺引用或引用不符退回（真实性项记 0 分、总分最高 6 分）。`topicReviews` 新增 `score`（0–10 整数），`reason` 记录五项评分及理由。`approve` 必须与总分 ≥7 一致；通过直接入池，低分退回换题，不发选题卡。存量待拍板批次允许 `topicDecisions.source:"ceo"`，记录理由与配置中的授权来源，不冒充本人消息。
 - 发布：CEO 审稿 `deliveries.publish` 即发布决定，理由进入原决定日志。固定程序核对冻结稿和 CEO 决定；取消逐篇确认与发前预告，保留合规红线、北京时间每平台每日最多一篇、共用账号限额、预留、回执核验及去重。暂停业务保持暂停；不扩大模型的账号、凭据或发布命令权限。
 - X：仍由董事长手动发；币安回执后唯一一张 X 待发卡及本人确认按钮保持，不单独催促。超时仅在日报汇总一句。
 - 上报：普通 `escalations` 和巡检 `responses.escalate` 写入私有经营库的“待维护者处理”，后台 CEO 页面可见。仅显式 `category:"spend"`（新增支出）或 `"identity"`（必须本人验证）发董事长飞书；普通认证故障先交维护者，不能把所有 `auth` 当本人验证。独立服务宕机看门狗不变。维护清单与经营日志同事务保存并按键去重，非允许类别的新增通道卡片静默登记，旧卡完成状态可原地更新。
