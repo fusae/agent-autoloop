@@ -1,5 +1,5 @@
 import { deferCEOOwner, restoreCEOOwner } from "./ceo-owner-queue.ts";
-import { ceoDecisionSchema } from "./ceo-receipt.ts";
+import { ceoDecisionSchema, ceoReceiptSchema } from "./ceo-receipt.ts";
 import { registeredProactive } from "./proactive.ts";
 import { attachJinzhaoInputs } from "./jinzhao-writing.ts";
 import { taskProject } from "./staff-model.ts";
@@ -50,8 +50,12 @@ if (config.reporting?.weekly && !entry.repairs)
   attachWorkNotes(dirname(configFile), role, event?.subject, turn.contextFile);
 if (role === "ceo" && config.ceoEfficiency)
   turn.prompt += `
-CEO回执schema：executive必须满足以下JSON Schema。只返回既有agent-autoloop回执，理由简短，不增加schema以外的字段；程序修正格式，不额外调用模型。${JSON.stringify(ceoDecisionSchema)}`;
+CEO回执schema：executive必须满足以下JSON Schema。只返回既有agent-autoloop回执，理由简短，不增加schema以外的字段；在只读模式中提交回执就是返回数据，不是写文件或执行发布，不需要退出规划模式或额外批准。程序修正格式，不额外调用模型。${JSON.stringify(ceoDecisionSchema)}`;
 const command = adapter.command(turn);
+if (role === "ceo" && config.ceoEfficiency && engine === "claude") {
+  const work = event ? { task: event.subject, assignment: JSON.parse(event.detail).assignment } : undefined;
+  command.push("--json-schema", JSON.stringify(ceoReceiptSchema(work)));
+}
 let allowed: boolean;
 try {
   allowed = budget.start(role as Role, key, owner, new Date(), event?.subject);

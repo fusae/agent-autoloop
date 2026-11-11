@@ -32,6 +32,20 @@ function modelReading(
   },
   ceoEfficiency = false,
 ): Reading {
+  if (ceoEfficiency && engine === "claude")
+    stdout = stdout
+      .split("\n")
+      .map((line) => {
+        try {
+          const value = JSON.parse(line);
+          if (value.type === "result" && value.subtype === "success" && value.structured_output !== undefined)
+            return JSON.stringify({ ...value, result: JSON.stringify(value.structured_output) });
+        } catch {
+          /* Non-JSON progress lines remain available to the adapter. */
+        }
+        return line;
+      })
+      .join("\n");
   const reading: Reading = (engine === "codex" ? codex : claude).read(stdout, code, stderr);
   if (reading.session) reading.session = `company:${engine}:${reading.session}`;
   if (!reading.text || reading.error) return reading;

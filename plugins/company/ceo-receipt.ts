@@ -1,3 +1,4 @@
+import { schemas } from "../../protocol/schema.ts";
 import { permissions } from "./workday.ts";
 import { executiveDecision } from "./executive.ts";
 
@@ -154,6 +155,51 @@ export const ceoDecisionSchema: Schema = object(
   },
   ["briefs", "directives", "approvals", "answers", "escalations"],
 );
+
+// The CLI's structured result is data; the worker still validates the ordinary receipt and its authority.
+export function ceoReceiptSchema(work?: { task: string; assignment: number }) {
+  const detail = object(
+    {
+      summary: text(400),
+      executive: ceoDecisionSchema,
+      ...(work
+        ? {
+            assignment: { type: "integer", enum: [work.assignment] } as Schema,
+            verdict: choice("pass", "revise", "blocked"),
+            artifacts: list(text(150), 10),
+            evidence: list(text(150), 10),
+            dailyReport: object({ done: text(180), result: text(180), blockers: text(180), tomorrow: text(180) }),
+            retrospective: object({ review: text(1800), notes: text(4000), through: integer }),
+          }
+        : {}),
+    },
+    work ? ["assignment", "verdict", "summary", "artifacts", "evidence", "executive"] : ["summary", "executive"],
+  );
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      events: {
+        type: "array",
+        minItems: work ? 1 : 0,
+        maxItems: 1,
+        items: object({
+          id: text(100),
+          type: choice(work ? "company.result" : "company.ceo.decision"),
+          subject: choice(work?.task ?? "owner"),
+          detail,
+        }),
+      },
+      ...Object.fromEntries(
+        ["ask", "notice", "resolve"].map((k) => [
+          k,
+          { type: "array", items: schemas.$defs[k], maxItems: k === "ask" ? 5 : 10 },
+        ]),
+      ),
+    },
+    required: ["events"],
+  };
+}
 
 const prose = new Set([
   "objective",

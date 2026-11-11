@@ -204,3 +204,106 @@ test("CEO daily cap reserves one report, includes owner chat, and never grants a
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("Claude native schema consumes structured_output even when plan-mode prose says the report was not submitted", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const dir = mkdtempSync(join(tmpdir(), "ceo-native-schema-"));
+  try {
+    const config = join(dir, "company.json"),
+      bin = join(dir, "bin"),
+      folder = join(dir, "run");
+    mkdirSync(bin);
+    mkdirSync(folder);
+    writeFileSync(
+      config,
+      JSON.stringify({ name: "test", database: join(dir, "company.db"), maxAssignments: 6, ceoEfficiency: true }),
+    );
+    writeFileSync(
+      join(folder, "context.json"),
+      JSON.stringify({
+        events: [
+          {
+            id: "work",
+            source: "company-office",
+            type: "company.work.ceo",
+            subject: "REPORT-test",
+            detail: JSON.stringify({ assignment: 1 }),
+          },
+        ],
+        answers: [],
+      }),
+    );
+    writeFileSync(
+      join(folder, "entry.json"),
+      JSON.stringify({ run: 1, attempt: 1, turn: 1, job: { rule: { name: "公司部门-ceo" } } }),
+    );
+    writeFileSync(join(bin, "shell"), '#!/bin/sh\nexec /bin/sh -c "$2"\n', { mode: 0o700 });
+    const receipt = {
+      events: [
+        {
+          id: "report",
+          type: "company.result",
+          subject: "REPORT-test",
+          detail: {
+            assignment: 1,
+            verdict: "pass",
+            summary: "日报已整理",
+            artifacts: [],
+            evidence: ["经营账本"],
+            executive: decision({ report: "本日未发布，没有新增决定。" }),
+          },
+        },
+      ],
+    };
+    writeFileSync(
+      join(dir, "result.json"),
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        result: "日报写好了，规划模式没有提交。",
+        structured_output: receipt,
+      }),
+    );
+    writeFileSync(
+      join(bin, "claude"),
+      '#!/usr/bin/env node\nconst fs=require("node:fs"),p=process.env.FAKE_CEO_ROOT;fs.writeFileSync(p+"/args.json",JSON.stringify(process.argv.slice(2)));process.stdout.write(fs.readFileSync(p+"/result.json","utf8")+"\\n");\n',
+      { mode: 0o700 },
+    );
+    const command = agent.command({
+      prompt: "test",
+      session: "test",
+      resume: null,
+      cwd: dir,
+      access: "read",
+      folder,
+      contextFile: join(folder, "context.json"),
+      command: [config, "model", "ceo", "claude"],
+    });
+    const result = await promisify(execFile)(command[0], command.slice(1), {
+      env: {
+        ...process.env,
+        ANTHROPIC_API_KEY: "",
+        CLAUDE_CODE_OAUTH_TOKEN: "",
+        PATH: bin + ":" + process.env.PATH,
+        SHELL: join(bin, "shell"),
+        FAKE_CEO_ROOT: dir,
+      },
+    });
+    const args = JSON.parse(readFileSync(join(dir, "args.json"), "utf8"));
+    assert.equal(args[args.indexOf("--permission-mode") + 1], "plan");
+    const schema = JSON.parse(args[args.indexOf("--json-schema") + 1]);
+    assert.deepEqual(schema.properties.events.items.properties.detail.properties.assignment.enum, [1]);
+    assert.equal(schema.properties.events.items.properties.detail.properties.executive.additionalProperties, false);
+    const reading = agent.read(result.stdout, 0, result.stderr);
+    assert.equal(reading.receiptProblem, undefined);
+    const parsed = resultFrom(readMessage(reading.text!), {});
+    assert.equal(parsed.problem, undefined);
+    assert.equal(JSON.parse(parsed.result.events![0].detail!).executive.report, "本日未发布，没有新增决定。");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
