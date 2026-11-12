@@ -82,7 +82,7 @@ function create() {
     mkdirSync(join(dir, "workspace/tasks", id), { recursive: true });
     const common = {
       title: bad ? "不合格？" : `${business}内容`,
-      content: "阅读笔记".repeat(80) + "目前只有安卓，感兴趣的可以私我安装。",
+      content: "阅读笔记".repeat(80) + "目前只有安卓版，感兴趣的读者评论区聊。",
       images: [],
       angle: "从真实使用过程说明具体问题",
       duplicateCheck: [],

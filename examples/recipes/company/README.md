@@ -151,6 +151,6 @@ CEO 改用 Claude 时保留 `use=company` 包装，只改模型执行器与 mode
 
 员工选题与写作培训资料：今朝同时读 [今朝手册](jinzhao-handbook.md) 和 [开发故事素材库](jinzhao-stories.md)，海外运营读 [rabbitrun 手册](rabbitrun-handbook.md)。部署到 `workspace/knowledge/` 同名文件，并更新现有 `content-guide.md`、`crypto-content-guide.md` 的必读说明；员工报题/写稿、CEO 初筛/审稿时与指南及工作笔记一起读取。CEO 将五项 0–2 分、总分及理由写入既有 `topicReviews[].reason`，未启用授权时保持待审，不再生成董事长选题卡；启用 `delegation.source` 后须同时填 `score`，满 7 分直接入池，低分退回并记录理由。私有工作区 `AGENTS.md` 同步必读要求，笔记只追加到私有 `operations.db`，不提交工作区或数据库。资料更新无需重启服务，也不改变现有待批卡片或周目标。今朝选题沿用 `reason` 字段写“引用故事卡：S编号”及事实依据；CEO 初筛、审稿核对一致性，缺引用或引用不符直接退回，真实性项记 0 分、总分最高 6 分。
 
-现行CEO授权、后台维护清单及发布决定见[公司约定](../../../docs/company.md#ceo-授权与维护清单)；记住暂停状态保持，今朝获取引导只写“目前只有安卓版，还在小范围内测，下载方式见主页简介”。
+现行CEO授权、后台维护清单及发布决定见[公司约定](../../../docs/company.md#ceo-授权与维护清单)；记住暂停状态保持，今朝获取引导只写“目前只有安卓版，感兴趣的读者评论区聊”。
 
 在已有授权、自主上班和日报配置中增加 `"proactiveCEO":true`，并保留 `"dailyModelRuns":{"total":100,"ceo":40,"growth":60,"employee":20}`，启用工作日经营复盘与条件兜底；周一策略合并首轮。见[主动经营](../../../docs/company.md#ceo-主动经营)，仅在私有配置启用。

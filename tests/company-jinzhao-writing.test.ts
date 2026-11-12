@@ -1,4 +1,5 @@
 // Failure modes: invalid copy reaches CEO, copied image labels hide changed pixels/text,
+// Outdated acquisition copy or contact solicitation bypasses rejection;
 // nonexistent stories pass, return loops consume models, or a business override changes other employees.
 // Platform guards reject missing/excess tags, offsite contact, unrelated titles and coercion without rejecting normal copy.
 import assert from "node:assert/strict";
@@ -27,7 +28,7 @@ const refs = {
 };
 const valid = () => ({
   title: "我用AI做了个阅读App",
-  content: "写".repeat(310) + "阅读App目前只有安卓，感兴趣的可以私我安装。#英语阅读 #英文原著 #生词",
+  content: "写".repeat(310) + "阅读App目前只有安卓版，感兴趣的读者评论区聊。#英语阅读 #英文原著 #生词",
   images: [
     { mime: "image/png", base64: png.toString("base64") },
     { mime: "image/png", base64: png.toString("base64") },
@@ -59,7 +60,7 @@ test("topic tags require three to five distinct inline topics", () => {
   assert.match(checkJinzhaoDraft(d, refs).join(), /话题标签/);
 });
 
-test("offsite URLs and contact wording fail while in-platform messages remain valid", () => {
+test("offsite URLs and contact wording fail while comment invitation remains valid", () => {
   assert.deepEqual(checkJinzhaoDraft(valid(), refs), []);
   for (const contact of [
     "https://example.org",
@@ -87,7 +88,7 @@ test("offsite URLs and contact wording fail while in-platform messages remain va
 test("title needs one meaningful overlap in prose; function words and hashtags do not count", () => {
   const d = valid();
   d.title = "我用生词本读英文原著";
-  d.content = "写".repeat(310) + "目前只有安卓，感兴趣的可以私我安装。#英语阅读 #英文原著 #生词本";
+  d.content = "写".repeat(310) + "目前只有安卓版，感兴趣的读者评论区聊。#英语阅读 #英文原著 #生词本";
   assert.match(checkJinzhaoDraft(d, refs).join(), /标题核心关键词/);
   d.content += "我今天用了食谱做晚餐。";
   assert.match(checkJinzhaoDraft(d, refs).join(), /标题核心关键词/);
@@ -302,3 +303,26 @@ test("business model rule keeps default employees, shared lane and result source
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+
+test("acquisition copy must use the current exact wording", () => {
+  for (const ending of [
+    "目前只有安卓，感兴趣的可以私我安装",
+    "目前只有安卓版，还在小范围内测，下载方式见主页简介",
+    "目前只有安卓，感兴趣的读者评论区聊",
+    "目前只有安卓版，感兴趣的读者评论区交流",
+  ]) {
+    const draft = valid();
+    draft.content = draft.content.replace("目前只有安卓版，感兴趣的读者评论区聊", ending);
+    assert.match(checkJinzhaoDraft(draft, refs).join(), /获取说明/, ending);
+  }
+});
+
+for (const phrase of ["私我", "私信", "私聊", "加我", "加V", "加v", "微信"])
+  test(`contact solicitation is rejected in title and body: ${phrase}`, () => {
+    for (const field of ["title", "content"] as const) {
+      const draft = valid();
+      draft[field] += phrase;
+      assert.match(checkJinzhaoDraft(draft, refs).join(), /不得出现导流用语/, `${field}: ${phrase}`);
+    }
+  });
