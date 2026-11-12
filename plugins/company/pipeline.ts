@@ -75,13 +75,19 @@ export function checkRabbitCompliance(draft: { title: string; content: string })
   for (const [pattern, reason] of rules) if (pattern.test(text)) errors.push(`合规红线：${reason}`);
   return errors;
 }
-export function checkPipelineDelivery(directory: string, business: string, paths: string[], requireComparison = true) {
+export function checkPipelineDelivery(
+  directory: string,
+  business: string,
+  paths: string[],
+  requireComparison = true,
+  task?: string,
+) {
   try {
     const file = pipelineDraft(directory, business, paths),
       d = file.draft;
     const errors =
       business === "jinzhao"
-        ? checkJinzhaoDelivery(directory, paths)
+        ? checkJinzhaoDelivery(directory, paths, task)
         : checkRabbitCompliance(
             rabbitDraft({ key: "a".repeat(32), business, channel: rabbitChannel, action: "lookup", artifacts: [file] }),
           );

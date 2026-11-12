@@ -22,6 +22,7 @@ export function chairmanTitle(category?: string) {
 export function chairmanNotice(title: string) {
   return [
     "发布确认",
+    "今朝选题",
     "CEO · 支出决策",
     "CEO · 本人验证",
     "CEO · 日报",
@@ -152,6 +153,7 @@ export function pipelineSuppresses(directory: string, card: { title: string; tex
   const file = join(directory, "company.json");
   if (!existsSync(file) || !JSON.parse(readFileSync(file, "utf8")).pipelineMode) return false;
   if (
+    card.title === "今朝选题" ||
     card.title === "CEO · 日报" ||
     card.title === "待维护者处理" ||
     /^X 待发，请手动发布\n发布稿件：[a-f0-9]{32}$/.test(card.text)

@@ -68,7 +68,7 @@ export function freezePublication(
   if (!paths.length) throw Error("成果缺少可审核的交付文件");
   const configPath = join(directory, "company.json");
   if (business === "jinzhao" && existsSync(configPath) && JSON.parse(readFileSync(configPath, "utf8")).jinzhaoWriting) {
-    const errors = checkJinzhaoDelivery(directory, paths);
+    const errors = checkJinzhaoDelivery(directory, paths, task.id);
     if (errors.length) throw Error(`今朝程序检查未通过：${errors.join("；")}`);
   }
   let size = 0;

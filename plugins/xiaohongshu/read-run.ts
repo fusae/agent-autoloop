@@ -1,3 +1,4 @@
+import { searchXhs } from "./search.ts";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { readXhsStatus } from "./status.ts";
@@ -14,9 +15,11 @@ try {
   const config = JSON.parse(readFileSync(configFile, "utf8"));
   console.log(
     JSON.stringify(
-      request?.action === "status"
-        ? await readXhsStatus(config, request)
-        : await readXhs(config, join(dirname(configFile), "xiaohongshu-readonly"), request),
+      request?.action === "search"
+        ? await searchXhs(config, join(dirname(configFile), "xiaohongshu-readonly"), request)
+        : request?.action === "status"
+          ? await readXhsStatus(config, request)
+          : await readXhs(config, join(dirname(configFile), "xiaohongshu-readonly"), request),
     ),
   );
 } catch {

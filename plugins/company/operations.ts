@@ -1,3 +1,4 @@
+import { storyTopicTick, type StoryBatch } from "./ai-topics.ts";
 import { checkPipelineDelivery, recentPipelinePosts, pipelineDailyReport } from "./pipeline.ts";
 import { ceoWake } from "./ceo-wake.ts";
 import { ceoActionable } from "./health.ts";
@@ -153,6 +154,8 @@ export type Plan = ActionProposal & {
 };
 type Signal = { id: string; title: string; detail: string; source: string; role: Role | "all"; at: string };
 export type Project = {
+  aiTopicBatches?: StoryBatch[];
+  aiTopicStatus?: string;
   topics?: Topic[];
   topicBatches?: TopicBatch[];
   topicMeeting?: { week: string; task?: string; completed?: boolean };
@@ -639,6 +642,8 @@ export class Operations {
         JSON.stringify(
           {
             weeklyGoal: s.weeklyGoal ?? null,
+            aiTopicBatches: p.aiTopicBatches ?? [],
+            aiTopicStatus: p.aiTopicStatus,
             topics: p.topics ?? [],
             topicMeeting: p.topicMeeting,
             reports: s.reports ?? [],
@@ -890,6 +895,8 @@ export class Operations {
           dailyPlanning: this.dailyPlanning,
           knowledge: this.executive().knowledge.filter((k) => k.business === b.id),
           staff: p.staff,
+          aiTopicBatches: p.aiTopicBatches ?? [],
+          aiTopicStatus: p.aiTopicStatus,
           plans: p.plans,
           contentDrafts: draftSummaries(this.directory, p.plans, tasks),
           signals: p.signals,
@@ -2660,6 +2667,7 @@ export class Operations {
       const p = this.get(b.id, now),
         before = JSON.stringify(p);
       if (!p.staff.some((s) => s.role === "growth" && this.onDuty(s))) continue;
+      const storyMode = b.id === "jinzhao" && !!this.config.aiStoryTopics;
       const emit = (a: Plan, publishing: boolean) => {
         const id = publishing ? "P-" + hash(a.publicationKey!) : "W-" + hash(`${b.id}:${a.id}:${a.revision ?? 0}`);
         if (tasks.some((t) => t.id === id) || p.activity.some((v) => v.task === id)) return;
@@ -2669,7 +2677,7 @@ export class Operations {
           ...(publishing ? { publication: a.publicationKey } : {}),
           goal: publishing
             ? "程序检查已通过，只发布已冻结版本并回读核验。"
-            : `读取knowledge/operations/${b.id}.json、knowledge/pipeline-${b.id}.json及对应手册和素材库。${a.goal} ${a.revision ? `按意见修改一次：${a.result}；上一交付任务${a.deliveryTask}。` : "自行选题，避开最近10篇含手动帖。"}交完整发布包及angle、duplicateCheck，不开选题会、不交CEO。`.slice(
+            : `读取knowledge/operations/${b.id}.json、knowledge/pipeline-${b.id}.json及对应手册和素材库。${a.goal} ${a.revision ? `按意见修改一次：${a.result}；上一交付任务${a.deliveryTask}。` : storyMode ? "只写董事长选中的故事，禁止换题。" : "自行选题，避开最近10篇含手动帖。"}交完整发布包及angle、duplicateCheck，不开选题会、不交CEO。`.slice(
                 0,
                 500,
               ),
@@ -2713,7 +2721,7 @@ export class Operations {
           const delivered = tasks.find((t) => t.id === a.deliveryTask) ?? t;
           if (!delivered || delivered.status !== "completed") continue;
           const files = delivered.reports.findLast((r) => r.role === "growth")?.artifacts ?? [];
-          const errors = checkPipelineDelivery(this.directory, b.id, files, !!a.pipelineDate);
+          const errors = checkPipelineDelivery(this.directory, b.id, files, !!a.pipelineDate, delivered.id);
           if (errors.length) {
             a.result = `程序退稿：${errors.join("；")}`;
             if ((a.revision ?? 0) >= 2 || (a.ownerRevisions ?? 0) >= 1) a.status = "closed";
@@ -2784,7 +2792,24 @@ export class Operations {
         now.toISOString() >= reportTime(date, "09:30") &&
         (!this.config.workday?.startDate || date >= this.config.workday.startDate);
       const weekday = ![0, 6].includes(new Date(date).getUTCDay());
+      const selected = storyMode
+        ? storyTopicTick(
+            this.directory,
+            p,
+            tasks,
+            receipt,
+            answers,
+            now,
+            depth <= 1 &&
+              due &&
+              weekday &&
+              !open.length &&
+              !p.plans.some((a) => a.pipelineDate === date) &&
+              !recent.some((r) => day(new Date(r.at)) === date),
+          )
+        : undefined;
       if (
+        (!storyMode || !!selected) &&
         depth <= 1 &&
         due &&
         (b.id === "rabbitrun" || weekday) &&
@@ -2796,10 +2821,13 @@ export class Operations {
         p.plans.push({
           id,
           key: id,
-          title: "每日内容",
+          title: selected?.title ?? "每日内容",
           kind: "content",
           operation: "write",
-          goal: "完成一篇有真实依据、角度不同的完整稿件。",
+          ...(selected ? { topic: selected.batch } : {}),
+          goal: selected
+            ? `只写已选故事卡${selected.story}《${selected.title}》：${selected.hook}。董事长意见：${selected.opinion}。只用ai-stories.md的真实经历、数字和对话，stories仅列${selected.story}，不写下载/获取引导。`
+            : "完成一篇有真实依据、角度不同的完整稿件。",
           acceptance: ["符合手册与程序检查，完整发布包", "与最近10篇含手动帖逐篇比较角度"],
           priority: 1,
           dueDays: 1,
@@ -2837,6 +2865,8 @@ export class Operations {
             emit(a, true);
           if (
             a.status === "planned" &&
+            (!storyMode ||
+              p.aiTopicBatches?.some((b) => b.id === a.topic && b.selected && b.date === a.pipelineDate)) &&
             a.kind === "content" &&
             !active &&
             !receipt.events?.some(

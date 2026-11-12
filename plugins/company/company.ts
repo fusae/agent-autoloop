@@ -1,3 +1,4 @@
+import { topicBatchForTask, storyProposals, type StoryProposal } from "./ai-topics.ts";
 import { checkPipelineDelivery } from "./pipeline.ts";
 import { staffWorkType, taskProject, type StaffModels } from "./staff-model.ts";
 import { checkJinzhaoDelivery } from "./jinzhao-writing.ts";
@@ -43,6 +44,7 @@ for (const role of Object.keys(departments)) {
 for (const kind of ["software", "content", "support", "finance"]) workflows[`internal-${kind}`] = [...workflows[kind]];
 export type CompanyConfig = {
   pipelineMode?: boolean;
+  aiStoryTopics?: { searchCommand: string[] };
   staffModels?: StaffModels;
   jinzhaoWriting?: boolean;
   name: string;
@@ -73,6 +75,7 @@ export type Context = {
   answers: { at?: string; card: number; choice: number | null; about: string; text?: string | null }[];
 };
 export type Report = {
+  aiTopics?: StoryProposal[];
   writingErrors?: string[];
   topic?: string;
   at?: string;
@@ -194,6 +197,14 @@ export class Company {
     if (config.health !== undefined && typeof config.health?.enabled !== "boolean") throw Error("程序巡检开关不正确");
     if (config.health?.enabled && !config.ceoMode) throw Error("程序巡检需要启用CEO");
     if (config.pipelineMode !== undefined && typeof config.pipelineMode !== "boolean") throw Error("流水线开关不正确");
+    if (
+      config.aiStoryTopics &&
+      (!config.pipelineMode ||
+        !Array.isArray(config.aiStoryTopics.searchCommand) ||
+        !config.aiStoryTopics.searchCommand.length ||
+        config.aiStoryTopics.searchCommand.some((s) => typeof s !== "string" || !s))
+    )
+      throw new CompanyInputError("AI故事选题需要流水线和可信搜索命令");
     this.config = config;
     mkdirSync(dirname(config.database), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(config.database);
@@ -440,6 +451,9 @@ export class Company {
     if (event.type !== "company.result" || event.source !== source) throw new CompanyInputError("来源不是当前负责部门");
     if (task.status !== "active" || data.assignment !== task.assignment)
       throw new CompanyInputError("结果已过期或任务已暂停");
+    const storyBatch = this.config.aiStoryTopics
+      ? topicBatchForTask(dirname(this.config.database), task.id)
+      : undefined;
     let report: Report;
     try {
       if (!["pass", "reject", "blocked"].includes(data.verdict as string))
@@ -451,6 +465,7 @@ export class Company {
         summary: words(data.summary, 400, "结果摘要"),
         artifacts:
           data.verdict === "pass" &&
+          !storyBatch &&
           !task.kind.startsWith("check-") &&
           !task.kind.startsWith("workday-") &&
           task.kind !== "ceo"
@@ -458,6 +473,18 @@ export class Company {
             : [],
         evidence: list(data.evidence, "核验依据", 150),
       };
+      if (this.config.aiStoryTopics && data.verdict === "pass") {
+        const batch = storyBatch;
+        if (batch) {
+          try {
+            report.aiTopics = storyProposals(data.aiTopics, batch, dirname(this.config.database));
+          } catch (error) {
+            throw new CompanyInputError((error as Error).message);
+          }
+          if (!Array.isArray(data.artifacts) || data.artifacts.length)
+            throw new CompanyInputError("选题轮只报选题，不能交稿件");
+        } else if (data.aiTopics !== undefined) throw new CompanyInputError("不是已登记的选题任务");
+      }
       const topic =
         !this.config.pipelineMode && this.config.topics && task.kind !== "publish-content"
           ? taskTopic(dirname(this.config.database), task.id)
@@ -576,8 +603,9 @@ export class Company {
               project!.business,
               report.artifacts,
               !!plan.pipelineDate,
+              task.id,
             )
-          : checkJinzhaoDelivery(dirname(this.config.database), report.artifacts);
+          : checkJinzhaoDelivery(dirname(this.config.database), report.artifacts, task.id);
         if (errors.length) {
           const returned =
             task.reports.filter((r) => r.writingErrors?.length).length >=

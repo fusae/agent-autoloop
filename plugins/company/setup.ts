@@ -1,3 +1,4 @@
+import { aiTopicPrompt } from "./ai-topics.ts";
 import { pipelinePrompt } from "./pipeline.ts";
 import { jinzhaoWritingPrompt } from "./jinzhao-writing.ts";
 import { proactivePrompt } from "./proactive.ts";
@@ -581,7 +582,7 @@ export function ensureBusinessRules(directory: string) {
     renameSync(path + ".tmp", path);
   }
   const refreshRhythm = (text: string) => {
-    text = text.replace(/\n今朝一次交付规范 v1：[\s\S]*?今朝一次交付规范结束。/g, "");
+    text = text.replace(/\n今朝一次交付规范 v\d+：[\s\S]*?今朝一次交付规范结束。/g, "");
     text = text.replace(/\n海外运营规范 v1：[\s\S]*?海外运营规范结束。/g, "");
     text = text
       .replace(/\n汇报节奏 v1：[\s\S]*?汇报节奏规范结束。/g, "")
@@ -661,7 +662,12 @@ export function ensureBusinessRules(directory: string) {
       (r: any) => r.name === "公司部门-growth" || (r.name.endsWith("-growth") && r.name.startsWith("公司员工模型-")),
     )) {
       rule.prompt =
-        rolePrompt("growth") + "\n" + (company.jinzhaoWriting ? jinzhaoWritingPrompt : "") + "\n" + pipelinePrompt;
+        rolePrompt("growth") +
+        "\n" +
+        (company.jinzhaoWriting ? jinzhaoWritingPrompt : "") +
+        "\n" +
+        pipelinePrompt +
+        (company.aiStoryTopics ? "\n" + aiTopicPrompt : "");
     }
   }
   if (JSON.stringify(rules) !== beforeStaff) {

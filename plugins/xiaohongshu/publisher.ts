@@ -74,7 +74,7 @@ function save(path: string, value: unknown) {
     closeSync(directory);
   }
 }
-export function xhsApi(config: Pick<Config, "endpoint" | "token">): Call {
+export function xhsApi(config: Pick<Config, "endpoint" | "token">, timeout = 300_000): Call {
   const url = new URL(config.endpoint);
   if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.username || url.password || url.pathname !== "/")
     throw Error("小红书接口必须使用服务器本机地址");
@@ -83,7 +83,7 @@ export function xhsApi(config: Pick<Config, "endpoint" | "token">): Call {
       method: body ? "POST" : "GET",
       headers: { authorization: `Bearer ${config.token}`, "content-type": "application/json" },
       body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(300_000),
+      signal: AbortSignal.timeout(timeout),
       redirect: "error",
     });
     const result = (await response.json()) as any;

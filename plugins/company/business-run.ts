@@ -1,3 +1,4 @@
+import { collectTopicEvidence } from "./ai-topics.ts";
 import { registeredProactive } from "./proactive.ts";
 import { recoverPublications } from "./publication-recovery.ts";
 import { syncDecisionCards } from "./decision-cards.ts";
@@ -39,6 +40,18 @@ try {
   recoverPublications(dirname(configFile), office, operations);
   const tasks = office.tasks(),
     now = new Date();
+  if (config.pipelineMode && config.aiStoryTopics)
+    await collectTopicEvidence(
+      dirname(configFile),
+      operations.snapshot(
+        businesses.list().filter((b) => b.id === "jinzhao" && b.autonomy && b.status === "active"),
+        tasks,
+        now,
+      ),
+      tasks,
+      config.aiStoryTopics.searchCommand,
+      now,
+    );
   const depth = Math.max(0, ...context.events.map((e) => e.hops ?? 0));
   const proactive = operations.plan(batch, businesses.list(), tasks, now, context.answers, depth, context.events);
   const legacy =

@@ -1,5 +1,5 @@
 // Failure modes: invalid copy reaches CEO, copied image labels hide changed pixels/text,
-// Outdated acquisition copy or contact solicitation bypasses rejection;
+// Mandatory product copy or comparison images block unrelated AI stories; contact solicitation bypasses rejection;
 // nonexistent stories pass, return loops consume models, or a business override changes other employees.
 // Platform guards reject missing/excess tags, offsite contact, unrelated titles and coercion without rejecting normal copy.
 import assert from "node:assert/strict";
@@ -127,10 +127,12 @@ for (const [name, change, expected] of [
   ["repeated fact", (d: any) => (d.content += "三页，三页，三页。"), /三页.*3次/],
   ["repeated numeric fact", (d: any) => (d.content += "30%，30%，30%。"), /30%.*3次/],
   ["too few images", (d: any) => d.images.pop(), /至少2张/],
-  ["fake image", (d: any) => (d.images[1].base64 = Buffer.from("not an image").toString("base64")), /对比图必须/],
+  [
+    "fake image",
+    (d: any) => (d.images[1].base64 = Buffer.from("not an image").toString("base64")),
+    /图片必须|对比图必须/,
+  ],
   ["changed rewrite", (d: any) => (d.comparison.rewrite = "I read books."), /逐字一致/],
-  ["missing comparison", (d: any) => delete d.comparison, /对比图必须/],
-  ["missing acquisition", (d: any) => (d.content = "写".repeat(330)), /获取说明/],
   ["url", (d: any) => (d.content += "https://example.org"), /外链/],
   ["bare url", (d: any) => (d.content += "example.org"), /外链/],
   ["profile", (d: any) => (d.content += "主页简介"), /主页简介/],
@@ -177,6 +179,7 @@ function fixture(fn: (dir: string, config: CompanyConfig, company: Company) => v
     join(dir, "jinzhao-writing-assets.json"),
     JSON.stringify({ compareSha256: digest(refs.compare), images: refs.images }),
   );
+  writeFileSync(join(dir, "workspace/knowledge/assets/jinzhao-compare/compare.md"), refs.compare);
   for (const name of writingInputs)
     writeFileSync(
       join(dir, "workspace/knowledge", name),
@@ -310,17 +313,11 @@ test("business model rule keeps default employees, shared lane and result source
   }
 });
 
-test("acquisition copy must use the current exact wording", () => {
-  for (const ending of [
-    "目前只有安卓，感兴趣的可以私我安装",
-    "目前只有安卓版，还在小范围内测，下载方式见主页简介",
-    "目前只有安卓，感兴趣的读者评论区聊",
-    "目前只有安卓版，感兴趣的读者评论区交流",
-  ]) {
-    const draft = valid();
-    draft.content = draft.content.replace("目前只有安卓版，感兴趣的读者评论区聊", ending);
-    assert.match(checkJinzhaoDraft(draft, refs).join(), /获取说明/, ending);
-  }
+test("AI stories pass without product acquisition wording or comparison images", () => {
+  const draft: any = valid();
+  draft.content = draft.content.replace("目前只有安卓版，感兴趣的读者评论区聊", "帮我解决了实际麻烦");
+  delete draft.comparison;
+  assert.deepEqual(checkJinzhaoDraft(draft, { stories: refs.stories, compare: "", images: [] }), []);
 });
 
 for (const phrase of ["私我", "私信", "私聊", "加我", "加V", "加v", "微信"])

@@ -92,7 +92,8 @@ export function interactiveCard(
   const deferred = card.state !== "open" && answer?.trim() === "暂缓";
   const arrangement = card.kind === "notice" && card.title === "CEO · 工作安排";
   const [overview, ...extra] = arrangement ? text.split(ARRANGEMENT_DETAILS) : [text];
-  const paragraphs = card.kind === "ask" && !publication ? text.split(/\n\s*\n/) : [overview];
+  const paragraphs =
+    card.kind === "ask" && !publication && card.title !== "今朝选题" ? text.split(/\n\s*\n/) : [overview];
   const elements: any[] = (arrangement ? overview.split(/\n\s*\n/) : [paragraphs[0]]).flatMap((content) => {
     const lines = content.split("\n");
     if (!arrangement || lines.length < 2) return [{ tag: "div", text: { tag: "plain_text", content } }];
@@ -204,14 +205,18 @@ export function interactiveCard(
             required: false,
           },
           ...choices,
-          {
-            tag: "button",
-            name: "submit_reply",
-            text: { tag: "plain_text", content: "提交" },
-            type: "primary",
-            form_action_type: "submit",
-            behaviors: [{ type: "callback", value: { card: card.id, version: card.version, action: "reply" } }],
-          },
+          ...(card.title === "今朝选题"
+            ? []
+            : [
+                {
+                  tag: "button",
+                  name: "submit_reply",
+                  text: { tag: "plain_text", content: "提交" },
+                  type: "primary",
+                  form_action_type: "submit",
+                  behaviors: [{ type: "callback", value: { card: card.id, version: card.version, action: "reply" } }],
+                },
+              ]),
         ],
       });
   } else {

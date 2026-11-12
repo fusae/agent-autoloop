@@ -53,7 +53,7 @@ function create() {
   writeFileSync(join(dir, "workspace/knowledge/recent-posts.md"), "# 最近发布正文\n");
   const compare = "## App 改写版 A2\n\nI read a book.";
   writeFileSync(join(dir, "workspace/knowledge/assets/jinzhao-compare/compare.md"), compare);
-  writeFileSync(join(dir, "workspace/knowledge/jinzhao-stories.md"), "### S1 故事\n真实素材");
+  writeFileSync(join(dir, "workspace/knowledge/ai-stories.md"), "### S1 故事\n真实素材");
   writeFileSync(
     join(dir, "jinzhao-writing-assets.json"),
     JSON.stringify({ compareSha256: digest(compare), images: [{ sha256: digest(png), level: "A2" }] }),
