@@ -1,5 +1,6 @@
 // Failure modes: invalid copy reaches CEO, copied image labels hide changed pixels/text,
 // nonexistent stories pass, return loops consume models, or a business override changes other employees.
+// Platform guards reject missing/excess tags, offsite contact, unrelated titles and coercion without rejecting normal copy.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
@@ -26,7 +27,7 @@ const refs = {
 };
 const valid = () => ({
   title: "我用AI做了个阅读App",
-  content: "写".repeat(310) + "目前只有安卓，感兴趣的可以私我安装。",
+  content: "写".repeat(310) + "阅读App目前只有安卓，感兴趣的可以私我安装。#英语阅读 #英文原著 #生词",
   images: [
     { mime: "image/png", base64: png.toString("base64") },
     { mime: "image/png", base64: png.toString("base64") },
@@ -38,10 +39,83 @@ test("complete draft passes; exact inclusive body/title limits", () => {
   assert.deepEqual(checkJinzhaoDraft(valid(), refs), []);
   for (const n of [300, 600]) {
     const d = valid();
-    d.title = "字".repeat(20);
-    d.content = d.content.slice(310).padStart(n, "写");
+    d.title = "阅读" + "字".repeat(18);
+    d.content = d.content.slice(310).replace(/\s/g, "").padStart(n, "写");
     assert.deepEqual(checkJinzhaoDraft(d, refs), []);
   }
+});
+
+test("topic tags require three to five distinct inline topics", () => {
+  for (const n of [0, 1, 2, 3, 4, 5, 6]) {
+    const d = valid();
+    d.content = d.content.replace(/#[\p{L}\p{N}_]+/gu, "") + Array.from({ length: n }, (_, i) => `#话题${i}`).join(" ");
+    assert.equal(
+      checkJinzhaoDraft(d, refs).some((e) => e.includes("话题标签")),
+      n < 3 || n > 5,
+    );
+  }
+  const d = valid();
+  d.content = d.content.replace("#生词", "#英语阅读");
+  assert.match(checkJinzhaoDraft(d, refs).join(), /话题标签/);
+});
+
+test("offsite URLs and contact wording fail while in-platform messages remain valid", () => {
+  assert.deepEqual(checkJinzhaoDraft(valid(), refs), []);
+  for (const contact of [
+    "https://example.org",
+    "http://example.org",
+    "www.example.org",
+    "example.dev",
+    "ftp://example.org",
+    "二维码",
+    "微信号",
+    "加微信",
+    "加V",
+    "加 v",
+    "加Ｖ",
+    "VX",
+    "WeChat",
+    "QQ",
+    "邮箱",
+  ]) {
+    const d = valid();
+    d.content += contact;
+    assert.match(checkJinzhaoDraft(d, refs).join(), /外链|站外联系方式/, contact);
+  }
+});
+
+test("title needs one meaningful overlap in prose; function words and hashtags do not count", () => {
+  const d = valid();
+  d.title = "我用生词本读英文原著";
+  d.content = "写".repeat(310) + "目前只有安卓，感兴趣的可以私我安装。#英语阅读 #英文原著 #生词本";
+  assert.match(checkJinzhaoDraft(d, refs).join(), /标题核心关键词/);
+  d.content += "我今天用了食谱做晚餐。";
+  assert.match(checkJinzhaoDraft(d, refs).join(), /标题核心关键词/);
+  d.content += "读英文原著遇到困难时，先做一张生词本。";
+  assert.deepEqual(checkJinzhaoDraft(d, refs), []);
+  d.title = "我的READING记录";
+  d.content += "这次reading练习很短。";
+  assert.deepEqual(checkJinzhaoDraft(d, refs), []);
+});
+
+test("coercive engagement is blocked in title and body; voluntary discussion passes", () => {
+  for (const phrase of [
+    "不点赞就倒霉",
+    "不关注就不给答案",
+    "不关注我就看不到",
+    "不点赞的人就别想学",
+    "不点赞/不关注就亏了",
+    "不 点赞 就不给你",
+  ]) {
+    for (const field of ["title", "content"] as const) {
+      const d = valid();
+      d[field] += phrase;
+      assert.match(checkJinzhaoDraft(d, refs).join(), /胁迫互动/, phrase);
+    }
+  }
+  const d = valid();
+  d.content += "不点赞也没关系，你读书时遇到过哪些生词？";
+  assert.deepEqual(checkJinzhaoDraft(d, refs), []);
 });
 for (const [name, change, expected] of [
   ["long title", (d: any) => (d.title = "字".repeat(21)), /20字/],
@@ -187,6 +261,7 @@ test("fixed inputs are in context; forged reference and outside artifact fail cl
     writeFileSync(contextFile, '{"events":[]}');
     const context = attachJinzhaoInputs({ cwd: join(dir, "workspace"), contextFile } as any);
     assert.deepEqual(Object.keys(context.jinzhaoWriting), writingInputs);
+    assert.equal(context.jinzhaoWriting["xhs-platform-rules.md"], "参考资料");
     const file = "tasks/write/xiaohongshu.json";
     writeFileSync(join(dir, "workspace", file), JSON.stringify(valid()));
     assert.deepEqual(checkJinzhaoDelivery(dir, [file]), []);
@@ -220,6 +295,7 @@ test("business model rule keeps default employees, shared lane and result source
     assert.equal(rule.group, base.group);
     assert.deepEqual(rule.emits, base.emits);
     assert.match(rule.prompt, /今朝一次交付规范/);
+    assert.match(rule.prompt, /写稿前必读knowledge\/xhs-platform-rules.md/);
     ensureBusinessRules(dir);
     assert.deepEqual(JSON.parse(readFileSync(join(dir, "hub/rules.json"), "utf8")), next);
   } finally {

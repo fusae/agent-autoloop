@@ -94,6 +94,7 @@ function create() {
           ? common
           : {
               ...common,
+              content: common.content + "jinzhao阅读内容。#英语阅读 #英文原著 #生词",
               images: [1, 2].map(() => ({ mime: "image/png", base64: png.toString("base64") })),
               stories: ["S1"],
               comparison: { image: 1, level: "A2", rewrite: "I read a book." },
