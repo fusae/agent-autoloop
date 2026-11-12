@@ -1,3 +1,4 @@
+import { checkPipelineDelivery } from "./pipeline.ts";
 import { staffWorkType, taskProject, type StaffModels } from "./staff-model.ts";
 import { checkJinzhaoDelivery } from "./jinzhao-writing.ts";
 import { registeredProactive } from "./proactive.ts";
@@ -41,6 +42,7 @@ for (const role of Object.keys(departments)) {
 }
 for (const kind of ["software", "content", "support", "finance"]) workflows[`internal-${kind}`] = [...workflows[kind]];
 export type CompanyConfig = {
+  pipelineMode?: boolean;
   staffModels?: StaffModels;
   jinzhaoWriting?: boolean;
   name: string;
@@ -191,6 +193,7 @@ export class Company {
       throw Error("主动经营需要CEO授权、自主上班及日报");
     if (config.health !== undefined && typeof config.health?.enabled !== "boolean") throw Error("程序巡检开关不正确");
     if (config.health?.enabled && !config.ceoMode) throw Error("程序巡检需要启用CEO");
+    if (config.pipelineMode !== undefined && typeof config.pipelineMode !== "boolean") throw Error("流水线开关不正确");
     this.config = config;
     mkdirSync(dirname(config.database), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(config.database);
@@ -286,6 +289,14 @@ export class Company {
   }
   private dispatch(task: Task, receipt: Receipt, now: Date) {
     task.approval = null;
+    if (
+      this.config.pipelineMode &&
+      (task.kind === "ceo" || task.kind.startsWith("check-") || task.kind.startsWith("workday-"))
+    ) {
+      task.status = "superseded";
+      task.reason = "内容流水线已停用经营轮次";
+      return;
+    }
     const reportDate =
       this.config.reporting?.enabled && task.kind === "ceo"
         ? scheduledReport(dirname(this.config.database), task.id)
@@ -448,7 +459,7 @@ export class Company {
         evidence: list(data.evidence, "核验依据", 150),
       };
       const topic =
-        this.config.topics && task.kind !== "publish-content"
+        !this.config.pipelineMode && this.config.topics && task.kind !== "publish-content"
           ? taskTopic(dirname(this.config.database), task.id)
           : undefined;
       if (topic && data.verdict === "pass") {
@@ -471,7 +482,7 @@ export class Company {
           throw new CompanyInputError((error as Error).message);
         }
       }
-      if (data.dailyReport !== undefined) {
+      if (!this.config.pipelineMode && data.dailyReport !== undefined) {
         try {
           report.dailyReport = dailyReport(data.dailyReport);
         } catch (error) {
@@ -547,7 +558,7 @@ export class Company {
       return;
     }
     if (
-      this.config.jinzhaoWriting &&
+      (this.config.jinzhaoWriting || this.config.pipelineMode) &&
       role === "growth" &&
       report.verdict === "pass" &&
       task.kind !== "publish-content"
@@ -555,13 +566,22 @@ export class Company {
       const project = taskProject(dirname(this.config.database), task.id);
       const plan = project?.plans.find((p) => p.task === task.id);
       if (
-        project?.business === "jinzhao" &&
+        (project?.business === "jinzhao" || (this.config.pipelineMode && project?.business === "rabbitrun")) &&
         plan?.kind === "content" &&
         (!plan.operation || ["write", "image", "revise", "package"].includes(plan.operation))
       ) {
-        const errors = checkJinzhaoDelivery(dirname(this.config.database), report.artifacts);
+        const errors = this.config.pipelineMode
+          ? checkPipelineDelivery(
+              dirname(this.config.database),
+              project!.business,
+              report.artifacts,
+              !!plan.pipelineDate,
+            )
+          : checkJinzhaoDelivery(dirname(this.config.database), report.artifacts);
         if (errors.length) {
-          const returned = task.reports.some((r) => r.writingErrors?.length);
+          const returned =
+            task.reports.filter((r) => r.writingErrors?.length).length >=
+            (this.config.pipelineMode ? (plan.ownerRevisions ? 0 : 2) : 1);
           task.reason = `程序退稿：${errors.join("；")}`;
           task.reports.push({
             ...report,
@@ -590,6 +610,7 @@ export class Company {
     } else if (
       task.stage < workflows[task.kind].length - 1 &&
       task.kind !== "publish-content" &&
+      !(this.config.pipelineMode && task.kind === "internal-content") &&
       !(this.config.ceoMode && this.config.contentReview === "ceo" && task.kind === "internal-content")
     ) {
       task.stage++;

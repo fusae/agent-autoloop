@@ -173,7 +173,7 @@ export function executePublication(directory: string, key: string, lookupOnly = 
       {
         input: JSON.stringify({ ...request, channel: target.channel, action }),
         encoding: "utf8",
-        timeout: action === "lookup" ? Math.min(timeout, remainingMs ?? 30_000) : timeout,
+        timeout: action === "lookup" ? Math.min(timeout, remainingMs ?? timeout) : timeout,
         maxBuffer: 100_000,
         cwd: directory,
         shell: false,

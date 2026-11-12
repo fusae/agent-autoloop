@@ -65,6 +65,12 @@ export function validatePublishPolicy(config: Partial<CompanyConfig>) {
     throw Error("发布前确认篇数须为非负整数");
 }
 export function businessPublishPolicy(config: Partial<CompanyConfig>, business: string) {
+  if (config.pipelineMode)
+    return {
+      publishDailyLimit: 1,
+      publishApproval: { confirmFirst: 0, preview: false },
+      alwaysConfirm: business === "jinzhao",
+    };
   const policy = config.publishPolicies?.[business];
   return {
     publishDailyLimit: config.delegation
@@ -140,6 +146,7 @@ export function publicationPreview(directory: string, key: string, business: str
 export type PublishPreview = { key: string; about: string; createdAt: string; publishAt: string };
 export function previewEnabled(config: Partial<CompanyConfig>, successes: number) {
   return (
+    !config.pipelineMode &&
     !config.delegation &&
     config.publishApproval?.preview === true &&
     successes >= Math.max(5, config.publishApproval.confirmFirst)

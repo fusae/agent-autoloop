@@ -1,3 +1,4 @@
+import { pipelinePrompt } from "./pipeline.ts";
 import { jinzhaoWritingPrompt } from "./jinzhao-writing.ts";
 import { proactivePrompt } from "./proactive.ts";
 const delegationPrompt = `CEO授权规范 v1：私有company.json启用delegation时，本节替代旧规范所有董事长选题拍板、发布确认、发前预告、日常异常上报、周五索取数据和周目标方向确认要求。员工岗位和暂停状态不变，记住继续暂停。选题初筛必读对应knowledge/jinzhao-handbook.md或rabbitrun-handbook.md，五项各0–2分；executive.topicReviews每项必须带score总分0–10及reason逐项分数和理由，approve严格等于score>=7；>=7直接入选题池，<7退回员工换题，不发选题卡。存量pending批次可用topicDecisions:[{business,batch,source:"ceo",choices:[{index,approve,opinion}]}]由CEO记录决定，opinion写明理由；禁止伪造董事长消息。
@@ -652,6 +653,15 @@ export function ensureBusinessRules(directory: string) {
         to: id,
         when: { source: "company-office", types: [`company.work.${role}.${business}`] },
       });
+    }
+  }
+  if (company.pipelineMode) {
+    rules.rules = rules.rules.filter((r: any) => r.to !== "company-ceo");
+    for (const rule of rules.rules.filter(
+      (r: any) => r.name === "公司部门-growth" || (r.name.endsWith("-growth") && r.name.startsWith("公司员工模型-")),
+    )) {
+      rule.prompt =
+        rolePrompt("growth") + "\n" + (company.jinzhaoWriting ? jinzhaoWritingPrompt : "") + "\n" + pipelinePrompt;
     }
   }
   if (JSON.stringify(rules) !== beforeStaff) {

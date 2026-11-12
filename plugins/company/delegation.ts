@@ -147,3 +147,22 @@ export function retainSuppressedCard(
     db.close();
   }
 }
+
+export function pipelineSuppresses(directory: string, card: { title: string; text: string; kind: string }) {
+  const file = join(directory, "company.json");
+  if (!existsSync(file) || !JSON.parse(readFileSync(file, "utf8")).pipelineMode) return false;
+  if (
+    card.title === "CEO · 日报" ||
+    card.title === "待维护者处理" ||
+    /^X 待发，请手动发布\n发布稿件：[a-f0-9]{32}$/.test(card.text)
+  )
+    return false;
+  if (card.title === "发布确认") {
+    const key = /\n发布稿件：([a-f0-9]{32})$/.exec(card.text)?.[1];
+    if (key) {
+      const frozen = join(directory, "publications", key + ".json");
+      if (existsSync(frozen) && JSON.parse(readFileSync(frozen, "utf8")).business === "jinzhao") return false;
+    }
+  }
+  return true;
+}

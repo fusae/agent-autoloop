@@ -170,3 +170,49 @@ test("restart reads a persisted result without another adapter call", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("slow pre-submit lookup uses the configured timeout and never becomes an ambiguous write", async () => {
+  const { default: childProcess } = await import("node:child_process");
+  const { syncBuiltinESMExports } = await import("node:module");
+  const { mock } = await import("node:test");
+  const { executePublication } = await import("../plugins/company/publication.ts");
+  const dir = mkdtempSync(join(tmpdir(), "slow-lookup-")),
+    key = "c".repeat(32);
+  const actions: string[] = [];
+  mkdirSync(join(dir, "publications"));
+  writeFileSync(join(dir, "publications", key + ".json"), JSON.stringify({ key, business: "test", artifacts: [] }));
+  writeFileSync(
+    join(dir, "publishing.json"),
+    JSON.stringify({
+      projects: { test: { channel: "test", command: ["/fake/publish"], timeoutMs: 600000, readbackMs: 0 } },
+    }),
+  );
+  const original = childProcess.spawnSync;
+  const stub = mock.method(childProcess, "spawnSync", ((_command: unknown, _args: unknown, options: any) => {
+    const request = JSON.parse(options.input);
+    actions.push(request.action);
+    // Login plus author-page reads take 40 seconds; the configured entry allows ten minutes.
+    if (options.timeout < 40000) return { status: null, error: Error("ETIMEDOUT"), stdout: "" };
+    return {
+      status: 0,
+      stdout: JSON.stringify({
+        state: "published",
+        key,
+        channel: "test",
+        remoteId: "1",
+        url: "https://example.com/1",
+        publishedAt: "2026-11-11T16:00:00Z",
+      }),
+    };
+  }) as typeof original);
+  syncBuiltinESMExports();
+  try {
+    assert.equal(executePublication(dir, key).remoteId, "1");
+    assert.deepEqual(actions, ["lookup"]);
+    assert.equal(publicationAttempt(dir, key), undefined);
+  } finally {
+    stub.mock.restore();
+    syncBuiltinESMExports();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

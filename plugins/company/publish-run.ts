@@ -60,7 +60,8 @@ for (const data of inputs) {
         current.stage !== 0 ||
         current.assignment !== data.assignment ||
         current.publication !== data.publication ||
-        !approved
+        !approved ||
+        (config.pipelineMode && (project.business === "jizhu" || approved.pipelineChecked !== data.publication))
       ) {
         if (data.attempt > 0) continue;
         throw Error("发布任务不在当前已审核范围内");

@@ -1,4 +1,4 @@
-import { delegated, chairmanNotice, retainSuppressedCard } from "./delegation.ts";
+import { pipelineSuppresses, delegated, chairmanNotice, retainSuppressedCard } from "./delegation.ts";
 import { squareStatus } from "./rabbitrun-receipt.ts";
 import { decisionCard, publicationDecisionCards } from "./decision-cards.ts";
 import { cardTopics } from "./topics.ts";
@@ -355,11 +355,12 @@ export class CompanyFeishu {
     const execution = JSON.stringify([card.state, card.result]);
     const manualKey = manualXKey(card);
     if (
-      delegated(dirname(this.file)) &&
-      !manualKey &&
-      !chairmanNotice(card.title) &&
-      !this.state.cards[card.id]?.ref &&
-      (!card.ref || card.ref.startsWith("company-silent-"))
+      pipelineSuppresses(dirname(this.file), card) ||
+      (delegated(dirname(this.file)) &&
+        !manualKey &&
+        !chairmanNotice(card.title) &&
+        !this.state.cards[card.id]?.ref &&
+        (!card.ref || card.ref.startsWith("company-silent-")))
     ) {
       retainSuppressedCard(dirname(this.file), card);
       await this.hub.delivered(card.id, card.version, card.ref ?? `company-silent-${card.id}`);

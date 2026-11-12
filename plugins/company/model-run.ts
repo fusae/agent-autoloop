@@ -18,6 +18,10 @@ const [file] = process.argv.slice(2);
 const turn: Turn = JSON.parse(readFileSync(file, "utf8"));
 const [configFile, , role, engine] = turn.command!;
 const config = JSON.parse(readFileSync(configFile, "utf8"));
+if (config.pipelineMode && role === "ceo") {
+  process.stdout.write(JSON.stringify({ companyDeferred: {} }) + "\n");
+  process.exit(0);
+}
 const entry = JSON.parse(readFileSync(join(turn.folder, "entry.json"), "utf8"));
 const key = `model:${entry.run}:${entry.attempt}:${entry.turn}`;
 // The rule comes from the claimed trusted job, never from a message's text or payload.

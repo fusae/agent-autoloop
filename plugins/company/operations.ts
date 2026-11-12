@@ -1,3 +1,4 @@
+import { checkPipelineDelivery, recentPipelinePosts, pipelineDailyReport } from "./pipeline.ts";
 import { ceoWake } from "./ceo-wake.ts";
 import { ceoActionable } from "./health.ts";
 import { proactiveDue, proactiveTitles, ceoRanSince, weeklyProgress, operatingJudgment } from "./proactive.ts";
@@ -134,6 +135,9 @@ export type Plan = ActionProposal & {
   ceoApproved?: boolean;
   autonomous?: boolean;
   revision?: number;
+  pipelineDate?: string;
+  ownerRevisions?: number;
+  pipelineChecked?: string;
   deliveryTask?: string;
   deliveryDecision?: "revise" | "accept" | "publish";
   publicationKey?: string;
@@ -2566,7 +2570,7 @@ export class Operations {
       })
       .concat(project.publishReservations ?? []);
     const usage = publicationUsage(results, reservations, channel, now, this.directory);
-    if (this.config.delegation && !policy.alwaysConfirm) {
+    if ((this.config.delegation || this.config.pipelineMode) && !policy.alwaysConfirm) {
       delete plan.publishApproval;
       delete plan.publishPreview;
     }
@@ -2589,7 +2593,9 @@ export class Operations {
           options: ["发布", "退回修改", "暂缓"],
         });
       }
-      plan.result = "已通过 CEO 审核，等待负责人发布确认";
+      plan.result = this.config.pipelineMode
+        ? "程序检查通过，等待董事长发布确认"
+        : "已通过 CEO 审核，等待负责人发布确认";
       return false;
     }
     const reserved = publicationUsage(
@@ -2638,6 +2644,241 @@ export class Operations {
     }
     return true;
   }
+  private pipeline(
+    businesses: Portfolio,
+    tasks: Task[],
+    receipt: Receipt,
+    now: Date,
+    answers: Context["answers"],
+    depth: number,
+  ) {
+    const chief = this.executive(),
+      date = day(now);
+    for (const b of businesses.filter(
+      (b) => ["jinzhao", "rabbitrun"].includes(b.id) && b.autonomy && b.status === "active",
+    )) {
+      const p = this.get(b.id, now),
+        before = JSON.stringify(p);
+      if (!p.staff.some((s) => s.role === "growth" && this.onDuty(s))) continue;
+      const emit = (a: Plan, publishing: boolean) => {
+        const id = publishing ? "P-" + hash(a.publicationKey!) : "W-" + hash(`${b.id}:${a.id}:${a.revision ?? 0}`);
+        if (tasks.some((t) => t.id === id) || p.activity.some((v) => v.task === id)) return;
+        const request = taskRequest({
+          title: `${b.name} · ${a.title}`.slice(0, 120),
+          kind: publishing ? "publish-content" : "staff-growth",
+          ...(publishing ? { publication: a.publicationKey } : {}),
+          goal: publishing
+            ? "程序检查已通过，只发布已冻结版本并回读核验。"
+            : `读取knowledge/operations/${b.id}.json、knowledge/pipeline-${b.id}.json及对应手册和素材库。${a.goal} ${a.revision ? `按意见修改一次：${a.result}；上一交付任务${a.deliveryTask}。` : "自行选题，避开最近10篇含手动帖。"}交完整发布包及angle、duplicateCheck，不开选题会、不交CEO。`.slice(
+                0,
+                500,
+              ),
+          acceptance: a.acceptance,
+        });
+        (receipt.events ??= []).push({
+          id: `company:pipeline:${id}`,
+          type: "company.task.create",
+          subject: id,
+          summary: request.title,
+          detail: JSON.stringify(request),
+        });
+        a.task = id;
+        a.status = publishing ? "publishing" : "working";
+        p.activity.push({ task: id, role: "growth", kind: "work", at: now.toISOString() });
+      };
+      for (const a of p.plans.filter((a) => a.kind === "content" && a.status !== "closed")) {
+        const t = tasks.find((t) => t.id === a.task);
+        if (t?.status === "superseded") {
+          a.status = "closed";
+          a.result = t.reason;
+          continue;
+        }
+        if (t?.status === "completed" && t.kind === "publish-content") {
+          a.status = "closed";
+          a.result = t.reason;
+          a.deliveredAt = now.toISOString();
+          continue;
+        }
+        if (t && ["blocked", "rejected"].includes(t.status)) {
+          a.status = t.reports.at(-1)?.writingErrors?.length ? "closed" : "blocked";
+          a.result = a.status === "closed" ? `当天放弃：${t.reason}` : t.reason;
+          continue;
+        }
+        if (t?.status === "completed" && t.kind !== "publish-content" && ["working", "delivered"].includes(a.status)) {
+          a.status = "delivered";
+          a.deliveryTask = t.id;
+          a.deliveredAt ??= now.toISOString();
+        }
+        if (a.status === "delivered" || (a.status === "publishing" && !a.task && !a.pipelineChecked)) {
+          const delivered = tasks.find((t) => t.id === a.deliveryTask) ?? t;
+          if (!delivered || delivered.status !== "completed") continue;
+          const files = delivered.reports.findLast((r) => r.role === "growth")?.artifacts ?? [];
+          const errors = checkPipelineDelivery(this.directory, b.id, files, !!a.pipelineDate);
+          if (errors.length) {
+            a.result = `程序退稿：${errors.join("；")}`;
+            if ((a.revision ?? 0) >= 2 || (a.ownerRevisions ?? 0) >= 1) a.status = "closed";
+            else {
+              a.revision = (a.revision ?? 0) + 1;
+              a.status = "planned";
+              a.task = null;
+            }
+            delete a.publicationKey;
+            delete a.publishApproval;
+            this.db
+              .prepare("INSERT INTO journal(project,kind,at,body) VALUES (?,?,?,?)")
+              .run(
+                b.id,
+                "pipeline-returned",
+                now.toISOString(),
+                JSON.stringify({ plan: a.id, title: a.title, errors }),
+              );
+            continue;
+          }
+          try {
+            const selected = files.filter((f) => /(?:^|\/)(?:xiaohongshu|rabbitrun)\.json$/.test(f));
+            a.publicationKey = freezePublication(this.directory, b.id, a.id, delivered, selected);
+            a.pipelineChecked = a.publicationKey;
+            a.deliveryDecision = "publish";
+            a.status = "publishing";
+            a.task = null;
+            a.result = "程序检查通过";
+          } catch (error) {
+            a.status = "blocked";
+            a.result = (error as Error).message;
+          }
+        }
+        const approval = a.publishApproval;
+        if (a.status === "publishing" && !a.task && approval?.state === "pending") {
+          const answer = answers.find((v) => v.about === approval.about && !chief.answeredCards.includes(v.card));
+          if (answer) {
+            chief.answeredCards.push(answer.card);
+            const choice = answer.choice ?? ["发布", "退回修改", "暂缓"].indexOf(answer.text?.trim() ?? "");
+            if (choice === 0) approval.state = "approved";
+            else if (choice === 2) {
+              approval.state = "deferred";
+              approval.nextAt = nextPublishDay(now);
+            } else {
+              a.result = `董事长退回：${answer.text?.trim() || "退回修改"}`;
+              if ((a.ownerRevisions ?? 0) >= 1) a.status = "closed";
+              else {
+                a.ownerRevisions = 1;
+                a.revision = (a.revision ?? 0) + 1;
+                a.status = "planned";
+                a.task = null;
+              }
+              delete a.publicationKey;
+              delete a.publishApproval;
+              delete a.pipelineChecked;
+            }
+          }
+        }
+      }
+      const recent = recentPipelinePosts(this.directory, b.id);
+      writeFileSync(
+        join(this.directory, "workspace/knowledge", `pipeline-${b.id}.json`),
+        JSON.stringify({ recent, inFlight: draftSummaries(this.directory, p.plans, tasks) }),
+        { mode: 0o600 },
+      );
+      const open = p.plans.filter((a) => a.kind === "content" && !["closed", "observing", "review"].includes(a.status));
+      const due =
+        now.toISOString() >= reportTime(date, "09:30") &&
+        (!this.config.workday?.startDate || date >= this.config.workday.startDate);
+      const weekday = ![0, 6].includes(new Date(date).getUTCDay());
+      if (
+        depth <= 1 &&
+        due &&
+        (b.id === "rabbitrun" || weekday) &&
+        !open.length &&
+        !p.plans.some((a) => a.pipelineDate === date) &&
+        !recent.some((r) => day(new Date(r.at)) === date)
+      ) {
+        const id = hash(`pipeline:${b.id}:${date}`);
+        p.plans.push({
+          id,
+          key: id,
+          title: "每日内容",
+          kind: "content",
+          operation: "write",
+          goal: "完成一篇有真实依据、角度不同的完整稿件。",
+          acceptance: ["符合手册与程序检查，完整发布包", "与最近10篇含手动帖逐篇比较角度"],
+          priority: 1,
+          dueDays: 1,
+          followUpDays: 1,
+          measure: "每日最多1篇",
+          owner: "growth",
+          proposedBy: "growth",
+          sourceTask: "pipeline",
+          task: null,
+          status: "planned",
+          autonomous: true,
+          pipelineDate: date,
+          createdAt: now.toISOString(),
+          dueAt: after(now, 1),
+          deliveredAt: null,
+          followUpAt: null,
+          outcome: null,
+          result: "待写作",
+        });
+      }
+      if (depth <= 1) {
+        const active = p.plans.some(
+          (a) =>
+            ["working", "publishing"].includes(a.status) &&
+            a.task &&
+            ["active", "queued"].includes(tasks.find((t) => t.id === a.task)?.status ?? "active"),
+        );
+        for (const a of p.plans) {
+          if (
+            a.status === "publishing" &&
+            !a.task &&
+            a.pipelineChecked &&
+            this.admitPublication(p, a, b.name, receipt, now)
+          )
+            emit(a, true);
+          if (
+            a.status === "planned" &&
+            a.kind === "content" &&
+            !active &&
+            !receipt.events?.some(
+              (e) => e.type === "company.task.create" && JSON.parse(e.detail).kind === "staff-growth",
+            )
+          )
+            emit(a, false);
+        }
+      }
+      for (const a of p.plans.filter((a) => a.status === "blocked"))
+        recordMaintenance(this.db, {
+          key: `pipeline:${a.id}:${a.task ?? "draft"}`,
+          title: "待维护者处理",
+          text: `${a.title}：${a.result}`,
+          at: now.toISOString(),
+        });
+      if (JSON.stringify(p) !== before) this.save(p, "pipeline", now);
+      this.profile(p, b, tasks, now);
+    }
+    if (
+      this.config.reporting?.enabled &&
+      now.toISOString() >= reportTime(date, "20:30") &&
+      chief.lastReportDay !== date
+    ) {
+      const projects = businesses.map((b) => this.get(b.id, now));
+      const errors = this.maintenance()
+        .filter((m) => !m.resolvedAt)
+        .map((m) => m.text);
+      const returned = this.db
+        .prepare("SELECT body FROM journal WHERE kind='pipeline-returned' AND at>=? AND at<?")
+        .all(reportTime(date, "00:00"), nextPublishDay(now))
+        .map((r) => JSON.parse(String(r.body)))
+        .map((r) => `${r.title}：${r.errors.join("；")}`);
+      const text = pipelineDailyReport(this.directory, date, tasks, projects, errors, returned);
+      (receipt.notice ??= []).push({ key: `pipeline-report-${date}`, title: "CEO · 日报", text });
+      chief.lastReportDay = date;
+      this.db
+        .prepare("INSERT INTO journal(project,kind,at,body) VALUES (?,?,?,?)")
+        .run("company", "pipeline-report", now.toISOString(), JSON.stringify({ date, text }));
+    }
+    this.saveExecutive(chief);
+  }
   plan(
     batch: string,
     businesses: Portfolio,
@@ -2656,6 +2897,12 @@ export class Operations {
       }
       const receipt: Receipt = {},
         chief = this.executive();
+      if (this.config.pipelineMode) {
+        this.pipeline(businesses, tasks, receipt, now, answers, depth);
+        this.db.prepare("INSERT INTO batches VALUES (?,?)").run(batch, JSON.stringify(receipt));
+        this.db.exec("COMMIT");
+        return receipt;
+      }
       for (const e of events.filter((e) => e.source === "company-inbox" && e.type === "company.owner.question")) {
         const feedback = ownerCardFeedback(this.directory, e.id);
         if (!feedback) continue;

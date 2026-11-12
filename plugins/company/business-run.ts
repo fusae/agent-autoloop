@@ -41,7 +41,8 @@ try {
     now = new Date();
   const depth = Math.max(0, ...context.events.map((e) => e.hops ?? 0));
   const proactive = operations.plan(batch, businesses.list(), tasks, now, context.answers, depth, context.events);
-  const legacy = depth <= 1 ? businesses.plan(batch, tasks, now, 100 - (proactive.events?.length ?? 0)) : {};
+  const legacy =
+    !config.pipelineMode && depth <= 1 ? businesses.plan(batch, tasks, now, 100 - (proactive.events?.length ?? 0)) : {};
   let failures: ReturnType<typeof failedWork> = [];
   const hubFile = join(dirname(configFile), "hub/config.json");
   if (existsSync(hubFile)) {
@@ -51,7 +52,7 @@ try {
         runs: any[] = [];
       try {
         await syncOwnerReplyCards(dirname(configFile), operations.executive(), client);
-        await syncTopicCards(dirname(configFile), client);
+        if (!config.pipelineMode) await syncTopicCards(dirname(configFile), client);
         await syncDecisionCards(dirname(configFile), client);
       } catch {
         /* Card sync is retried on the next tick without blocking task recovery. */
@@ -78,7 +79,12 @@ try {
     detail: "{}",
   });
   const paused = operations.pausedTasks(businesses.list(), tasks, now);
-  const queued = tasks.filter((t) => t.status === "queued" && !paused.has(t.id));
+  const queued = tasks.filter(
+    (t) =>
+      t.status === "queued" &&
+      !paused.has(t.id) &&
+      (!config.pipelineMode || ["staff-growth", "internal-content", "publish-content"].includes(t.kind)),
+  );
   const resumes = config.dailyModelRuns ? [] : queued.map(resume);
   if (config.dailyModelRuns) {
     const budget = new ModelBudget(dirname(configFile), config);
@@ -98,7 +104,7 @@ try {
         resumes.push(resume(task));
       }
       const usage = budget.snapshot(now);
-      if (usage.limited && existsSync(hubFile)) {
+      if (!config.pipelineMode && usage.limited && existsSync(hubFile)) {
         const cfg = JSON.parse(readFileSync(hubFile, "utf8"));
         await hubClient(cfg.url, cfg.source.key).tell({
           key: `company-model-limit-${usage.date}`,
@@ -123,7 +129,7 @@ try {
     operations.executive(),
     now,
     undefined,
-    existsSync(hubFile)
+    !config.pipelineMode && existsSync(hubFile)
       ? async (key, text) => {
           const cfg = JSON.parse(readFileSync(hubFile, "utf8"));
           return hubClient(cfg.url, cfg.source.key).tell({ key, text });
