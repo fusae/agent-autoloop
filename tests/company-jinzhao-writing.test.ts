@@ -180,7 +180,13 @@ function fixture(fn: (dir: string, config: CompanyConfig, company: Company) => v
   for (const name of writingInputs)
     writeFileSync(
       join(dir, "workspace/knowledge", name),
-      name.includes("compare.md") ? refs.compare : name.includes("stories") ? refs.stories : "参考资料",
+      name === "recent-posts.md"
+        ? "# 最近发布正文\n"
+        : name.includes("compare.md")
+          ? refs.compare
+          : name.includes("stories")
+            ? refs.stories
+            : "参考资料",
     );
   const db = new DatabaseSync(join(dir, "operations.db"));
   db.exec("CREATE TABLE projects(id TEXT PRIMARY KEY,body TEXT NOT NULL)");
@@ -304,7 +310,6 @@ test("business model rule keeps default employees, shared lane and result source
   }
 });
 
-
 test("acquisition copy must use the current exact wording", () => {
   for (const ending of [
     "目前只有安卓，感兴趣的可以私我安装",
@@ -326,3 +331,36 @@ for (const phrase of ["私我", "私信", "私聊", "加我", "加V", "加v", "�
       assert.match(checkJinzhaoDraft(draft, refs).join(), /不得出现导流用语/, `${field}: ${phrase}`);
     }
   });
+
+// Full-body comparison is mandatory both on delivery and on the later freeze boundary.
+test("real duplicate fails delivery and freeze even with a different title and claimed new angle", () =>
+  fixture((dir) => {
+    const copies = JSON.parse(readFileSync(new URL("./fixtures/content-dedup.json", import.meta.url), "utf8"));
+    const file = "tasks/write/xiaohongshu.json";
+    writeFileSync(
+      join(dir, "workspace", file),
+      JSON.stringify({ ...valid(), ...copies.withdrawn, angle: "版权全新角度" }),
+    );
+    writeFileSync(
+      join(dir, "workspace/knowledge/recent-posts.md"),
+      "# 最近发布正文\n\n<!-- post " +
+        JSON.stringify({
+          id: "manual",
+          title: copies.manual.title,
+          publishedAt: "2026-11-11T11:24:33Z",
+          origin: "董事长手动",
+        }) +
+        " -->\n" +
+        copies.manual.content
+          .split("\n")
+          .map((s: string) => "> " + s)
+          .join("\n"),
+    );
+    assert.match(checkJinzhaoDelivery(dir, [file]).join(), /与《做了个英语阅读的app》（2026-11-11）重复/);
+    assert.throws(
+      () => freezePublication(dir, "jinzhao", "plan", { reports: [{ artifacts: [file] }] } as any),
+      /重合点/,
+    );
+    rmSync(join(dir, "workspace/knowledge/recent-posts.md"));
+    assert.match(checkJinzhaoDelivery(dir, [file]).join(), /recent-posts/);
+  }));

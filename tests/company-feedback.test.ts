@@ -524,3 +524,87 @@ test("deleted posts retain idempotency receipts but are neither counted nor coll
     f.clean();
   }
 });
+
+// Pinned old posts must not displace recent manual posts; caches save reads, never substitute stale body text.
+test("recent reader includes manual full bodies and sorts dates despite pinned order", async () => {
+  const f = fixture();
+  const ids = Array.from({ length: 12 }, (_, i) => i.toString(16).padStart(24, "0"));
+  let reads: string[] = [],
+    version = "完整正文";
+  const call = async (path: string, body?: any) => {
+    if (path.endsWith("status")) return { is_logged_in: true, user_id: account };
+    if (path.endsWith("me"))
+      return {
+        data: { interactions: [{ type: "fans", count: "86" }], feeds: ids.map((id) => ({ id, xsecToken: "fake" })) },
+      };
+    assert.equal(path, "/api/v1/feeds/detail");
+    assert.equal(body.load_all_comments, false);
+    reads.push(body.feed_id);
+    const i = ids.indexOf(body.feed_id);
+    return {
+      data: {
+        note: {
+          noteId: body.feed_id,
+          user: { userId: account },
+          title: "手动帖" + i,
+          desc: version + i,
+          time: Date.UTC(2026, 10, i + 1),
+          imageList: [],
+          interactInfo: { likedCount: "0", collectedCount: "0", commentCount: "0" },
+        },
+      },
+    };
+  };
+  try {
+    const cfg = { endpoint: "http://localhost", token: "fake", accountId: account };
+    const run = () => readXhs(cfg, join(f.dir, "remote"), { action: "read", notes: [], recent: 10 }, call);
+    const first = await run();
+    assert.equal(first.state, "ready");
+    if (first.state !== "ready") return;
+    assert.equal(reads.length, 12);
+    assert.deepEqual(first.notes, []);
+    assert.equal(first.recent?.length, 10);
+    assert.equal(first.recent?.[0].id, ids[11]);
+    assert.equal(first.recent?.at(-1)?.id, ids[2]);
+    version = "更新正文";
+    reads = [];
+    const next = await run();
+    assert.equal(next.state, "ready");
+    if (next.state !== "ready") return;
+    assert.equal(reads.length, 10);
+    assert.equal(next.recent?.[0].content, "更新正文11");
+    for (const recent of [1, 11, "10", null])
+      await assert.rejects(readXhs(cfg, join(f.dir, "remote"), { action: "read", notes: [], recent }, call));
+  } finally {
+    f.clean();
+  }
+});
+test("daily collection writes system and manual full text once without models or notifications", async () => {
+  const f = fixture();
+  let reads = 0;
+  try {
+    const note = observation.state === "ready" ? observation.notes[0] : null!;
+    await collectFeedback(f.dir, {} as any, new Date("2026-11-12T02:00:00Z"), (_dir, _notes, recent) => {
+      reads++;
+      assert.equal(recent, 10);
+      return {
+        ...observation,
+        recent: [
+          { ...note, id: "d".repeat(24), title: "手动正文", content: "开头\n" + "中间".repeat(200) + "\n结尾完整正文" },
+          note,
+        ],
+      } as Observation;
+    });
+    const text = readFileSync(join(f.dir, "workspace/knowledge/recent-posts.md"), "utf8");
+    assert.match(text, /结尾完整正文/);
+    assert.match(text, /来源：董事长手动/);
+    assert.match(text, /来源：系统/);
+    await collectFeedback(f.dir, {} as any, new Date("2026-11-12T03:00:00Z"), () => {
+      reads++;
+      throw Error("duplicate read");
+    });
+    assert.equal(reads, 1);
+  } finally {
+    f.clean();
+  }
+});

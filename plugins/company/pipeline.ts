@@ -1,3 +1,4 @@
+import { readRecentPosts } from "./recent-posts.ts";
 import { readFileSync, realpathSync, statSync, existsSync } from "node:fs";
 import { join, relative, isAbsolute, sep } from "node:path";
 import { createHash } from "node:crypto";
@@ -10,9 +11,22 @@ import { publicationResults } from "./publication-policy.ts";
 import { employeeEntries } from "./reporting.ts";
 import { localDay } from "./workday.ts";
 
-export const pipelinePrompt = `内容流水线规范：本节替代旧的CEO审核、选题会、周目标、上班规划和日报要求。只写本轮派发的一篇完整稿件，自行从手册与素材库挑选角度；先读knowledge/pipeline-<业务>.json最近10篇（含手动帖）和在途稿，不能重复选题或换标题复述。交付包增加angle（本篇具体角度）及duplicateCheck:[{publication:最近已发编号,difference:与该篇的具体差别}]，覆盖给定的每一篇。仅交付本地稿，由程序检查，最多退回重写2次，仍不过当天放弃。今朝按固定五份资料一次交齐图文，程序通过直接发董事长确认卡，退回附意见只改一次再确认。rabbitrun读取knowledge/rabbitrun-handbook.md及crypto-content-guide.md，合规检查通过由固定程序发布。不得自行发布、发消息或新增任务。日报由程序生成，不提交dailyReport。按原company.result格式提交结果，保留真实证据。`;
+export const pipelinePrompt = `内容流水线规范：本节替代旧的CEO审核、选题会、周目标、上班规划和日报要求。只写本轮派发的一篇完整稿件，自行从手册与素材库挑选角度；今朝选题前先读knowledge/recent-posts.md完整正文，在交付中写明与最近几篇的具体区别；若素材库已无未用过的角度，说明“素材不足”并停止，不要硬写；先读knowledge/pipeline-<业务>.json最近10篇（含手动帖）和在途稿，不能重复选题或换标题复述。交付包增加angle（本篇具体角度）及duplicateCheck:[{publication:最近已发编号,difference:与该篇的具体差别}]，覆盖给定的每一篇。仅交付本地稿，由程序检查，最多退回重写2次，仍不过当天放弃。今朝按固定资料一次交齐图文，程序通过直接发董事长确认卡，退回附意见只改一次再确认。rabbitrun读取knowledge/rabbitrun-handbook.md及crypto-content-guide.md，合规检查通过由固定程序发布。不得自行发布、发消息或新增任务。日报由程序生成，不提交dailyReport。按原company.result格式提交结果，保留真实证据。`;
 
 export function recentPipelinePosts(directory: string, business: string) {
+  if (business !== "rabbitrun" && existsSync(join(directory, "workspace/knowledge/recent-posts.md"))) {
+    const posts = readRecentPosts(directory);
+    if (posts.length) {
+      const system = publicationResults(directory, true);
+      return posts.map((post) => ({
+        publication: system.find((p) => p.remoteId === post.id)?.key ?? "manual:" + post.id,
+        title: post.title,
+        platform: "小红书",
+        at: post.publishedAt,
+        fields: [],
+      }));
+    }
+  }
   return metricCatalog(directory)
     .filter((p) => (business === "rabbitrun" ? p.platform === "币安广场" : p.platform.startsWith("小红书")))
     .sort((a, b) => b.at.localeCompare(a.at))

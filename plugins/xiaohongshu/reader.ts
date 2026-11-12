@@ -19,6 +19,7 @@ export type Observation =
       account: string;
       followers: number;
       notes: Note[];
+      recent?: Note[];
       // Older daily snapshots and readers omit list-only observations.
       others?: { id: string; title: string; likes: number | null }[];
     }
@@ -47,7 +48,8 @@ export async function readXhs(
   if (
     !request ||
     request.action !== "read" ||
-    Object.keys(request).some((k) => !["action", "notes"].includes(k)) ||
+    Object.keys(request).some((k) => !["action", "notes", "recent"].includes(k)) ||
+    (request.recent !== undefined && request.recent !== 10) ||
     !Array.isArray(request.notes) ||
     request.notes.length > 200 ||
     request.notes.some((id: unknown) => typeof id !== "string" || !/^[a-f0-9]{24}$/.test(id))
@@ -100,7 +102,28 @@ export async function readXhs(
     writeFileSync(tokensFile + ".tmp", JSON.stringify(tokens), { mode: 0o600 });
     renameSync(tokensFile + ".tmp", tokensFile);
     const notes: Note[] = [];
-    for (const id of [...new Set<string>(request.notes)]) {
+    const datesFile = join(directory, "published-dates.json");
+    const dates: Record<string, string> = existsSync(datesFile) ? JSON.parse(readFileSync(datesFile, "utf8")) : {};
+    const visible = [
+      ...new Set<string>(
+        profile.feeds
+          .map((f: any) => f.id)
+          .filter((id: unknown) => typeof id === "string" && /^[a-f0-9]{24}$/.test(id)),
+      ),
+    ];
+    // The profile can pin old posts ahead of recent ones and exposes no publication date.
+    // Read unknown dates once, then refresh the newest ten bodies on each daily collection.
+    if (request.recent && visible.length > 200) return { state: "unknown", reason: "本人笔记列表超出只读采集范围" };
+    const candidates = request.recent
+      ? [
+          ...visible.filter((id) => !Number.isFinite(Date.parse(dates[id]))),
+          ...visible
+            .filter((id) => Number.isFinite(Date.parse(dates[id])))
+            .sort((a, b) => Date.parse(dates[b]) - Date.parse(dates[a]))
+            .slice(0, 10),
+        ]
+      : [];
+    for (const id of new Set<string>([...request.notes, ...candidates])) {
       if (!tokens[id]) return { state: "unknown", reason: "本人列表尚未提供指定笔记的读取凭据" };
       let response: any;
       try {
@@ -122,6 +145,7 @@ export async function readXhs(
         !Number.isFinite(n.time)
       )
         return { state: "unknown", reason: "平台笔记字段不完整" };
+      dates[id] = new Date(n.time).toISOString();
       notes.push({
         id,
         author: n.user.userId,
@@ -134,7 +158,23 @@ export async function readXhs(
         comments: count(n.interactInfo?.commentCount),
       });
     }
-    return { state: "ready", account: config.accountId, followers, notes, others };
+    writeFileSync(datesFile + ".tmp", JSON.stringify(dates), { mode: 0o600 });
+    renameSync(datesFile + ".tmp", datesFile);
+    return {
+      state: "ready",
+      account: config.accountId,
+      followers,
+      notes: notes.filter((n) => requested.has(n.id)),
+      others,
+      ...(request.recent
+        ? {
+            recent: notes
+              .filter((n) => visible.includes(n.id))
+              .sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt))
+              .slice(0, 10),
+          }
+        : {}),
+    };
   } finally {
     rmSync(lock, { recursive: true, force: true });
   }

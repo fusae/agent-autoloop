@@ -5,7 +5,7 @@ import { isAbsolute, join } from "node:path";
 import { createHash } from "node:crypto";
 import { verifiedPublication } from "./publication.ts";
 import type { Observation } from "../xiaohongshu/reader.ts";
-export function readFeedback(directory: string, notes: string[]): Observation {
+export function readFeedback(directory: string, notes: string[], recent?: 10): Observation {
   const target = JSON.parse(readFileSync(join(directory, "feedback.json"), "utf8"));
   if (
     !Array.isArray(target.command) ||
@@ -18,7 +18,7 @@ export function readFeedback(directory: string, notes: string[]): Observation {
     target.command[0] === "sudo" ? "/usr/bin/sudo" : target.command[0],
     target.command.slice(1),
     {
-      input: JSON.stringify({ action: "read", notes }),
+      input: JSON.stringify({ action: "read", notes, ...(recent ? { recent } : {}) }),
       encoding: "utf8",
       timeout: 600000,
       maxBuffer: 1_000_000,
@@ -43,6 +43,23 @@ export function readFeedback(directory: string, notes: string[]): Observation {
       ))
   )
     throw Error("只读响应账号或指标不符");
+  if (
+    recent &&
+    value.state === "ready" &&
+    (!Array.isArray(value.recent) ||
+      value.recent.length > recent ||
+      new Set(value.recent.map((n: any) => n.id)).size !== value.recent.length ||
+      value.recent.some(
+        (n: any) =>
+          !/^[a-f0-9]{24}$/.test(n.id) ||
+          n.author !== target.accountId ||
+          typeof n.title !== "string" ||
+          typeof n.content !== "string" ||
+          !n.content.trim() ||
+          !Number.isFinite(Date.parse(n.publishedAt)),
+      ))
+  )
+    throw Error("最近正文缺失、作者不符或发布时间无效，请升级只读入口");
   return value;
 }
 const normalize = (s: string) =>

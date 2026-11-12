@@ -103,7 +103,7 @@ node plugins/xiaohongshu/manage.ts pack post.json tasks/原任务/xiaohongshu.js
 
 公司运营和 CEO 共读 `knowledge/content-guide.md`（模板见 `examples/recipes/company/`）。运营写稿、改稿前读取 feedback 的全部系统帖与 manual 手动帖、各项目 operations 资料中的 contentDrafts 和原稿；交付说明列最近10篇切入角度并解释新稿差异，不足10篇列全部。CEO 按规范第五节逐项审核，任一项失败或与其他稿件角度重复即退回。旧备稿下次审稿适用新规范，不自动修改业务记录。
 
-`feedback.posts` 新增可选 `title`、`excerpt`（冻结正文前100字），`operations/*.json` 与 `ceo.json` 项目资料新增 `contentDrafts`，保留在制且未打包稿件的标题及缺失说明；不把原图 base64 复制进知识。手动帖仍仅有标题及采集时间，不推断发布时间；已关闭、已发布稿不计备稿。均为兼容的资料字段，内核协议不变。
+`feedback.posts` 新增可选 `title`、`excerpt`（冻结正文前100字），`operations/*.json` 与 `ceo.json` 项目资料新增 `contentDrafts`，保留在制且未打包稿件的标题及缺失说明；不把原图 base64 复制进知识。手动帖历史样本仍兼容仅标题及采集时间；每日读取的最近10篇另存 `workspace/knowledge/recent-posts.md`，包含标题、实际发布时间及完整正文；已关闭、已发布稿不计备稿。均为兼容的资料字段，内核协议不变。
 
 ```sh
 node plugins/xiaohongshu/manage.ts cards spec.json outdir
@@ -114,3 +114,10 @@ node plugins/xiaohongshu/manage.ts cards spec.json outdir
 渲染器是独立系统工具 Chrome for Testing 的稳定版 linux64 chrome-headless-shell，默认位于 `/opt/agent-company/tools/chrome-headless-shell/chrome-headless-shell`（本地可用 XHS_CARDS_BROWSER 指定），安装所需系统库、fonts-noto-cjk、fonts-noto-color-emoji 后运行 fc-cache -f。员工沙箱禁止 Chromium 所需的 shutdown 和 connect 系统调用时，使用固定代渲染服务，不能放宽模型权限；上线必须以实际员工身份和 workspace-write 沙箱测试 cards，不调用模型、不发布。
 
 固定服务模板为 `plugins/xiaohongshu/cards.service`，安装为 `agent-company-cards.service`。先建立 root:agentcompany、0770 的 `workspace/.cards-renderer`。服务以 DynamicUser、共享组 agentcompany 运行，只将该目录绑定为 `/work`，隐藏公司状态与凭据，系统目录只读，独立临时目录和网络命名空间。员工通过本地 JSON 文件请求，服务只收 title/pages/theme，拒绝 HTML、路径或命令字段；只输出图片或错误，无发布能力。目录存在时 cards 自动代渲染；每张最多60秒，命令最多等待550秒，超时报告原任务。新进程不重试业务，不触发模型轮次。测试可用 `XHS_CARDS_SPOOL` 指定临时目录。
+
+
+### 最近全文与本地查重
+
+日采集沿用只读入口，`action:"read"` 可附 `recent:10`，返回兼容的 `recent` 完整笔记数组；未传时仍只读取指定 `notes`，旧响应保持不变。公司端和旧机只读入口须配套部署，旧入口缺少全文响应时本次采集记未知，不把标题当正文。个人列表存在置顶且不提供日期，首次读取未知笔记的实际发布时间，之后只刷新最近10篇及新出现笔记；按实际时间排序，系统帖与手动帖合并，失败不覆盖已有全文。
+
+今朝选题、写稿读取 `recent-posts.md`，交付及发布冻结由本地程序逐篇查重，无模型调用。抽取书名、数字（含三成与30%归一）、功能和核心论点；至少4项重合且覆盖较少一方的60%，或正文字符4-gram Dice相似度达到32%且共享至少20项，任一命中即退回，写出原标题、日期、重合点。话题标签及固定获取说明不计；仅共享书名或一般功能不退回。缺少全文资料时停止交付验收。素材角度耗尽须说明“素材不足”并停止，不换标题重写。真实重复稿与不同角度稿作为本地回归数据，不包含账号、凭据或私有路径。

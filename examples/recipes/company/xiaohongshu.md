@@ -2,7 +2,7 @@
 
 运营负责完整图文，CEO 审稿，固定程序发布；累计前 5 篇成功发布须董事长逐篇确认，共用账号每天合计 1 篇。模型不能自行发布、登录或改发布配置；审核通过不等于发布成功。
 
-写稿和改稿前先读 `knowledge/content-guide.md`、`knowledge/feedback.json`、`knowledge/feedback.md`（包括 `manual` 手动帖），以及全部 `knowledge/operations/*.json` 的 `contentDrafts` 和备稿原文。已发标题与正文前 100 字在 `feedback.posts`；手动帖只有标题，不编造正文或发布时间。手动帖不计员工指标，但必须查重。最近 10 篇切入角度与新稿差异写进 handoff/facts，不足 10 篇列全部；查重覆盖全部已发和其他备稿。
+选题前先读 `knowledge/recent-posts.md` 最近10篇（系统帖和董事长手动帖）完整正文，在交付说明写明本篇与最近几篇的区别；素材库已无未用过的角度时，说明“素材不足”并停止，不要硬写。写稿和改稿前先读 `knowledge/content-guide.md`、`knowledge/feedback.json`、`knowledge/feedback.md`（包括 `manual` 手动帖），以及全部 `knowledge/operations/*.json` 的 `contentDrafts` 和备稿原文。已发标题与正文前 100 字在 `feedback.posts`；近期手动帖的全文与平台实际发布时间见 `recent-posts.md`，未采集的旧帖不编造正文或发布时间。手动帖不计员工指标，但必须查重。最近 10 篇切入角度与新稿差异写进 handoff/facts，不足 10 篇列全部；查重覆盖全部已发和其他备稿。
 
 配图只用固定文字工具，禁止 imagegen、自绘或其他图片生成模型：
 

@@ -1,3 +1,4 @@
+import { writeRecentPosts } from "./recent-posts.ts";
 import { localDay, weekOf } from "./workday.ts";
 import { frozenSummary } from "./content.ts";
 import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync, rmSync } from "node:fs";
@@ -29,6 +30,8 @@ type ManualPost = {
   title: string;
   url: string;
   firstSeen: string;
+  publishedAt?: string;
+  content?: string;
   samples: { at: string; likes: number | null }[];
 };
 const shiftedDay = (day: string, offset: number) =>
@@ -91,6 +94,7 @@ export async function collectFeedback(
         daily.observation = read(
           directory,
           publications.filter((p) => !p.x).map((p) => p.remoteId),
+          10,
         );
       } catch {
         daily.observation = { state: "unknown", reason: "只读采集未取得完整数据" };
@@ -98,6 +102,17 @@ export async function collectFeedback(
       if (daily.observation.state === "blocked")
         state.blocked = { at: now.toISOString(), reason: daily.observation.reason };
       save(stateFile, state);
+      if (daily.observation.state === "ready" && daily.observation.recent)
+        writeRecentPosts(
+          directory,
+          daily.observation.recent,
+          new Set(
+            publicationResults(directory, true)
+              .filter((p) => !p.x)
+              .map((p) => p.remoteId),
+          ),
+          daily.at,
+        );
     }
     if (state.blocked && state.notifiedIncident !== state.blocked.at && state.notifiedDay !== today && notify) {
       await notify(
@@ -156,6 +171,12 @@ export async function collectFeedback(
           manualById.set(note.id, post);
         }
         post.title = note.title;
+        const full = d.observation.recent?.find((n) => n.id === note.id);
+        if (full) {
+          post.title = full.title;
+          post.publishedAt = full.publishedAt;
+          post.content = full.content;
+        }
         if (!post.samples.some((s) => publishDay(new Date(s.at)) === d.day))
           post.samples.push({ at: d.at, likes: note.likes });
       }
@@ -348,8 +369,8 @@ export function metricCatalog(directory: string): MissingMetric[] {
     items.push({
       publication: "manual:" + p.id,
       title: p.title,
-      platform: "小红书手动帖（首次采集）",
-      at: p.firstSeen,
+      platform: p.publishedAt ? "小红书手动帖" : "小红书手动帖（首次采集）",
+      at: p.publishedAt ?? p.firstSeen,
       observedAt: p.samples?.at(-1)?.at,
       fields:
         p.samples?.at(-1)?.likes == null
