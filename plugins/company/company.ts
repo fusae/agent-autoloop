@@ -44,6 +44,7 @@ for (const role of Object.keys(departments)) {
 for (const kind of ["software", "content", "support", "finance"]) workflows[`internal-${kind}`] = [...workflows[kind]];
 export type CompanyConfig = {
   pipelineMode?: boolean;
+  rabbitrunX?: { enabled: boolean };
   aiStoryTopics?: { searchCommand: string[] };
   staffModels?: StaffModels;
   jinzhaoWriting?: boolean;

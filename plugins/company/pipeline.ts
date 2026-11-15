@@ -6,7 +6,7 @@ import type { Task } from "./company.ts";
 import type { Project } from "./operations.ts";
 import { metricCatalog } from "./feedback.ts";
 import { checkJinzhaoDelivery } from "./jinzhao-writing.ts";
-import { rabbitDraft, rabbitChannel } from "./rabbitrun.ts";
+import { rabbitDraft, rabbitChannel, xChannelEnabled, pendingX } from "./rabbitrun.ts";
 import { publicationResults } from "./publication-policy.ts";
 import { employeeEntries } from "./reporting.ts";
 import { localDay } from "./workday.ts";
@@ -159,5 +159,8 @@ export function pipelineDailyReport(
   const blocked = projects.flatMap((p) =>
     p.plans.filter((a) => a.status === "blocked").map((a) => `${a.title}：${a.result}`),
   );
-  return `日报 ${date}\n\n今天写了什么\n${list(written)}\n\n发了什么\n${list([...published, ...manual])}\n\n程序退回原因\n${list([...returns, ...programReturns])}\n\n待董事长确认\n${list(pending)}\n\nX 待发\n${list(results.filter((p) => p.x && p.x.state !== "published").map((p) => title(p.key)))}\n\n异常\n${list([...blocked, ...anomalies])}`;
+  const xSection = xChannelEnabled(directory)
+    ? `\n\nX 待发\n${list(results.filter((p) => pendingX(p.x)).map((p) => title(p.key)))}`
+    : "";
+  return `日报 ${date}\n\n今天写了什么\n${list(written)}\n\n发了什么\n${list([...published, ...manual])}\n\n程序退回原因\n${list([...returns, ...programReturns])}\n\n待董事长确认\n${list(pending)}${xSection}\n\n异常\n${list([...blocked, ...anomalies])}`;
 }

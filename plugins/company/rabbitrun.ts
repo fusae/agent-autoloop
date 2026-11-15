@@ -1,4 +1,12 @@
 import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+export function xChannelEnabled(directory: string) {
+  const file = join(directory, "company.json");
+  return !existsSync(file) || JSON.parse(readFileSync(file, "utf8")).rabbitrunX?.enabled !== false;
+}
+export const pendingX = (x?: { state: string }) => !!x && !["published", "cancelled"].includes(x.state);
 
 export const rabbitChannel = "rabbitrun · 币安广场 + X";
 export type RabbitDraft = { title: string; content: string; images: { mime: string; base64: string }[] };
@@ -10,12 +18,12 @@ export type RabbitRequest = {
   artifacts: { path: string; content: string; sha256: string }[];
 };
 export type XReceipt = {
-  state: "pending" | "claimed" | "failed" | "published";
+  state: "pending" | "claimed" | "failed" | "published" | "cancelled";
   attempts: number;
   at: string;
   url?: string;
   remoteId?: string;
-  reason?: "login" | "verification" | "risk" | "failed" | "unknown";
+  reason?: "login" | "verification" | "risk" | "failed" | "unknown" | "disabled";
 };
 export function rabbitDraft(request: RabbitRequest): RabbitDraft {
   if (
@@ -66,7 +74,7 @@ export function xReceipt(value: unknown): XReceipt {
   const x = value as XReceipt;
   if (
     !x ||
-    !["pending", "claimed", "failed", "published"].includes(x.state) ||
+    !["pending", "claimed", "failed", "published", "cancelled"].includes(x.state) ||
     !Number.isSafeInteger(x.attempts) ||
     x.attempts < 0 ||
     x.attempts > 2 ||
@@ -79,7 +87,7 @@ export function xReceipt(value: unknown): XReceipt {
     (!/^[0-9]{1,30}$/.test(x.remoteId ?? "") || x.url !== `https://x.com/rabbitrun_eth/status/${x.remoteId}`)
   )
     throw Error("X 回执必须属于 rabbitrun_eth");
-  if (x.reason !== undefined && !["login", "verification", "risk", "failed", "unknown"].includes(x.reason))
+  if (x.reason !== undefined && !["login", "verification", "risk", "failed", "unknown", "disabled"].includes(x.reason))
     throw Error("X 失败原因无效");
   return {
     state: x.state,
@@ -90,6 +98,7 @@ export function xReceipt(value: unknown): XReceipt {
   };
 }
 export function xStatus(x: XReceipt) {
+  if (x.state === "cancelled") return "已取消：X 渠道停用";
   return x.state === "published" ? `X 已发${x.url ? "：" + x.url : ""}` : "X 待发，请手动发布";
 }
 export const manualXNotice = (key: string) => `X 待发，请手动发布\n发布稿件：${key}`;
@@ -97,10 +106,7 @@ export const manualXKey = (card: { kind: string; text: string }) =>
   card.kind === "notice" ? /^X 待发，请手动发布\n发布稿件：([a-f0-9]{32})$/.exec(card.text)?.[1] : undefined;
 export function pendingXReminder(results: { x?: XReceipt; publishedAt: string }[], date: string) {
   const pending = results.filter(
-    (p) =>
-      p.x &&
-      p.x.state !== "published" &&
-      new Date(Date.parse(p.publishedAt) + 8 * 3600000).toISOString().slice(0, 10) < date,
+    (p) => pendingX(p.x) && new Date(Date.parse(p.publishedAt) + 8 * 3600000).toISOString().slice(0, 10) < date,
   );
   return pending.length ? `\n\nX 还有 ${pending.length} 篇待手动发布，发布后请点原卡片“我已在 X 发布”。` : "";
 }

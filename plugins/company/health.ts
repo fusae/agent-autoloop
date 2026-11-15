@@ -1,3 +1,4 @@
+import { pendingX } from "./rabbitrun.ts";
 import { createHash } from "node:crypto";
 import type { CompanyConfig, Role, Task } from "./company.ts";
 import type { Leadership } from "./executive.ts";
@@ -368,7 +369,11 @@ export function detectHealth(input: {
       reminderOnly: true,
     });
   for (const proof of publications.filter(
-    (p) => !config.delegation && p.x && p.x.state !== "published" && ms - Date.parse(p.publishedAt) >= 86400_000,
+    (p) =>
+      !config.delegation &&
+      config.rabbitrunX?.enabled !== false &&
+      pendingX(p.x) &&
+      ms - Date.parse(p.publishedAt) >= 86400_000,
   ))
     add(`x:${proof.key}`, {
       kind: "x-overdue",

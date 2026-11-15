@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { existsSync, readFileSync, readdirSync, mkdirSync, rmSync, chownSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { durableSave } from "../binance-square/publisher.ts";
-import { rabbitChannel, rabbitDraft, xReceipt, type RabbitRequest } from "./rabbitrun.ts";
+import { rabbitChannel, rabbitDraft, xReceipt, pendingX, xChannelEnabled, type RabbitRequest } from "./rabbitrun.ts";
 
 export function approvedRabbitRequest(directory: string, key: string, action: "lookup" | "publish"): RabbitRequest {
   if (!/^[a-f0-9]{32}$/.test(key)) throw Error("审核编号无效");
@@ -72,6 +72,10 @@ export function approvedRabbitRequest(directory: string, key: string, action: "l
 }
 export function rabbitQueue(directory: string, stateDirectory: string, input: any, now = new Date()) {
   if (!input || !["list", "complete"].includes(input.action)) throw Error("X 窄命令无效");
+  if (!xChannelEnabled(directory)) {
+    if (input.action === "list") return [];
+    throw Error("X 渠道已停用");
+  }
   if (!existsSync(stateDirectory))
     return input.action === "list"
       ? []
@@ -89,11 +93,7 @@ export function rabbitQueue(directory: string, stateDirectory: string, input: an
     if (input.action === "list")
       return keys.flatMap((file) => {
         const saved = JSON.parse(readFileSync(join(stateDirectory, file), "utf8"));
-        if (
-          !saved.proof?.x ||
-          saved.proof.x.state === "published" ||
-          !existsSync(join(directory, "publications", saved.proof.key + "-result.json"))
-        )
+        if (!pendingX(saved.proof?.x) || !existsSync(join(directory, "publications", saved.proof.key + "-result.json")))
           return [];
         const request = approvedRabbitRequest(directory, saved.proof.key, "lookup");
         const draft = rabbitDraft(request);
@@ -104,6 +104,7 @@ export function rabbitQueue(directory: string, stateDirectory: string, input: an
     const saved = JSON.parse(readFileSync(file, "utf8"));
     if (!saved.proof?.x || saved.proof.key !== input.key) throw Error("币安尚未确认发布，X 不可发送");
     const x = xReceipt(saved.proof.x);
+    if (x.state === "cancelled") throw Error("已取消：X 渠道停用");
     const match = /^https:\/\/x\.com\/rabbitrun_eth\/status\/(\d{1,30})$/.exec(input.url ?? "");
     if (input.url !== undefined && !match) throw Error("需要本人账号的帖子链接");
     if (x.state === "published") {

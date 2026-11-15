@@ -1,4 +1,4 @@
-import { manualXKey } from "./rabbitrun.ts";
+import { manualXKey, xStatus } from "./rabbitrun.ts";
 import { publicationResults } from "./publication-policy.ts";
 import { squareStatus } from "./rabbitrun-receipt.ts";
 import { existsSync } from "node:fs";
@@ -11,6 +11,7 @@ import type { Card } from "../../host/channels.ts";
 export function decisionCard(directory: string, card: Card): Card {
   const results = publicationResults(directory);
   const manual = results.find((p) => p.key === manualXKey(card));
+  if (manual?.x?.state === "cancelled") return { ...card, state: "closed", result: xStatus(manual.x) };
   // /tell creates a closed FYI at version 1, not a user-dismissed notice.
   if (manual?.x && card.state === "closed" && card.version === 1 && card.result === null)
     return {
@@ -23,7 +24,7 @@ export function decisionCard(directory: string, card: Card): Card {
     return {
       ...card,
       state: "done",
-      result: `${squareStatus(proof)}；发布阻塞已解除；${proof.x?.state === "published" ? "X 已发" : "X 待发，请使用本篇手动发布卡片"}`,
+      result: `${squareStatus(proof)}；发布阻塞已解除；${proof.x?.state === "cancelled" ? xStatus(proof.x) : proof.x?.state === "published" ? "X 已发" : "X 待发，请使用本篇手动发布卡片"}`,
     };
   const file = join(directory, "operations.db");
   if (!existsSync(file)) return card;

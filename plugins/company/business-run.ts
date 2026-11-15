@@ -3,7 +3,7 @@ import { registeredProactive } from "./proactive.ts";
 import { recoverPublications } from "./publication-recovery.ts";
 import { syncDecisionCards } from "./decision-cards.ts";
 import { publicationResults } from "./publication-policy.ts";
-import { manualXNotice } from "./rabbitrun.ts";
+import { manualXNotice, pendingX } from "./rabbitrun.ts";
 import { collectFeedback } from "./feedback.ts";
 import { ModelBudget } from "./model-budget.ts";
 import { scheduledReport } from "./reporting.ts";
@@ -130,7 +130,7 @@ try {
   }
   if (existsSync(hubFile)) {
     const cfg = JSON.parse(readFileSync(hubFile, "utf8"));
-    for (const proof of publicationResults(dirname(configFile)).filter((p) => p.x && p.x.state !== "published")) {
+    for (const proof of publicationResults(dirname(configFile)).filter((p) => pendingX(p.x))) {
       await hubClient(cfg.url, cfg.source.key).tell({
         key: `rabbitrun-x-manual-${proof.key}`,
         text: manualXNotice(proof.key),

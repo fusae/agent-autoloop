@@ -2,7 +2,7 @@ import { pipelineSuppresses, delegated, chairmanNotice, retainSuppressedCard } f
 import { squareStatus } from "./rabbitrun-receipt.ts";
 import { decisionCard, publicationDecisionCards } from "./decision-cards.ts";
 import { cardTopics } from "./topics.ts";
-import { rabbitChannel, rabbitDraft, rabbitText, manualXKey } from "./rabbitrun.ts";
+import { rabbitChannel, rabbitDraft, rabbitText, manualXKey, xChannelEnabled } from "./rabbitrun.ts";
 import { parseXhsDraft } from "../xiaohongshu/publisher.ts";
 import { ARRANGEMENT_DETAILS } from "./arrangement.ts";
 // HTTP callbacks share the spool without owning a CLI connection; chat still uses history polling.
@@ -81,7 +81,7 @@ function publicationKey(card: Card) {
 export function interactiveCard(
   card: Card,
   media?: PublicationMedia,
-  manual?: { text: string; url?: string; published: boolean },
+  manual?: { text: string; url?: string; published: boolean; cancelled?: boolean },
 ) {
   const topics = card.title === "选题拍板" ? cardTopics(card.text) : undefined;
   const publication = publicationKey(card);
@@ -139,7 +139,10 @@ export function interactiveCard(
     else
       elements.push({
         tag: "div",
-        text: { tag: "plain_text", content: manual.published ? "X 已发" : "X 待发，通知已关闭" },
+        text: {
+          tag: "plain_text",
+          content: manual.cancelled ? "X 渠道已停用" : manual.published ? "X 已发" : "X 待发，通知已关闭",
+        },
       });
   } else if (card.kind === "ask" && card.state === "open") {
     if (topics) {
@@ -249,9 +252,11 @@ export function interactiveCard(
       title: {
         tag: "plain_text",
         content: manual
-          ? manual.published
-            ? "X 已发"
-            : "X 待发，请手动发布"
+          ? manual.cancelled
+            ? "X 渠道已停用"
+            : manual.published
+              ? "X 已发"
+              : "X 待发，请手动发布"
           : card.kind === "ask" && card.state !== "open"
             ? deferred
               ? "CEO · 已暂缓"
@@ -360,6 +365,7 @@ export class CompanyFeishu {
     const execution = JSON.stringify([card.state, card.result]);
     const manualKey = manualXKey(card);
     if (
+      (manualKey && card.result === "已取消：X 渠道停用" && !this.state.cards[card.id]?.cardRef) ||
       pipelineSuppresses(dirname(this.file), card) ||
       (delegated(dirname(this.file)) &&
         !manualKey &&
@@ -371,7 +377,7 @@ export class CompanyFeishu {
       await this.hub.delivered(card.id, card.version, card.ref ?? `company-silent-${card.id}`);
       return;
     }
-    let manual: { text: string; url?: string; published: boolean } | undefined;
+    let manual: { text: string; url?: string; published: boolean; cancelled?: boolean } | undefined;
     if (manualKey) {
       if (!this.manualX || !this.cards) throw Error("X 手动确认卡片入口尚未配置");
       const directory = dirname(this.file);
@@ -386,6 +392,7 @@ export class CompanyFeishu {
         text: `${rabbitText(draft)}\n\n${squareStatus(proof)}\n图片数：${draft.images.length}`,
         url: url.href,
         published: proof.x.state === "published",
+        cancelled: card.result === "已取消：X 渠道停用",
       };
     }
     let saved = this.state.cards[card.id];
@@ -552,6 +559,7 @@ export class CompanyFeishu {
     if (saved.manualX) {
       if (
         !this.manualX ||
+        !xChannelEnabled(dirname(this.file)) ||
         value.action !== "x-published" ||
         value.choice !== undefined ||
         event.action.tag !== "button"

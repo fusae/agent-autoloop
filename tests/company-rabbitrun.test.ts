@@ -963,3 +963,79 @@ test("author profile readback requires exact author, body, time and a unique off
     "123",
   );
 });
+
+// Disabling X must stop pending notices/confirmations, retain Square receipts, and update only existing cards.
+test("disabled X preserves Square history, suppresses pending work and patches the original card", () =>
+  temporary(async (dir) => {
+    const { publicationResults } = await import("../plugins/company/publication-policy.ts");
+    const { pipelineDailyReport } = await import("../plugins/company/pipeline.ts");
+    const { pendingX } = await import("../plugins/company/rabbitrun.ts");
+    approval(dir);
+    const state = join(dir, "publisher");
+    const proof = await squarePublication(state, request(), async () => ({
+      remoteId: "123",
+      url: "https://www.binance.com/square/post/123",
+    }));
+    const file = join(dir, "publications", key + "-result.json");
+    writeFileSync(file, JSON.stringify(proof));
+    const original = readFileSync(file, "utf8");
+    const card: any = {
+      id: 3,
+      version: 1,
+      state: "closed",
+      kind: "notice",
+      title: "公司",
+      text: manualXNotice(key),
+      result: null,
+      options: [],
+      choice: null,
+      ref: null,
+    };
+    const calls: string[][] = [];
+    const lark = async (args: string[]) => {
+      calls.push(args);
+      return { data: { message_id: "om_existing", chat_id: "oc_owner" } };
+    };
+    const hub: any = { delivered: async () => {} };
+    const bridge = new CompanyFeishu(join(dir, "feishu.json"), "ou_owner", hub, lark, undefined, true, {
+      dashboardUrl: "https://company.example",
+      complete: async () => assert.fail("disabled confirmation"),
+    });
+    await bridge.deliver(card);
+    calls.length = 0;
+    writeFileSync(join(dir, "company.json"), JSON.stringify({ rabbitrunX: { enabled: false } }));
+    const results = publicationResults(dir);
+    assert.equal(results[0].x?.state, "cancelled");
+    assert.equal(results[0].url, proof.url);
+    assert.equal(results.filter((p) => pendingX(p.x)).length, 0);
+    assert.equal(pendingXReminder(results, "2099-01-01"), "");
+    assert.doesNotMatch(pipelineDailyReport(dir, "2026-11-15", [], []), /X 待发/);
+    assert.doesNotMatch(publicationPreview(dir, key, "rabbitrun"), /X 待发|同文双发/);
+    assert.deepEqual(rabbitQueue(dir, state, { action: "list" }), []);
+    assert.throws(() => rabbitQueue(dir, state, { action: "complete", key }), /已停用/);
+    assert.equal(
+      await bridge.receiveAction({
+        header: { event_id: "disabled", event_type: "card.action.trigger" },
+        event: {
+          operator: { open_id: "ou_owner" },
+          context: { open_message_id: "om_existing" },
+          action: { tag: "button", value: { card: 3, version: 1, action: "x-published" } },
+        },
+      }),
+      false,
+    );
+    await bridge.deliver(card);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][1], "PATCH");
+    assert.match(calls[0].at(-1)!, /X 渠道已停用/);
+    assert.doesNotMatch(calls[0].at(-1)!, /我已在 X 发布/);
+    await bridge.deliver({ ...card, id: 4 });
+    assert.equal(calls.length, 1);
+    assert.equal(readFileSync(file, "utf8"), original);
+    writeFileSync(join(dir, "company.json"), JSON.stringify({ rabbitrunX: { enabled: true } }));
+    assert.equal(publicationResults(dir)[0].x?.state, "pending");
+    const cancelled = { ...proof, x: { ...proof.x!, state: "cancelled", reason: "disabled" } };
+    writeFileSync(file, JSON.stringify(cancelled));
+    assert.equal(publicationResults(dir)[0].x?.state, "cancelled");
+    assert.equal(pendingXReminder(publicationResults(dir), "2099-01-01"), "");
+  }));

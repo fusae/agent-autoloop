@@ -497,7 +497,7 @@ export function collectSnapshot(directory: string, now = new Date(), services: R
     downloads,
     chairman: [
       ...publications
-        .filter((p) => p.x && p.x.state !== "published")
+        .filter((p) => config.rabbitrunX?.enabled !== false && p.x && !["published", "cancelled"].includes(p.x.state))
         .map((p) => ({ category: "X待发", title: p.title, detail: state(p.x.state), at: p.x.at })),
       ...list(chief.questions)
         .filter((q) => q.recipient === "chairman" && q.state !== "answered")

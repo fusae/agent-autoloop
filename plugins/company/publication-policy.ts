@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { publication, publicationAttempt, type Publication } from "./publication.ts";
+import { xChannelEnabled, pendingX } from "./rabbitrun.ts";
 import type { CompanyConfig } from "./company.ts";
 
 export type PublishApproval = {
@@ -18,6 +19,8 @@ export const publishDay = (date: Date) => new Date(date.getTime() + 8 * 3600_000
 export const nextPublishDay = (date: Date) =>
   new Date(Date.parse(`${publishDay(date)}T00:00:00+08:00`) + 86400_000).toISOString();
 export function validatePublishPolicy(config: Partial<CompanyConfig>) {
+  if (config.rabbitrunX !== undefined && typeof config.rabbitrunX?.enabled !== "boolean")
+    throw Error("X 渠道需要启用开关");
   if (
     config.delegation !== undefined &&
     (!config.ceoMode ||
@@ -91,11 +94,13 @@ export function publicationChannel(directory: string, business: string): string 
 export function publicationResults(directory: string, includeDeleted = false): Publication[] {
   const path = join(directory, "publications");
   if (!existsSync(path)) return [];
+  const xEnabled = xChannelEnabled(directory);
   return readdirSync(path)
     .filter((name) => /^[a-f0-9]{32}-result\.json$/.test(name))
     .map((name) => {
       const proof = publication(JSON.parse(readFileSync(join(path, name), "utf8")));
       if (name !== `${proof.key}-result.json`) throw Error("发布回执编号不一致");
+      if (!xEnabled && pendingX(proof.x)) proof.x = { ...proof.x!, state: "cancelled", reason: "disabled" };
       return proof;
     })
     .filter((proof) => includeDeleted || !proof.deleted);
@@ -138,7 +143,9 @@ export function publicationPreview(directory: string, key: string, business: str
     throw Error("已审核稿件缺少标题、正文或图片");
   const platforms =
     request.business === "rabbitrun"
-      ? "\n平台：X @rabbitrun_eth + 币安广场 rabbitrun_eth；同文双发，标题为正文第一行。每篇均需董事长确认。\nX 待发，请手动发布。"
+      ? !xChannelEnabled(directory)
+        ? "\n平台：币安广场 rabbitrun_eth；标题为正文第一行。"
+        : "\n平台：X @rabbitrun_eth + 币安广场 rabbitrun_eth；同文双发，标题为正文第一行。每篇均需董事长确认。\nX 待发，请手动发布。"
       : "";
   return `${request.business === "rabbitrun" ? "业务" : "APP"}：${business}\n标题：${draft.title}\n正文：${draft.content}\n图片数：${draft.images.length}${platforms}\n只发布本次已冻结的审核稿；可补充文字意见。\n发布稿件：${key}`;
 }

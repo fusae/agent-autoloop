@@ -263,3 +263,24 @@ test("status shows enabled roles only and resolves a business-specific model", (
     f.cleanup();
   }
 });
+
+// Disabled and cancelled X work must leave the chairman queue without losing publication history.
+test("chairman snapshot excludes disabled and cancelled X posts", () => {
+  const f = fixture();
+  try {
+    const configFile = join(f.dir, "company.json");
+    const config = JSON.parse(readFileSync(configFile, "utf8"));
+    writeFileSync(configFile, JSON.stringify({ ...config, rabbitrunX: { enabled: false } }));
+    assert.ok(!collectSnapshot(f.dir, now).chairman.some((p) => p.category === "X待发"));
+    writeFileSync(configFile, JSON.stringify({ ...config, rabbitrunX: { enabled: true } }));
+    const file = join(f.dir, "publications", "a".repeat(32) + "-result.json");
+    const proof = JSON.parse(readFileSync(file, "utf8"));
+    proof.x.state = "cancelled";
+    writeFileSync(file, JSON.stringify(proof));
+    const snapshot = collectSnapshot(f.dir, now);
+    assert.ok(!snapshot.chairman.some((p) => p.category === "X待发"));
+    assert.equal(snapshot.publications.today.length, 1);
+  } finally {
+    f.cleanup();
+  }
+});
