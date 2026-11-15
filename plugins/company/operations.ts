@@ -57,7 +57,7 @@ import {
 } from "./publication-policy.ts";
 import { arrangementText } from "./arrangement.ts";
 import { ownerReplyEvidence, ownerCardFeedback } from "./owner-replies.ts";
-import { freezePublication } from "./publication.ts";
+import { publicationAttempt, freezePublication } from "./publication.ts";
 import { sourceSnapshots } from "./sources.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
@@ -2683,7 +2683,24 @@ export class Operations {
       const storyMode = b.id === "jinzhao" && !!this.config.aiStoryTopics;
       const emit = (a: Plan, publishing: boolean) => {
         const id = publishing ? "P-" + hash(a.publicationKey!) : "W-" + hash(`${b.id}:${a.id}:${a.revision ?? 0}`);
-        if (tasks.some((t) => t.id === id) || p.activity.some((v) => v.task === id)) return;
+        const previous = tasks.find((t) => t.id === id);
+        if (
+          publishing &&
+          previous?.status === "blocked" &&
+          publicationAttempt(this.directory, a.publicationKey!)?.state === "absent"
+        ) {
+          (receipt.events ??= []).push({
+            id: `company:pipeline-retry:${id}:${previous.assignment}`,
+            type: "company.task.retry",
+            subject: id,
+            summary: "确认未发布，恢复原稿",
+            detail: "{}",
+          });
+          a.task = id;
+          a.status = "publishing";
+          return;
+        }
+        if (previous || p.activity.some((v) => v.task === id)) return;
         const request = taskRequest({
           title: `${b.name} · ${a.title}`.slice(0, 120),
           kind: publishing ? "publish-content" : "staff-growth",

@@ -1,5 +1,7 @@
 // Failure modes: a paused content line writes, publishes, reads the account, sends old cards,
-// or reports intentional inactivity as failure; the same switch must restore normal scheduling.
+// or reports intentional inactivity as failure; confirmed absence must retry the original task within quota; the same switch must restore normal scheduling.
+import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -85,6 +87,107 @@ test("pause gates writing, pending confirmations, stale recovery and reports; Bi
     assert.ok(resumed.events?.some((e) => e.summary.startsWith("jinzhao")));
     assert.ok(pipelineAlerts(dir, projects, [], now).some((a) => a.text.includes("小红书")));
     assert.equal(pipelineSuppresses(dir, { title: "今朝选题", text: "选择", kind: "ask" }), false);
+  } finally {
+    c.close();
+    o.close();
+    b.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("confirmed absent publication resumes its existing task once after the daily quota gate", () => {
+  const dir = mkdtempSync(join(tmpdir(), "company-resume-"));
+  const cfg = {
+    name: "测试",
+    database: join(dir, "company.db"),
+    maxAssignments: 6,
+    pipelineMode: true,
+    publishDailyLimit: 1,
+  };
+  writeFileSync(join(dir, "company.json"), JSON.stringify(cfg));
+  const c = new Company(cfg),
+    o = new Operations(dir),
+    b = new Businesses(dir);
+  try {
+    const key = "b".repeat(32),
+      id = "P-" + createHash("sha256").update(key).digest("hex").slice(0, 32);
+    const now = new Date("2026-11-15T05:00:00Z");
+    b.save({
+      id: "rabbitrun",
+      name: "币安",
+      description: "内容",
+      audience: "用户",
+      objective: "内容",
+      stage: "operating",
+    });
+    b.autonomy("rabbitrun", true);
+    b.status("rabbitrun", "active");
+    c.process({
+      events: [
+        {
+          id: "create",
+          source: "company-inbox",
+          type: "company.task.create",
+          subject: id,
+          detail: JSON.stringify({
+            title: "原稿",
+            goal: "发布原稿",
+            kind: "publish-content",
+            acceptance: ["平台回执"],
+            publication: key,
+          }),
+        },
+      ],
+      answers: [],
+    });
+    c.process({
+      events: [
+        {
+          id: "failed",
+          source: "company-inbox",
+          type: "company.task.failed",
+          subject: id,
+          detail: JSON.stringify({ assignment: 1, reason: "未知" }),
+        },
+      ],
+      answers: [],
+    });
+    const project = o.snapshot(b.list(), c.tasks(), now)[0];
+    project.plans = [
+      {
+        id: "plan",
+        title: "原稿",
+        kind: "content",
+        owner: "growth",
+        status: "blocked",
+        task: id,
+        deliveryTask: "writer",
+        publicationKey: key,
+        pipelineChecked: key,
+        deliveryDecision: "publish",
+        result: "未知",
+        pipelineDate: "2026-11-15",
+        acceptance: ["平台回执"],
+      } as any,
+    ];
+    const db = new DatabaseSync(join(dir, "operations.db"));
+    db.prepare("INSERT OR REPLACE INTO projects(id,body) VALUES ('rabbitrun',?)").run(JSON.stringify(project));
+    db.close();
+    mkdirSync(join(dir, "publications"));
+    writeFileSync(
+      join(dir, "publications", key + ".json"),
+      JSON.stringify({ key, business: "rabbitrun", artifacts: [] }),
+    );
+    writeFileSync(join(dir, "publishing.json"), JSON.stringify({ projects: { rabbitrun: { channel: "币安" } } }));
+    savePublicationAttempt(dir, { key, channel: "币安", state: "absent", at: now.toISOString(), checks: 0 });
+    o.retryPublication(key, now);
+    const r = o.plan("retry", b.list(), c.tasks(), now);
+    assert.equal(r.events?.length, 1);
+    assert.equal(r.events[0].type, "company.task.retry");
+    assert.equal(r.events[0].subject, id);
+    c.process({ events: r.events.map((e) => ({ ...e, source: "company-inbox" })), answers: [] });
+    assert.equal(c.task(id)?.assignment, 2);
+    assert.equal(o.plan("again", b.list(), c.tasks(), now).events, undefined);
   } finally {
     c.close();
     o.close();
