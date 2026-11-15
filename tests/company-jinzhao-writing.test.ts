@@ -1,3 +1,4 @@
+// Failure mode: a network example is presented as the chairman’s personal experience.
 // Failure modes: invalid copy reaches CEO, copied image labels hide changed pixels/text,
 // Mandatory product copy or comparison images block unrelated AI stories; contact solicitation bypasses rejection;
 // nonexistent stories pass, return loops consume models, or a business override changes other employees.
@@ -361,3 +362,30 @@ test("real duplicate fails delivery and freeze even with a different title and c
     rmSync(join(dir, "workspace/knowledge/recent-posts.md"));
     assert.match(checkJinzhaoDelivery(dir, [file]).join(), /recent-posts/);
   }));
+
+test("network-story drafts reject personal experience claims but allow attributed commentary", () => {
+  const network = {
+    ...refs,
+    stories: `### S1 教程
+- 来源类型：网络
+- 来源链接：https://example.org/tutorial
+- 原作者/平台：作者 / 官方
+- 发布日期：2026-11-15
+- 核心做法：整理记录
+- 结果/数字：原文未提供数字
+- 可借鉴点：核对结果
+- 证据：https://example.org/tutorial
+`,
+  };
+  for (const phrase of ["我用了3天", "我用三天", "我用了 X 天", "我试了", "我做了"]) {
+    const d = valid();
+    d.content += phrase;
+    assert.match(checkJinzhaoDraft(d, network).join(), /第一人称亲历/, phrase);
+    assert.ok(!checkJinzhaoDraft(d, refs).some((e) => e.includes("第一人称亲历")));
+  }
+  for (const phrase of ["我看到有人分享", "有人分享了这个做法", "官方刚上线这项功能"]) {
+    const d = valid();
+    d.content += phrase;
+    assert.deepEqual(checkJinzhaoDraft(d, network), []);
+  }
+});

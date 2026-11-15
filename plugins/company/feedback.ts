@@ -1,3 +1,4 @@
+import { xiaohongshuPaused } from "./xiaohongshu-pause.ts";
 import { writeRecentPosts } from "./recent-posts.ts";
 import { localDay, weekOf } from "./workday.ts";
 import { frozenSummary } from "./content.ts";
@@ -61,6 +62,7 @@ export async function collectFeedback(
   read = readFeedback,
   notify?: (key: string, text: string) => Promise<unknown>,
 ) {
+  if (xiaohongshuPaused(directory)) return;
   const cfgPath = join(directory, "feedback.json");
   if (!existsSync(cfgPath)) return;
   const cfg = load(cfgPath, {});

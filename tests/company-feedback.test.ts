@@ -1,3 +1,4 @@
+// Failure mode:养号暂停 still touches the account or erases/re-notifies the login failure.
 // Failure mode: manually deleted posts cause collection errors, inflate counts, or reappear as manual posts.
 // Failure modes: program verification invokes QA or republishes; unknown results loop forever;
 // daily collectors duplicate reads, ignore access blocks, invent zeros, fetch manual details, or mix ownership.
@@ -604,6 +605,34 @@ test("daily collection writes system and manual full text once without models or
       throw Error("duplicate read");
     });
     assert.equal(reads, 1);
+  } finally {
+    f.clean();
+  }
+});
+
+test("pause preserves login failure and skips collection and notifications", async () => {
+  const f = fixture();
+  try {
+    const file = join(f.dir, "feedback-state.json");
+    const state = JSON.stringify({
+      days: [],
+      products: {},
+      blocked: { at: "2026-11-14T01:35:00Z", reason: "登录失效" },
+    });
+    writeFileSync(file, state);
+    writeFileSync(join(f.dir, "company.json"), JSON.stringify({ xiaohongshuPaused: true }));
+    await collectFeedback(
+      f.dir,
+      {} as any,
+      new Date("2026-11-15T02:00:00Z"),
+      () => {
+        throw Error("must not access browser");
+      },
+      async () => {
+        throw Error("must not notify");
+      },
+    );
+    assert.equal(readFileSync(file, "utf8"), state);
   } finally {
     f.clean();
   }

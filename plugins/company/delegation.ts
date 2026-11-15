@@ -1,3 +1,4 @@
+import { xiaohongshuPaused } from "./xiaohongshu-pause.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -156,6 +157,17 @@ export function retainSuppressedCard(
 
 export function pipelineSuppresses(directory: string, card: { title: string; text: string; kind: string }) {
   const file = join(directory, "company.json");
+  if (xiaohongshuPaused(directory) && card.title !== "CEO · 日报") {
+    const key = /发布稿件：([a-f0-9]{32})/.exec(card.text)?.[1];
+    const frozen = key && join(directory, "publications", key + ".json");
+    if (
+      (frozen &&
+        existsSync(frozen) &&
+        xiaohongshuPaused(directory, JSON.parse(readFileSync(frozen, "utf8")).business)) ||
+      /小红书|今朝|登录失效/.test(`${card.title} ${card.text}`)
+    )
+      return true;
+  }
   if (!existsSync(file) || !JSON.parse(readFileSync(file, "utf8")).pipelineMode) return false;
   if (
     card.title === "今朝选题" ||

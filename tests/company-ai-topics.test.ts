@@ -1,3 +1,4 @@
+// Failure modes: network cards lose required attribution or a paused line still searches and proposes.
 // Failure modes: empty or stale stories dispatch writers, CEO bypasses owner choice, replay writes twice,
 // rejected topics recur, search failures hammer the browser, or a draft uses another story.
 import assert from "node:assert/strict";
@@ -249,4 +250,36 @@ test("delivery rejects a valid but unselected story, preserves selected source t
     writeFileSync(join(f.dir, "workspace", path), JSON.stringify(draft));
     assert.deepEqual(checkJinzhaoDelivery(f.dir, [path], task), []);
     assert.match(checkJinzhaoDelivery(f.dir, [path], "another-task").join(), /选中的故事卡/);
+  }));
+
+const networkStory = `### S9 网络案例
+- 来源类型：网络
+- 来源链接：https://example.org/tutorial
+- 原作者/平台：作者 / 官方教程
+- 发布日期：2026-11-15
+- 核心做法：按教程整理记录
+- 结果/数字：原文未提供数字
+- 可借鉴点：核对整理结果
+- 证据：https://example.org/tutorial
+`;
+test("network cards require every source field while personal cards remain compatible", () => {
+  assert.equal(parseStories(networkStory)[0].source, "network");
+  assert.equal(parseStories(story(1))[0].source, undefined);
+  for (const line of networkStory.split("\n").filter((s) => s.startsWith("- ")))
+    assert.equal(parseStories(networkStory.replace(line, "")).length, 0, line);
+});
+test("one pause switch blocks proposals and browser evidence without changing pending work", () =>
+  fixture(async (f) => {
+    f.accept(f.tick());
+    f.propose();
+    const before = f.project();
+    writeFileSync(join(f.dir, "company.json"), JSON.stringify({ ...f.config, xiaohongshuPaused: true }));
+    assert.equal((await f.evidence()).calls, 0);
+    assert.equal(f.tick().ask, undefined);
+    assert.equal(f.tick().events, undefined);
+    assert.deepEqual(f.project().aiTopicBatches, before.aiTopicBatches);
+    assert.ok(f.o.pausedTasks(f.b.list(), f.c.tasks()).has(before.aiTopicBatches[0].task));
+    writeFileSync(join(f.dir, "company.json"), JSON.stringify({ ...f.config, xiaohongshuPaused: false }));
+    assert.equal((await f.evidence()).calls, 3);
+    assert.equal(f.tick().ask?.[0].title, "今朝选题");
   }));

@@ -1,3 +1,4 @@
+import { xiaohongshuPaused, xiaohongshuPauseReason } from "./xiaohongshu-pause.ts";
 import { deferCEOOwner, restoreCEOOwner } from "./ceo-owner-queue.ts";
 import { ceoDecisionSchema, ceoReceiptSchema } from "./ceo-receipt.ts";
 import { registeredProactive } from "./proactive.ts";
@@ -43,6 +44,29 @@ const event = context.events.findLast(
   (e) =>
     e.source === "company-office" && (e.type === `company.work.${role}` || e.type.startsWith(`company.work.${role}.`)),
 );
+if (
+  event &&
+  ["growth", "qa"].includes(role) &&
+  xiaohongshuPaused(dirname(configFile), taskProject(dirname(configFile), event.subject)?.business ?? "")
+) {
+  budget.close();
+  process.stdout.write(
+    JSON.stringify({
+      companyDeferred: {
+        events: [
+          {
+            id: `${key}:paused`,
+            type: "company.model.deferred",
+            subject: event.subject,
+            summary: xiaohongshuPauseReason,
+            detail: JSON.stringify({ assignment: JSON.parse(event.detail).assignment }),
+          },
+        ],
+      },
+    }) + "\n",
+  );
+  process.exit(0);
+}
 if (
   config.jinzhaoWriting &&
   role === "growth" &&

@@ -1,3 +1,4 @@
+import { xiaohongshuPaused } from "./xiaohongshu-pause.ts";
 import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -6,7 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { Project } from "./operations.ts";
 import type { Task, Receipt, Context } from "./company.ts";
 import { taskProject } from "./staff-model.ts";
-import { readStories, type Story } from "./ai-stories.ts";
+import { readStories, networkStoryRules, type Story } from "./ai-stories.ts";
 import { localDay } from "./workday.ts";
 import { failedEvidence, type SearchEvidence } from "../xiaohongshu/search.ts";
 
@@ -25,7 +26,7 @@ export type StoryBatch = {
   opinion?: string;
 };
 const id = (s: string) => createHash("sha256").update(s).digest("hex").slice(0, 24);
-export const aiTopicPrompt = `今朝每日选题规范：仅适用于启用aiStoryTopics的今朝。本节优先于直接写稿要求。选题任务只报3个未写过的真实故事，不写正文、不做图、不自行搜索或发布。只从knowledge/ai-stories.md取材，口吻参考chairman-voice-samples.md前三篇；旧素材、范文和平台笔记不能充当本人的新经历。读取knowledge/operations/jinzhao.json中本次aiTopicBatches的candidates和excluded，严格从候选卡选3个不同编号，排除已退回编号；company.result.detail带aiTopics:[{title,story,hook,keyword}]，标题≤20字，story为S编号，一句话钩子≤100字，keyword≤80字，artifacts为空。搜索由程序只读执行并附证据。素材不足就verdict:blocked、summary:素材不足并停止。董事长选中后才按派工里的story编号写那一篇，stories只能列该编号；不得改素材库、编造经历、数字、对话或用平台案例冒充本人。JinZhao Reading和记住只在故事相关时自然提一句，不写下载或获取引导。不恢复CEO初筛，不催选题。`;
+export const aiTopicPrompt = `今朝每日选题规范：仅适用于启用aiStoryTopics的今朝。本节优先于直接写稿要求。${networkStoryRules}选题任务只报3个未写过的本人经历或网络素材案例，不写正文、不做图、不自行搜索或发布。只从knowledge/ai-stories.md取材，口吻参考chairman-voice-samples.md前三篇；旧素材、范文和平台笔记不能充当本人的新经历。读取knowledge/operations/jinzhao.json中本次aiTopicBatches的candidates和excluded，严格从候选卡选3个不同编号，排除已退回编号；company.result.detail带aiTopics:[{title,story,hook,keyword}]，标题≤20字，story为S编号，一句话钩子≤100字，keyword≤80字，artifacts为空。搜索由程序只读执行并附证据。素材不足就verdict:blocked、summary:素材不足并停止。董事长选中后才按派工里的story编号写那一篇，stories只能列该编号；不得改素材库、编造经历、数字、对话或用平台案例冒充本人。JinZhao Reading和记住只在故事相关时自然提一句，不写下载或获取引导。不恢复CEO初筛，不催选题。`;
 export function topicBatchForTask(directory: string, task: string) {
   return taskProject(directory, task)?.aiTopicBatches?.find((b) => b.task === task);
 }
@@ -101,6 +102,7 @@ export async function collectTopicEvidence(
   search = evidenceCommand,
   wait: (ms: number) => Promise<unknown> = delay,
 ) {
+  if (xiaohongshuPaused(directory)) return;
   const path = join(directory, "ai-topic-evidence.json");
   const cache: Record<string, SearchEvidence[]> = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
   const save = () => {

@@ -1,3 +1,4 @@
+import { xiaohongshuPaused } from "./xiaohongshu-pause.ts";
 import { storyTopicTick, type StoryBatch } from "./ai-topics.ts";
 import { checkPipelineDelivery, recentPipelinePosts, pipelineDailyReport, pipelineAlerts } from "./pipeline.ts";
 import { ceoWake } from "./ceo-wake.ts";
@@ -864,6 +865,13 @@ export class Operations {
     return p.plans.some((a) => a.task === task && a.status !== "closed") || p.staff.some((s) => s.lastTask === task);
   }
   private pausedTask(p: Project, task: string) {
+    if (
+      xiaohongshuPaused(this.directory, p.business) &&
+      (p.plans.some((a) => a.task === task || a.deliveryTask === task) ||
+        p.aiTopicBatches?.some((b) => b.task === task) ||
+        p.activity.some((a) => a.task === task && a.role === "growth"))
+    )
+      return true;
     return p.staff.some(
       (s) =>
         s.pausedByCEO &&
@@ -2663,7 +2671,11 @@ export class Operations {
     const chief = this.executive(),
       date = day(now);
     for (const b of businesses.filter(
-      (b) => ["jinzhao", "rabbitrun"].includes(b.id) && b.autonomy && b.status === "active",
+      (b) =>
+        ["jinzhao", "rabbitrun"].includes(b.id) &&
+        b.autonomy &&
+        b.status === "active" &&
+        !xiaohongshuPaused(this.directory, b.id),
     )) {
       const p = this.get(b.id, now),
         before = JSON.stringify(p);
@@ -2827,7 +2839,7 @@ export class Operations {
           operation: "write",
           ...(selected ? { topic: selected.batch } : {}),
           goal: selected
-            ? `只写已选故事卡${selected.story}《${selected.title}》：${selected.hook}。董事长意见：${selected.opinion}。只用ai-stories.md的真实经历、数字和对话，stories仅列${selected.story}，不写下载/获取引导。`
+            ? `只写已选故事卡${selected.story}《${selected.title}》：${selected.hook}。董事长意见：${selected.opinion}。只用ai-stories.md所选卡的事实，网络素材须归属原作者，不能写成本人经历，数字仅引用原文，stories仅列${selected.story}，不写下载/获取引导。`
             : "完成一篇有真实依据、角度不同的完整稿件。",
           acceptance: ["符合手册与程序检查，完整发布包", "与最近10篇含手动帖逐篇比较角度"],
           priority: 1,

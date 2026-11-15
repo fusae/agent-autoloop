@@ -1,3 +1,4 @@
+import { xiaohongshuPaused, xiaohongshuPauseReason } from "./xiaohongshu-pause.ts";
 import { readRecentPosts } from "./recent-posts.ts";
 import { readFileSync, realpathSync, statSync, existsSync } from "node:fs";
 import { join, relative, isAbsolute, sep } from "node:path";
@@ -128,13 +129,21 @@ export function pipelineDailyReport(
   anomalies: string[] = [],
   programReturns: string[] = [],
 ) {
+  const paused = xiaohongshuPaused(directory);
+  const pausedProjects = projects.filter((p) => xiaohongshuPaused(directory, p.business));
+  const hidden = new Set(pausedProjects.flatMap((p) => p.plans.flatMap((a) => [a.task, a.deliveryTask])));
+  tasks = tasks.filter((t) => !hidden.has(t.id));
+  projects = projects.filter((p) => !xiaohongshuPaused(directory, p.business));
+  const visible = (s: string) => !paused || !/小红书|今朝|登录失效/.test(s);
+  anomalies = anomalies.filter(visible);
+  programReturns = programReturns.filter(visible);
   const list = (items: string[]) => {
     const text = [...new Set(items)].map((s) => `- ${s}`).join("\n") || "无";
     return text.length > 550 ? text.slice(0, 500) + `\n共${items.length}项，完整记录见后台。` : text;
   };
   const entries = employeeEntries(directory, tasks, "growth", date);
-  const catalog = metricCatalog(directory),
-    results = publicationResults(directory);
+  const catalog = metricCatalog(directory).filter((p) => !xiaohongshuPaused(directory, p.business)),
+    results = publicationResults(directory).filter((r) => !paused || catalog.some((p) => p.publication === r.key));
   const title = (key: string) => catalog.find((p) => p.publication === key)?.title ?? key;
   const returns = tasks.flatMap((t) =>
     t.reports
@@ -151,7 +160,7 @@ export function pipelineDailyReport(
     .map((p) => `${title(p.key)}：${p.url || "已确认，链接未提供"}`);
   const feedbackFile = join(directory, "workspace/knowledge/feedback.json");
   const feedback = existsSync(feedbackFile) ? JSON.parse(readFileSync(feedbackFile, "utf8")) : {};
-  const manual = (feedback.manual ?? [])
+  const manual = (paused ? [] : (feedback.manual ?? []))
     .filter((p: any) => localDay(new Date(p.firstSeen)) === date)
     .map((p: any) => `${p.title}（当天首次采集的手动帖，发帖日期未知）：${p.url}`);
   const pending = projects.flatMap((p) =>
@@ -169,11 +178,13 @@ export function pipelineDailyReport(
         Date.parse(r.at) >= start &&
         Date.parse(r.at) < start + 7 * 86400000,
     ).length;
-  const counts = `小红书 ${recent("jinzhao") + recent("jizhu")} 篇；币安 ${recent("rabbitrun")} 篇`;
+  const counts = paused
+    ? `币安 ${recent("rabbitrun")} 篇`
+    : `小红书 ${recent("jinzhao") + recent("jizhu")} 篇；币安 ${recent("rabbitrun")} 篇`;
   const xSection = xChannelEnabled(directory)
     ? `\n\nX 待发\n${list(results.filter((p) => pendingX(p.x)).map((p) => title(p.key)))}`
     : "";
-  return `日报 ${date}\n\n近7天发布篇数\n${counts}\n\n今天写了什么\n${list(written)}\n\n发了什么\n${list([...published, ...manual])}\n\n程序退回原因\n${list([...returns, ...programReturns])}\n\n待董事长确认\n${list(pending)}${xSection}\n\n异常\n${list([...blocked, ...anomalies])}`;
+  return `日报 ${date}${paused ? `\n\n小红书\n${xiaohongshuPauseReason}` : ""}\n\n近7天发布篇数\n${counts}\n\n今天写了什么\n${list(written)}\n\n发了什么\n${list([...published, ...manual])}\n\n程序退回原因\n${list([...returns, ...programReturns])}\n\n待董事长确认\n${list(pending)}${xSection}\n\n异常\n${list([...blocked, ...anomalies])}`;
 }
 
 // Check at the daily report cutoff; pending approvals and topic proposals are not new drafts.
@@ -183,7 +194,7 @@ export function pipelineAlerts(directory: string, projects: Project[], tasks: Ta
   const results = publicationResults(directory),
     catalog = metricCatalog(directory);
   return projects
-    .filter((p) => ["jinzhao", "rabbitrun"].includes(p.business))
+    .filter((p) => ["jinzhao", "rabbitrun"].includes(p.business) && !xiaohongshuPaused(directory, p.business))
     .flatMap((p) => {
       const line = p.business === "jinzhao" ? "小红书" : "币安";
       const reasons: string[] = [];

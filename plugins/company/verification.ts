@@ -1,3 +1,4 @@
+import { xiaohongshuPaused, xiaohongshuPauseReason } from "./xiaohongshu-pause.ts";
 import { rabbitChannel, rabbitDraft } from "./rabbitrun.ts";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -6,6 +7,7 @@ import { createHash } from "node:crypto";
 import { verifiedPublication } from "./publication.ts";
 import type { Observation } from "../xiaohongshu/reader.ts";
 export function readFeedback(directory: string, notes: string[], recent?: 10): Observation {
+  if (xiaohongshuPaused(directory)) return { state: "blocked", reason: xiaohongshuPauseReason };
   const target = JSON.parse(readFileSync(join(directory, "feedback.json"), "utf8"));
   if (
     !Array.isArray(target.command) ||

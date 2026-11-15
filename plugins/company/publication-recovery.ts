@@ -1,3 +1,4 @@
+import { xiaohongshuPaused } from "./xiaohongshu-pause.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { executePublication, publicationAttempt, savePublicationAttempt, PublicationAbsent } from "./publication.ts";
@@ -21,6 +22,10 @@ export function recoverPublications(
       office.reconcilePublication(key);
       operations.reconcilePublication(key, now);
       continue;
+    }
+    if (xiaohongshuPaused(directory)) {
+      const frozen = JSON.parse(readFileSync(join(directory, "publications", key + ".json"), "utf8"));
+      if (xiaohongshuPaused(directory, frozen.business)) continue;
     }
     const attempt = publicationAttempt(directory, key);
     if (!attempt || attempt.manual || attempt.lastCycle === cycle || now.getTime() - Date.parse(attempt.at) < 300_000)

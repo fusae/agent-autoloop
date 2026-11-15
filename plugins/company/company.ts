@@ -44,6 +44,7 @@ for (const role of Object.keys(departments)) {
 for (const kind of ["software", "content", "support", "finance"]) workflows[`internal-${kind}`] = [...workflows[kind]];
 export type CompanyConfig = {
   pipelineMode?: boolean;
+  xiaohongshuPaused?: boolean;
   rabbitrunX?: { enabled: boolean };
   aiStoryTopics?: { searchCommand: string[] };
   staffModels?: StaffModels;
@@ -195,6 +196,8 @@ export class Company {
       throw Error("主动经营开关不正确");
     if (config.proactiveCEO && (!config.delegation || !config.workday?.enabled || !config.reporting?.enabled))
       throw Error("主动经营需要CEO授权、自主上班及日报");
+    if (config.xiaohongshuPaused !== undefined && typeof config.xiaohongshuPaused !== "boolean")
+      throw Error("小红书暂停开关不正确");
     if (config.health !== undefined && typeof config.health?.enabled !== "boolean") throw Error("程序巡检开关不正确");
     if (config.health?.enabled && !config.ceoMode) throw Error("程序巡检需要启用CEO");
     if (config.pipelineMode !== undefined && typeof config.pipelineMode !== "boolean") throw Error("流水线开关不正确");

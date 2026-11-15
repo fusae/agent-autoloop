@@ -1,3 +1,4 @@
+import { xiaohongshuPaused, xiaohongshuPauseReason } from "./xiaohongshu-pause.ts";
 import { submitAndReadback, type Readback } from "./publication-readback.ts";
 import { squareLink, type OwnerConfirmation } from "./rabbitrun-receipt.ts";
 import { checkJinzhaoDelivery } from "./jinzhao-writing.ts";
@@ -149,6 +150,7 @@ export function executePublication(directory: string, key: string, lookupOnly = 
   if (request.key !== key) throw Error("发布审核记录不匹配");
   if (existsSync(file(directory, key, "-result")))
     return publication(JSON.parse(readFileSync(file(directory, key, "-result"), "utf8")));
+  if (xiaohongshuPaused(directory, request.business)) throw Error(xiaohongshuPauseReason);
   const configFile = join(directory, "publishing.json");
   const config = existsSync(configFile) ? JSON.parse(readFileSync(configFile, "utf8")) : {};
   const target = config.projects?.[request.business];
