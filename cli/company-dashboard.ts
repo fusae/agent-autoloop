@@ -61,7 +61,17 @@ function homeData(directory: string, companyConfig: any, operations: any[]) {
   const stock: Record<string, unknown> = {};
   for (const p of operations) {
     const growth = p.staff?.find((s: any) => s.role === "growth");
-    if (growth) stock[p.business] = draftStock(p.plans ?? [], growth.weeklyGoal, publications, now);
+    if (growth)
+      stock[p.business] = companyConfig.pipelineMode
+        ? {
+            recentPublished: publications.filter(
+              (r) =>
+                p.plans?.some((a: any) => a.publicationKey === r.key) &&
+                Date.parse(r.publishedAt) >= Date.parse(`${modelDay(now)}T00:00:00+08:00`) - 6 * 86400000 &&
+                Date.parse(r.publishedAt) <= now.getTime(),
+            ).length,
+          }
+        : draftStock(p.plans ?? [], growth.weeklyGoal, publications, now);
   }
   return { quota, feedback, publications, stock };
 }

@@ -364,6 +364,8 @@ test("home distinguishes manual posts, escapes their fields and accepts old feed
   assert.doesNotMatch(html, /<img/);
   assert.match(home.homeSummary(d, [], [], {}), /已发 1 篇帖子（另有你自己发的 1 篇）/);
   assert.match(home.homeGoal({ target: 4, published: 1, ready: 2 }), /已发 1，备稿 2，目标 4 篇/);
+  assert.match(home.homeGoal({ recentPublished: 2 }), /近7天已发 2 篇/);
+  assert.doesNotMatch(home.homeGoal({ recentPublished: 2 }), /目标|备稿/);
   d.home.publications = [];
   assert.match(home.homeSummary(d, [], [], {}), /已发 0 篇帖子（另有你自己发的 1 篇）/);
 });

@@ -1,5 +1,5 @@
 import { storyTopicTick, type StoryBatch } from "./ai-topics.ts";
-import { checkPipelineDelivery, recentPipelinePosts, pipelineDailyReport } from "./pipeline.ts";
+import { checkPipelineDelivery, recentPipelinePosts, pipelineDailyReport, pipelineAlerts } from "./pipeline.ts";
 import { ceoWake } from "./ceo-wake.ts";
 import { ceoActionable } from "./health.ts";
 import { proactiveDue, proactiveTitles, ceoRanSince, weeklyProgress, operatingJudgment } from "./proactive.ts";
@@ -137,6 +137,7 @@ export type Plan = ActionProposal & {
   autonomous?: boolean;
   revision?: number;
   pipelineDate?: string;
+  blockedAt?: string;
   ownerRevisions?: number;
   pipelineChecked?: string;
   deliveryTask?: string;
@@ -2876,6 +2877,11 @@ export class Operations {
             emit(a, false);
         }
       }
+      for (const a of p.plans) {
+        if (a.status === "blocked")
+          a.blockedAt ??= tasks.find((t) => t.id === a.task)?.reports.at(-1)?.at ?? now.toISOString();
+        else delete a.blockedAt;
+      }
       for (const a of p.plans.filter((a) => a.status === "blocked"))
         recordMaintenance(this.db, {
           key: `pipeline:${a.id}:${a.task ?? "draft"}`,
@@ -2902,6 +2908,10 @@ export class Operations {
         .map((r) => `${r.title}：${r.errors.join("；")}`);
       const text = pipelineDailyReport(this.directory, date, tasks, projects, errors, returned);
       (receipt.notice ??= []).push({ key: `pipeline-report-${date}`, title: "CEO · 日报", text });
+      const active = projects.filter((p) =>
+        businesses.some((b) => b.id === p.business && b.autonomy && b.status === "active"),
+      );
+      receipt.notice.push(...pipelineAlerts(this.directory, active, tasks, now, this.config.workday?.startDate));
       chief.lastReportDay = date;
       this.db
         .prepare("INSERT INTO journal(project,kind,at,body) VALUES (?,?,?,?)")

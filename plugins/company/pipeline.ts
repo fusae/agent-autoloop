@@ -9,6 +9,7 @@ import { checkJinzhaoDelivery } from "./jinzhao-writing.ts";
 import { rabbitDraft, rabbitChannel, xChannelEnabled, pendingX } from "./rabbitrun.ts";
 import { publicationResults } from "./publication-policy.ts";
 import { employeeEntries } from "./reporting.ts";
+import { publicationAttempt } from "./publication.ts";
 import { localDay } from "./workday.ts";
 
 export const pipelinePrompt = `内容流水线规范：本节替代旧的CEO审核、选题会、周目标、上班规划和日报要求。只写本轮派发的一篇完整稿件，自行从手册与素材库挑选角度；今朝选题前先读knowledge/recent-posts.md完整正文，在交付中写明与最近几篇的具体区别；若素材库已无未用过的角度，说明“素材不足”并停止，不要硬写；先读knowledge/pipeline-<业务>.json最近10篇（含手动帖）和在途稿，不能重复选题或换标题复述。交付包增加angle（本篇具体角度）及duplicateCheck:[{publication:最近已发编号,difference:与该篇的具体差别}]，覆盖给定的每一篇。仅交付本地稿，由程序检查，最多退回重写2次，仍不过当天放弃。今朝按固定资料一次交齐图文，程序通过直接发董事长确认卡，退回附意见只改一次再确认。rabbitrun读取knowledge/rabbitrun-handbook.md及crypto-content-guide.md，合规检查通过由固定程序发布。不得自行发布、发消息或新增任务。日报由程序生成，不提交dailyReport。按原company.result格式提交结果，保留真实证据。`;
@@ -159,8 +160,61 @@ export function pipelineDailyReport(
   const blocked = projects.flatMap((p) =>
     p.plans.filter((a) => a.status === "blocked").map((a) => `${a.title}：${a.result}`),
   );
+  const start = Date.parse(`${date}T00:00:00+08:00`) - 6 * 86400000;
+  const recent = (business: string) =>
+    results.filter(
+      (r) =>
+        projects.find((p) => p.business === business)?.plans.some((a) => a.publicationKey === r.key) &&
+        Date.parse(r.publishedAt) >= start &&
+        Date.parse(r.publishedAt) < start + 7 * 86400000,
+    ).length;
+  const counts = `小红书 ${recent("jinzhao") + recent("jizhu")} 篇；币安 ${recent("rabbitrun")} 篇`;
   const xSection = xChannelEnabled(directory)
     ? `\n\nX 待发\n${list(results.filter((p) => pendingX(p.x)).map((p) => title(p.key)))}`
     : "";
-  return `日报 ${date}\n\n今天写了什么\n${list(written)}\n\n发了什么\n${list([...published, ...manual])}\n\n程序退回原因\n${list([...returns, ...programReturns])}\n\n待董事长确认\n${list(pending)}${xSection}\n\n异常\n${list([...blocked, ...anomalies])}`;
+  return `日报 ${date}\n\n近7天发布篇数\n${counts}\n\n今天写了什么\n${list(written)}\n\n发了什么\n${list([...published, ...manual])}\n\n程序退回原因\n${list([...returns, ...programReturns])}\n\n待董事长确认\n${list(pending)}${xSection}\n\n异常\n${list([...blocked, ...anomalies])}`;
+}
+
+// Check at the daily report cutoff; pending approvals and topic proposals are not new drafts.
+export function pipelineAlerts(directory: string, projects: Project[], tasks: Task[], now: Date, startedAt?: string) {
+  const date = localDay(now),
+    start = Date.parse(`${localDay(new Date(now.getTime() - 86400000))}T00:00:00+08:00`);
+  const results = publicationResults(directory);
+  return projects
+    .filter((p) => ["jinzhao", "rabbitrun"].includes(p.business))
+    .flatMap((p) => {
+      const line = p.business === "jinzhao" ? "小红书" : "币安";
+      const reasons: string[] = [];
+      const within = (at?: string) => !!at && Date.parse(at) >= start && Date.parse(at) <= now.getTime();
+      const taskIds = new Set(p.plans.flatMap((a) => [a.task, a.deliveryTask]));
+      const written = tasks.some(
+        (t) =>
+          taskIds.has(t.id) &&
+          t.kind === "staff-growth" &&
+          t.reports.some((r) => r.verdict === "pass" && r.artifacts.length && within(r.at)),
+      );
+      const published = results.some((r) => p.plans.some((a) => a.publicationKey === r.key) && within(r.publishedAt));
+      if (!written && !published && (!startedAt || start >= Date.parse(`${startedAt}T00:00:00+08:00`)))
+        reasons.push("连续2天没有新稿或发布；请检查写作任务和素材，恢复后按正常日额度处理。");
+      if (p.aiTopicStatus === "素材不足") reasons.push("小红书素材库不足 3 张卡，等待维护者补充");
+      for (const a of p.plans.filter((a) => a.status !== "closed")) {
+        const attempt = a.publicationKey ? publicationAttempt(directory, a.publicationKey) : undefined;
+        if (results.some((r) => r.key === a.publicationKey)) continue;
+        const unknown = attempt?.state === "unknown";
+        const since = unknown ? attempt.at : a.blockedAt;
+        if ((unknown || a.status === "blocked") && since && now.getTime() - Date.parse(since) > 6 * 3600000)
+          reasons.push(
+            `《${a.title}》${unknown ? "发布结果未知" : "受阻"}超过6小时：${a.result.slice(0, 200)}；${unknown ? "请只读核实平台回执，确认前保持锁定，切勿重发" : "请维护者处理卡点，再恢复原任务"}。`,
+          );
+      }
+      return reasons.length
+        ? [
+            {
+              key: `pipeline-alert-${date}-${p.business}`,
+              title: "内容流水线停摆提醒",
+              text: `${line}线\n${reasons.join("\n")}`,
+            },
+          ]
+        : [];
+    });
 }

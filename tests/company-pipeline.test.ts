@@ -9,8 +9,13 @@ import { tmpdir } from "node:os";
 import { Company, type CompanyConfig, type Receipt } from "../plugins/company/company.ts";
 import { Operations } from "../plugins/company/operations.ts";
 import { Businesses } from "../plugins/company/business.ts";
-import { checkRabbitCompliance, recentPipelinePosts, pipelineDailyReport } from "../plugins/company/pipeline.ts";
-import { pipelineSuppresses } from "../plugins/company/delegation.ts";
+import {
+  checkRabbitCompliance,
+  recentPipelinePosts,
+  pipelineDailyReport,
+  pipelineAlerts,
+} from "../plugins/company/pipeline.ts";
+import { pipelineSuppresses, chairmanNotice } from "../plugins/company/delegation.ts";
 import { permissions } from "../plugins/company/workday.ts";
 import { rabbitChannel } from "../plugins/company/rabbitrun.ts";
 import { initialize, ensureBusinessRules } from "../plugins/company/setup.ts";
@@ -275,4 +280,58 @@ test("large maintenance backlog still produces a protocol-valid fixed report", (
     );
     parseResult({ outcome: "done", notice: [{ key: "report", title: "CEO · 日报", text }] });
     assert.match(text, /完整记录见后台/);
+  }));
+
+// Silent shortages, stale publication locks and restart-driven duplicate notifications must reach the chairman.
+test("daily stall alerts survive channel filters and are emitted once per line and day", () =>
+  fixture((f) => {
+    assert.ok(!f.tick("2026-11-13T12:30:00Z").notice?.some((n) => n.title === "内容流水线停摆提醒"));
+    const r = f.tick("2026-11-14T12:30:00Z");
+    const alerts = r.notice!.filter((n) => n.title === "内容流水线停摆提醒");
+    assert.equal(alerts.length, 2);
+    assert.equal(new Set(alerts.map((n) => n.key)).size, 2);
+    for (const alert of alerts) {
+      assert.match(alert.text, /连续2天/);
+      assert.equal(chairmanNotice(alert.title), true);
+      assert.equal(pipelineSuppresses(f.dir, { ...alert, kind: "notice" }), false);
+    }
+    const restarted = new Operations(f.dir);
+    try {
+      assert.equal(
+        restarted.plan("after-restart", f.b.list(), f.c.tasks(), new Date("2026-11-14T13:00:00Z")).notice?.length ?? 0,
+        0,
+      );
+    } finally {
+      restarted.close();
+    }
+    assert.equal(f.tick("2026-11-15T12:30:00Z").notice!.filter((n) => n.title === "内容流水线停摆提醒").length, 2);
+  }));
+
+test("shortage alert needs no model; fresh drafts prevent zero-output alarms, not old blocked alarms", () =>
+  fixture((f) => {
+    const r = f.tick("2026-11-13T01:30:00Z");
+    f.accept(r);
+    const id = r.events!.find((e) => e.summary.startsWith("jinzhao"))!.subject;
+    f.complete(id, "jinzhao");
+    f.tick("2026-11-13T02:01:00Z");
+    const p = f.o.snapshot(f.b.list(), f.c.tasks()).find((p) => p.business === "jinzhao")!;
+    const project: any = { ...p, aiTopicStatus: "素材不足" };
+    const now = new Date("2026-11-13T12:30:00Z");
+    let alerts = pipelineAlerts(f.dir, [project], f.c.tasks(), now);
+    assert.equal(alerts.length, 1);
+    assert.match(alerts[0].text, /小红书素材库不足 3 张卡，等待维护者补充/);
+    assert.doesNotMatch(alerts[0].text, /连续2天/);
+    const plan = project.plans[0];
+    plan.status = "blocked";
+    plan.blockedAt = "2026-11-13T06:30:00Z";
+    assert.doesNotMatch(pipelineAlerts(f.dir, [project], f.c.tasks(), now)[0].text, /超过6小时/);
+    plan.blockedAt = "2026-11-13T06:29:59Z";
+    assert.match(pipelineAlerts(f.dir, [project], f.c.tasks(), now)[0].text, /受阻超过6小时/);
+    writeFileSync(
+      join(f.dir, "publications", plan.publicationKey + "-readback.json"),
+      JSON.stringify({ state: "unknown", at: plan.blockedAt }),
+    );
+    assert.match(pipelineAlerts(f.dir, [project], f.c.tasks(), now)[0].text, /发布结果未知超过6小时/);
+    plan.status = "closed";
+    assert.doesNotMatch(pipelineAlerts(f.dir, [project], f.c.tasks(), now)[0].text, /超过6小时/);
   }));

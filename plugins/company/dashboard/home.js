@@ -136,6 +136,7 @@ if (typeof document !== "undefined") {
 }
 
 function homeGoal(stock) {
+  if (stock?.recentPublished != null) return `<span class="goal-text">近7天已发 ${esc(stock.recentPublished)} 篇</span>`;
   if (!stock || stock.target == null) return '<span class="goal-none">本周还没定发帖目标</span>';
   const dots = Array.from({ length: Math.max(stock.target, stock.published + stock.ready) }, (_, i) =>
     i < stock.published ? "done" : i < stock.published + stock.ready ? "ready" : "todo",

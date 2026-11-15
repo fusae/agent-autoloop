@@ -458,7 +458,7 @@ export function collectSnapshot(directory: string, now = new Date(), services: R
         status: state(b.status),
         objective: b.objective,
         week,
-        goals: list(p?.staff)
+        goals: list(config.pipelineMode ? [] : p?.staff)
           .filter((s) => s.weeklyGoal?.week === week)
           .map((s) => ({
             employee: s.name ?? roles[s.role],
@@ -466,6 +466,9 @@ export function collectSnapshot(directory: string, now = new Date(), services: R
             metrics: list(s.weeklyGoal.metrics).map((m) => ({ name: m.name, target: number(m.target), unit: m.unit })),
           })),
         progress: {
+          ...(config.pipelineMode
+            ? { publishedRecent7Days: publications.filter((x) => x.business === b.id && recent(x.publishedAt)).length }
+            : {}),
           publishedThisWeek: publications.filter((x) => x.business === b.id && day(new Date(x.publishedAt)) >= week)
             .length,
           plans: list(p?.plans)

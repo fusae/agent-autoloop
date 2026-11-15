@@ -17,7 +17,14 @@ export function approvedRabbitRequest(directory: string, key: string, action: "l
     const project = row ? JSON.parse(row.body as string) : null;
     const plan = project?.plans.find((p: any) => p.publicationKey === key && p.deliveryDecision === "publish");
     approval = plan?.publishApproval;
-    if (delegated(directory)) {
+    const config = join(directory, "company.json");
+    const pipeline = existsSync(config) && JSON.parse(readFileSync(config, "utf8")).pipelineMode === true;
+    if (pipeline) {
+      ceoApproved =
+        !!plan && plan.id === request.plan && plan.deliveryTask === request.task && plan.pipelineChecked === key;
+      if (!ceoApproved) throw Error("本篇尚无对应冻结稿的流水线检查结果");
+      if (action === "publish" && plan.status !== "publishing") throw Error("本篇不在发布阶段");
+    } else if (delegated(directory)) {
       const row = db.prepare("SELECT body FROM leadership WHERE id='company'").get();
       const chief = row ? JSON.parse(String(row.body)) : null;
       ceoApproved =

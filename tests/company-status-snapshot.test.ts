@@ -284,3 +284,16 @@ test("chairman snapshot excludes disabled and cancelled X posts", () => {
     f.cleanup();
   }
 });
+
+// Pipeline mode must not resurrect retired CEO targets in read-only status.
+test("pipeline status replaces retired goals with seven-day publication counts", () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.dir, "company.json"), JSON.stringify({ pipelineMode: true }));
+    const s = collectSnapshot(f.dir, now);
+    assert.deepEqual(s.businesses[0].goals, []);
+    assert.equal(s.businesses[0].progress.publishedRecent7Days, 1);
+  } finally {
+    f.cleanup();
+  }
+});

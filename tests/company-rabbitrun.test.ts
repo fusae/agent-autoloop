@@ -1039,3 +1039,42 @@ test("disabled X preserves Square history, suppresses pending work and patches t
     assert.equal(publicationResults(dir)[0].x?.state, "cancelled");
     assert.equal(pendingXReminder(publicationResults(dir), "2099-01-01"), "");
   }));
+
+// The retired CEO gate must not block program-checked pipeline drafts or authorize a different frozen version.
+test("pipeline Binance bridge accepts only the bound program-checked draft", () =>
+  temporary((dir) => {
+    approval(dir);
+    writeFileSync(join(dir, "company.json"), JSON.stringify({ pipelineMode: true, delegation: { source: "test" } }));
+    writeFileSync(
+      join(dir, "publications", key + ".json"),
+      JSON.stringify({ ...request(), plan: "plan", task: "draft" }),
+    );
+    const db = new DatabaseSync(join(dir, "operations.db"));
+    const plan = {
+      id: "plan",
+      deliveryTask: "draft",
+      publicationKey: key,
+      deliveryDecision: "publish",
+      status: "publishing",
+      pipelineChecked: key,
+    };
+    const save = () => db.prepare("UPDATE projects SET body=?").run(JSON.stringify({ plans: [plan] }));
+    try {
+      save();
+      assert.equal(approvedRabbitRequest(dir, key, "publish").key, key);
+      plan.pipelineChecked = "b".repeat(32);
+      save();
+      assert.throws(() => approvedRabbitRequest(dir, key, "publish"), /流水线检查/);
+      plan.pipelineChecked = key;
+      plan.deliveryTask = "other";
+      save();
+      assert.throws(() => approvedRabbitRequest(dir, key, "publish"), /流水线检查/);
+      plan.deliveryTask = "draft";
+      plan.status = "blocked";
+      save();
+      assert.throws(() => approvedRabbitRequest(dir, key, "publish"), /发布阶段/);
+      assert.equal(approvedRabbitRequest(dir, key, "lookup").key, key);
+    } finally {
+      db.close();
+    }
+  }));
