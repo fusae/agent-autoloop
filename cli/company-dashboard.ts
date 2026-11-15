@@ -1,3 +1,4 @@
+import { metricCatalog } from "../plugins/company/feedback.ts";
 import { topicStats } from "../plugins/company/topics.ts";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
@@ -58,17 +59,19 @@ function homeData(directory: string, companyConfig: any, operations: any[]) {
   } catch {
     publications = [];
   }
+  const catalog = companyConfig.pipelineMode ? metricCatalog(directory) : [];
   const stock: Record<string, unknown> = {};
   for (const p of operations) {
     const growth = p.staff?.find((s: any) => s.role === "growth");
     if (growth)
       stock[p.business] = companyConfig.pipelineMode
         ? {
-            recentPublished: publications.filter(
+            recentPublished: catalog.filter(
               (r) =>
-                p.plans?.some((a: any) => a.publicationKey === r.key) &&
-                Date.parse(r.publishedAt) >= Date.parse(`${modelDay(now)}T00:00:00+08:00`) - 6 * 86400000 &&
-                Date.parse(r.publishedAt) <= now.getTime(),
+                r.platform !== "X" &&
+                r.business === p.business &&
+                Date.parse(r.at) >= Date.parse(`${modelDay(now)}T00:00:00+08:00`) - 6 * 86400000 &&
+                Date.parse(r.at) <= now.getTime(),
             ).length,
           }
         : draftStock(p.plans ?? [], growth.weeklyGoal, publications, now);

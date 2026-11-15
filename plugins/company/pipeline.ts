@@ -162,11 +162,12 @@ export function pipelineDailyReport(
   );
   const start = Date.parse(`${date}T00:00:00+08:00`) - 6 * 86400000;
   const recent = (business: string) =>
-    results.filter(
+    catalog.filter(
       (r) =>
-        projects.find((p) => p.business === business)?.plans.some((a) => a.publicationKey === r.key) &&
-        Date.parse(r.publishedAt) >= start &&
-        Date.parse(r.publishedAt) < start + 7 * 86400000,
+        r.platform !== "X" &&
+        r.business === business &&
+        Date.parse(r.at) >= start &&
+        Date.parse(r.at) < start + 7 * 86400000,
     ).length;
   const counts = `小红书 ${recent("jinzhao") + recent("jizhu")} 篇；币安 ${recent("rabbitrun")} 篇`;
   const xSection = xChannelEnabled(directory)
@@ -179,7 +180,8 @@ export function pipelineDailyReport(
 export function pipelineAlerts(directory: string, projects: Project[], tasks: Task[], now: Date, startedAt?: string) {
   const date = localDay(now),
     start = Date.parse(`${localDay(new Date(now.getTime() - 86400000))}T00:00:00+08:00`);
-  const results = publicationResults(directory);
+  const results = publicationResults(directory),
+    catalog = metricCatalog(directory);
   return projects
     .filter((p) => ["jinzhao", "rabbitrun"].includes(p.business))
     .flatMap((p) => {
@@ -193,7 +195,7 @@ export function pipelineAlerts(directory: string, projects: Project[], tasks: Ta
           t.kind === "staff-growth" &&
           t.reports.some((r) => r.verdict === "pass" && r.artifacts.length && within(r.at)),
       );
-      const published = results.some((r) => p.plans.some((a) => a.publicationKey === r.key) && within(r.publishedAt));
+      const published = catalog.some((r) => r.platform !== "X" && r.business === p.business && within(r.at));
       if (!written && !published && (!startedAt || start >= Date.parse(`${startedAt}T00:00:00+08:00`)))
         reasons.push("连续2天没有新稿或发布；请检查写作任务和素材，恢复后按正常日额度处理。");
       if (p.aiTopicStatus === "素材不足") reasons.push("小红书素材库不足 3 张卡，等待维护者补充");

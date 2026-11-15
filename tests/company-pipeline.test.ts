@@ -335,3 +335,32 @@ test("shortage alert needs no model; fresh drafts prevent zero-output alarms, no
     plan.status = "closed";
     assert.doesNotMatch(pipelineAlerts(f.dir, [project], f.c.tasks(), now)[0].text, /超过6小时/);
   }));
+
+// A valid historical receipt still counts after its original plan was archived or detached.
+test("seven-day totals and zero-output alarms use receipt business instead of current plan links", () =>
+  fixture((f) => {
+    const key = "e".repeat(32),
+      now = new Date("2026-11-15T12:30:00Z");
+    mkdirSync(join(f.dir, "publications"), { recursive: true });
+    writeFileSync(
+      join(f.dir, "publications", key + ".json"),
+      JSON.stringify({ key, business: "jinzhao", artifacts: [] }),
+    );
+    const receipt = {
+      key,
+      channel: "小红书",
+      remoteId: "abc123",
+      url: "https://www.xiaohongshu.com/explore/abc123",
+      publishedAt: "2026-11-14T02:00:00Z",
+    };
+    writeFileSync(join(f.dir, "publications", key + "-result.json"), JSON.stringify(receipt));
+    const projects: any[] = [{ business: "jinzhao", plans: [], staff: [] }];
+    assert.match(pipelineDailyReport(f.dir, "2026-11-15", [], projects), /小红书 1 篇；币安 0 篇/);
+    assert.equal(pipelineAlerts(f.dir, projects, [], now).length, 0);
+    writeFileSync(
+      join(f.dir, "publications", key + "-result.json"),
+      JSON.stringify({ ...receipt, deleted: { at: now.toISOString(), reason: "用户删除" } }),
+    );
+    assert.match(pipelineDailyReport(f.dir, "2026-11-15", [], projects), /小红书 0 篇；币安 0 篇/);
+    assert.match(pipelineAlerts(f.dir, projects, [], now)[0].text, /连续2天/);
+  }));
