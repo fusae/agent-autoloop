@@ -135,7 +135,7 @@ export function delegatedReport(db: DatabaseSync, c: Leadership, date: string) {
 // Suppressed hub failures still need a durable place for the maintainer to find them.
 export function retainSuppressedCard(
   directory: string,
-  card: { id: number; kind: string; title: string; text: string },
+  card: { id: number; kind: string; title: string; text: string; state?: string; result?: string | null },
 ) {
   if (card.kind !== "ask" && !/异常|失败|故障|未完成|停滞/.test(card.title)) return;
   const file = join(directory, "operations.db");
@@ -143,7 +143,11 @@ export function retainSuppressedCard(
   const db = new DatabaseSync(file);
   try {
     db.exec("PRAGMA busy_timeout=5000; BEGIN IMMEDIATE");
-    recordMaintenance(db, { key: `card:${card.id}`, title: card.title, text: card.text, at: new Date().toISOString() });
+    const key = `card:${card.id}`;
+    if (["closed", "done"].includes(card.state ?? "") && card.result?.trim()) {
+      if (maintenanceList(db).some((m) => m.key === key && !m.resolvedAt))
+        finishMaintenance(db, key, card.result.slice(0, 1000), new Date());
+    } else recordMaintenance(db, { key, title: card.title, text: card.text, at: new Date().toISOString() });
     db.exec("COMMIT");
   } finally {
     db.close();

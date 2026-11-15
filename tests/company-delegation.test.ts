@@ -10,7 +10,7 @@ import { DatabaseSync } from "node:sqlite";
 import { CompanyFeishu } from "../plugins/company/channel.ts";
 import { Operations } from "../plugins/company/operations.ts";
 import { Businesses } from "../plugins/company/business.ts";
-import { delegatedReport } from "../plugins/company/delegation.ts";
+import { delegatedReport, retainSuppressedCard, maintenanceList } from "../plugins/company/delegation.ts";
 import { executiveDecision } from "../plugins/company/executive.ts";
 import { TopicWorkflow } from "../plugins/company/topic-workflow.ts";
 const decision = (more = {}) => ({ briefs: [], directives: [], approvals: [], answers: [], escalations: [], ...more });
@@ -153,6 +153,38 @@ test("trusted rule refresh removes routine ask-first constraints without grantin
     ensureBusinessRules(dir);
     assert.equal(readFileSync(join(dir, "hub/rules.json"), "utf8"), before);
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Closing an obsolete hub card must not resurrect it as an unresolved maintenance item.
+test("suppressed resolved cards close existing maintenance without creating new work", () => {
+  const dir = mkdtempSync(join(tmpdir(), "closed-maintenance-"));
+  const o = new Operations(dir),
+    db = new DatabaseSync(join(dir, "operations.db"));
+  const card = {
+    id: 60,
+    kind: "notice",
+    title: "CEO · 汇报未完成",
+    text: "旧报告失败",
+    state: "open",
+    result: null as string | null,
+  };
+  try {
+    retainSuppressedCard(dir, card);
+    assert.equal(maintenanceList(db).filter((m) => !m.resolvedAt).length, 1);
+    card.state = "closed";
+    card.result = "旧CEO已停用，程序日报已替代";
+    retainSuppressedCard(dir, card);
+    retainSuppressedCard(dir, { ...card, id: 102, kind: "ask" });
+    assert.equal(maintenanceList(db).length, 1);
+    assert.ok(maintenanceList(db)[0].resolvedAt);
+    assert.equal(maintenanceList(db)[0].result, card.result);
+    retainSuppressedCard(dir, { ...card, id: 103, result: null });
+    assert.equal(maintenanceList(db).filter((m) => !m.resolvedAt).length, 1, "initial FYI has no resolution");
+  } finally {
+    db.close();
+    o.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });
